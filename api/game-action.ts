@@ -4,15 +4,19 @@ import * as admin from 'firebase-admin';
 import * as bcrypt from 'bcryptjs';
 import { db } from './db.js'; // Shared admin db instance
 
-// Helper for CORS
+// 👇 CORS 설정 함수
 const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    setCors(res);
+    setCors(res); // 👈 함수 맨 시작 부분에서 실행!
+
+    if (req.method === 'OPTIONS') {
+        return res.status(200).end();
+    }
 
     if (req.method === 'OPTIONS') {
         return res.status(200).end();

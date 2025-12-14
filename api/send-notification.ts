@@ -2,13 +2,18 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import * as admin from 'firebase-admin';
 import { db } from './db.js';
 
-export default async (req: VercelRequest, res: VercelResponse) => {
-    // CORS와 POST 요청 처리
-    // Allow all origins to prevent 'Failed to fetch' in preview/dev environments
-    res.setHeader('Access-Control-Allow-Origin', '*'); 
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+// 👇 CORS 설정 함수 (다른 파일들과 통일)
+const setCors = (res: VercelResponse) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+};
 
+export default async (req: VercelRequest, res: VercelResponse) => {
+    // 1. CORS 적용 (가장 먼저 실행)
+    setCors(res);
+
+    // 2. Preflight 요청 처리 (OPTIONS)
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -61,7 +66,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         };
 
         // 3. FCM 알림 발송
-        // sendToDevice is deprecated, using sendEachForMulticast
         await admin.messaging().sendEachForMulticast(message);
 
         res.status(200).send('Notifications sent successfully.');

@@ -3,7 +3,7 @@ import React, { createContext, useContext, useEffect, useState, useRef } from 'r
 import { fetchGlobalData, saveDb as firebaseSaveDb, generateId, chatService, assetService, fetchUser, fetchAllUsers, fetchUserByLoginId, database } from "../services/firebase";
 import { update, ref, push as rtdbPush, get, set, onValue, remove, onChildAdded, query, limitToLast } from "firebase/database";
 import { DB, DEFAULT_DB, User, GameNotification, MintingRequest, SignupSession, StickyNote, Chat, ChatMessage, ChatAttachment, Ad, PolicyRequest, ChatReaction, ToastNotification, PendingTax, TaxSession, AssetHistoryPoint } from "../types";
-
+const API_BASE_URL = "https://bank-owxraz5af-lees-projects-2d0ac47e.vercel.app";
 interface GameContextType {
     db: DB;
     currentUser: User | null;
@@ -223,7 +223,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('/api/game-action', {
+            const res = await fetch('${API_BASE_URL}/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -279,7 +279,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return true;
             }
 
-            const res = await fetch('/api/game-action', {
+            const res = await fetch('${API_BASE_URL}/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
