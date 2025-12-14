@@ -426,10 +426,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Fetch specific user if not in context
         // Ensure array iteration is safe by handling potential null
         const currentUsers = dbRef.current.users || {};
-        let targetUser = Object.values(currentUsers).find((u: any) => u.id === targetId);
+        let targetUser = Object.values(currentUsers).find((u: any) => u.id === targetId) as User | undefined;
         
         if (!targetUser) {
-            targetUser = await fetchUserByLoginId(targetId);
+            targetUser = await fetchUserByLoginId(targetId) || undefined;
         }
         
         if (!targetUser) {
@@ -528,9 +528,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updates[`signupSessions/${sessionId}`] = {
             id: sessionId,
             code,
-            created: Date.now(),
+            createdAt: Date.now(), // Fixed property name
             name, // 반 이름 또는 선생님 성함
-            status: 'active'
+            status: 'active',
+            attempts: 0 // Initialize attempts
         };
         
         await update(ref(database), updates);
@@ -550,12 +551,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     // [8] 경매 팀 초대 응답 (수락/거절) - FIXED
     const respondToAuctionInvite = async (leaderName: string, accept: boolean, notifId: string) => {
-        if (!currentUser) return;
+        const user = currentUser as User;
+        if (!user) return;
         
         // 1. 알림 지우기
-        const notifs = currentUser.notifications ? (Array.isArray(currentUser.notifications) ? currentUser.notifications : Object.values(currentUser.notifications)) : [];
+        const notifs = user.notifications ? (Array.isArray(user.notifications) ? user.notifications : Object.values(user.notifications)) : [];
         const remainingNotifs = notifs.filter((n: any) => n.id !== notifId);
-        await updateUser(currentUser.name, { notifications: remainingNotifs });
+        await updateUser(user.name, { notifications: remainingNotifs });
 
         if (accept) {
             // 2. 수락 시: 해당 경매 팀 찾아서 내 상태를 'accepted'로 변경
@@ -563,17 +565,28 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const snapshot = await get(teamRef);
             if (snapshot.exists()) {
                 const members = snapshot.val() as any[]; // Cast to avoid unknown error
-                const myIndex = members.findIndex((m: any) => m.name === currentUser.name);
-                
-                if (myIndex !== -1) {
-                    const updates: any = {};
-                    updates[`auction/teams/${leaderName}/${myIndex}/status`] = 'accepted';
-                    await update(ref(database), updates);
-                    notify(leaderName, `${currentUser.name}님이 팀 초대를 수락했습니다.`, true);
+                if (members) {
+                    // Try to handle both array and object responses for safety
+                    let myIndex = -1;
+                    if (Array.isArray(members)) {
+                        myIndex = members.findIndex((m: any) => m && m.name === user.name);
+                    } else {
+                        // If it's an object map, find key
+                        const entries = Object.entries(members);
+                        const entry = entries.find(([_, m]: [string, any]) => m && m.name === user.name);
+                        if(entry) myIndex = entry[0] as any;
+                    }
+                    
+                    if (myIndex !== -1) {
+                        const updates: any = {};
+                        updates[`auction/teams/${leaderName}/${myIndex}/status`] = 'accepted';
+                        await update(ref(database), updates);
+                        notify(leaderName, `${user.name}님이 팀 초대를 수락했습니다.`, true);
+                    }
                 }
             }
         } else {
-            notify(leaderName, `${currentUser.name}님이 팀 초대를 거절했습니다.`, true);
+            notify(leaderName, `${user.name}님이 팀 초대를 거절했습니다.`, true);
         }
     };
 

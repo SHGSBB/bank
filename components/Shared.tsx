@@ -453,18 +453,39 @@ export const ToastContainer = NotificationCenter;
 
 export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolver, setResolver }) => {
     const [pin, setPin] = useState('');
+    const [status, setStatus] = useState<'neutral' | 'success' | 'error'>('neutral');
     
-    // Auto-resolve when PIN length is reached
+    // Auto-resolve check logic
     useEffect(() => {
         if (pin.length === (resolver.pinLength || 4)) {
-            resolver.resolve(pin);
-            setResolver(null);
+            // Verify PIN Logic
+            if (resolver.expectedPin) {
+                if (pin === resolver.expectedPin) {
+                    setStatus('success');
+                    setTimeout(() => {
+                        resolver.resolve(pin);
+                        setResolver(null);
+                    }, 400); // Wait for success feedback
+                } else {
+                    setStatus('error');
+                    setTimeout(() => {
+                        setPin('');
+                        setStatus('neutral');
+                    }, 500); // Wait for shake animation
+                }
+            } else {
+                // If no expected pin (e.g. creating new one), just resolve
+                resolver.resolve(pin);
+                setResolver(null);
+            }
         }
     }, [pin, resolver, setResolver]);
 
     // Keyboard support for PIN entry
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (status !== 'neutral') return; // Block input during animation
+            
             if (e.key >= '0' && e.key <= '9') {
                 if (pin.length < (resolver.pinLength || 4)) {
                     setPin(prev => prev + e.key);
@@ -479,47 +500,58 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [pin, resolver, setResolver]);
+    }, [pin, resolver, setResolver, status]);
 
     // Biometric Logic Hook
     useEffect(() => {
-        if (resolver.allowBiometric) {
+        if (resolver.allowBiometric && status === 'neutral') {
             const tryBio = async () => {
-                const success = await loginBiometrics('temp'); // Simplified logic, real app needs user id context
-                if (success && resolver.expectedPin) {
-                    resolver.resolve(resolver.expectedPin); // Auto-fill correct PIN on success
-                    setResolver(null);
-                }
+                // In real implementation, pass userId
+                // For now, we assume if bio succeeds, we trust the user context
+                // However, without a trigger, browsers block it. So we rely on the button below.
             };
-            // Automatically prompt for bio if available
-            // tryBio(); // Disabled for now to prevent loop without user interaction
         }
     }, []);
 
     const handleNumClick = (num: number) => {
+        if (status !== 'neutral') return;
         if (pin.length < (resolver.pinLength || 4)) setPin(pin + num);
     };
 
     const handleBioClick = async () => {
         const success = await loginBiometrics('temp');
         if (success && resolver.expectedPin) {
-            resolver.resolve(resolver.expectedPin);
-            setResolver(null);
+            // Auto-fill correct PIN logic
+            setStatus('success');
+            setPin(resolver.expectedPin); // Fill dots
+            setTimeout(() => {
+                resolver.resolve(resolver.expectedPin);
+                setResolver(null);
+            }, 400);
         }
     };
 
     // Z-Index 4000 to overlay standard Modals (z-3000)
     return (
         <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
-            <div className="bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative">
+            <div className={`bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl border border-white/10 relative ${status === 'error' ? 'animate-shake' : 'animate-slide-up'}`}>
                 <button onClick={() => { resolver.resolve(null); setResolver(null); }} className="absolute top-4 right-4 text-gray-400 p-2">✕</button>
                 
                 <h3 className="text-xl font-bold text-center mb-2 text-black dark:text-white">간편 비밀번호 입력</h3>
-                <p className="text-sm text-gray-500 text-center mb-8">{resolver.message}</p>
+                <p className={`text-sm text-center mb-8 font-bold ${status === 'error' ? 'text-red-500' : (status === 'success' ? 'text-green-500' : 'text-gray-500')}`}>
+                    {status === 'error' ? "비밀번호가 일치하지 않습니다." : (status === 'success' ? "인증 성공!" : resolver.message)}
+                </p>
                 
                 <div className="flex justify-center gap-4 mb-8">
                     {Array.from({ length: resolver.pinLength || 4 }).map((_, i) => (
-                        <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${i < pin.length ? 'bg-green-500 scale-110' : 'bg-gray-200 dark:bg-gray-700'}`}></div>
+                        <div 
+                            key={i} 
+                            className={`w-4 h-4 rounded-full transition-all duration-200 
+                                ${i < pin.length 
+                                    ? (status === 'success' ? 'bg-green-500 scale-125' : (status === 'error' ? 'bg-red-500 scale-110' : 'bg-black dark:bg-white scale-110')) 
+                                    : 'bg-gray-200 dark:bg-gray-700'
+                                }`}
+                        ></div>
                     ))}
                 </div>
 

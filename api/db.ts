@@ -1,3 +1,4 @@
+
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
 import { getDatabase } from 'firebase-admin/database'; // 👈 Realtime Database 사용 시
 

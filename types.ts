@@ -240,6 +240,7 @@ export interface SignupSession {
     code: string;
     createdAt: number;
     status: 'active' | 'expired';
+    attempts?: number;
 }
 
 export interface StickyNote {
