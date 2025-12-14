@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import * as admin from 'firebase-admin';
-import { db } from './db.js';
+import { db } from './db';
 
 // 👇 CORS 설정 함수 (다른 파일들과 통일)
 const setCors = (res: VercelResponse) => {
