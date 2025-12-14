@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input, Modal, Toggle } from '../../Shared';
@@ -172,12 +173,50 @@ export const TaxTab: React.FC = () => {
         const newDb = { ...db };
         const user = newDb.users[selectedUnpaidUser];
         let applied = false;
-        if (user.pendingTaxes && user.pendingTaxes.length > 0) {
-            const latest = user.pendingTaxes.filter(t => t.status !== 'paid').sort((a,b) => b.dueDate.localeCompare(a.dueDate))[0];
-            if (latest) { latest.penalty = (latest.penalty || 0) + penalty; latest.breakdown += `\n[과태료] +₩${penalty.toLocaleString()}`; applied = true; }
+        
+        // Normalize
+        const userTaxes = user.pendingTaxes ? (Array.isArray(user.pendingTaxes) ? user.pendingTaxes : Object.values(user.pendingTaxes)) : [];
+        
+        if (userTaxes.length > 0) {
+            // Sort to find the latest unpaid tax
+            const latest = userTaxes.filter((t: PendingTax) => t.status !== 'paid').sort((a: PendingTax,b: PendingTax) => b.dueDate.localeCompare(a.dueDate))[0];
+            
+            if (latest) {
+                // If it's an object reference from state, we can modify it directly, 
+                // but since we normalized it to a new array, we need to find it in the original structure to update properly.
+                
+                if (Array.isArray(user.pendingTaxes)) {
+                    // It's an array, find index
+                    const idx = user.pendingTaxes.findIndex((t: PendingTax) => t.id === latest.id);
+                    if (idx !== -1) {
+                        user.pendingTaxes[idx].penalty = (user.pendingTaxes[idx].penalty || 0) + penalty;
+                        user.pendingTaxes[idx].breakdown += `\n[과태료] +₩${penalty.toLocaleString()}`;
+                        applied = true;
+                    }
+                } else {
+                    // It's an object map
+                    const keys = Object.keys(user.pendingTaxes || {});
+                    for(const key of keys) {
+                        if (user.pendingTaxes[key].id === latest.id) {
+                            user.pendingTaxes[key].penalty = (user.pendingTaxes[key].penalty || 0) + penalty;
+                            user.pendingTaxes[key].breakdown += `\n[과태료] +₩${penalty.toLocaleString()}`;
+                            applied = true;
+                            break;
+                        }
+                    }
+                }
+            }
         }
-        if(applied) { await saveDb(newDb); notify(selectedUnpaidUser, `[과태료] ₩${penalty.toLocaleString()} 추가`, true); showModal("부과 완료"); setPenaltyAmount(''); setSelectedUnpaidUser(null); }
-        else showModal("미납 내역 없음");
+        
+        if(applied) { 
+            await saveDb(newDb); 
+            notify(selectedUnpaidUser, `[과태료] ₩${penalty.toLocaleString()} 추가`, true); 
+            showModal("부과 완료"); 
+            setPenaltyAmount(''); 
+            setSelectedUnpaidUser(null); 
+        } else {
+            showModal("미납 내역 없음");
+        }
     };
 
     return (

@@ -371,7 +371,10 @@ export const Dashboard: React.FC = () => {
     const pendingTaxes = useMemo(() => {
         let taxes: PendingTax[] = [];
         if (currentUser?.pendingTaxes) {
-            taxes = [...currentUser.pendingTaxes];
+            // FIX: Handle both Array and Object (Firebase dictionary) structures
+            taxes = Array.isArray(currentUser.pendingTaxes) 
+                ? [...currentUser.pendingTaxes] 
+                : Object.values(currentUser.pendingTaxes);
         }
         if (currentUser?.pendingTax) {
             const exists = taxes.find(t => t.id === currentUser.pendingTax!.id || t.sessionId === currentUser.pendingTax!.sessionId);
@@ -487,9 +490,27 @@ export const Dashboard: React.FC = () => {
         bank.balanceKRW += totalAmount;
         
         if (user.pendingTaxes) {
-            const taxIdx = user.pendingTaxes.findIndex(t => t.id === tax.id);
-            if (taxIdx > -1) {
-                user.pendingTaxes[taxIdx].status = 'paid';
+            // FIX: Ensure it's treated as object or array depending on structure
+            // If it's an object, we need to find the key. 
+            // If it's an array, findIndex works.
+            // For simplicity in this logic block, assume we update the specific entry via ID if possible,
+            // or just rely on the fact that `currentUser` is a reference to `db.users[...]`.
+            // However, `pendingTaxes` might be an object.
+            
+            if (Array.isArray(user.pendingTaxes)) {
+                const taxIdx = user.pendingTaxes.findIndex(t => t.id === tax.id);
+                if (taxIdx > -1) {
+                    user.pendingTaxes[taxIdx].status = 'paid';
+                }
+            } else {
+                // Object structure
+                const keys = Object.keys(user.pendingTaxes);
+                for(const key of keys) {
+                    if (user.pendingTaxes[key].id === tax.id) {
+                        user.pendingTaxes[key].status = 'paid';
+                        break;
+                    }
+                }
             }
         }
         if (user.pendingTax && user.pendingTax.id === tax.id) {

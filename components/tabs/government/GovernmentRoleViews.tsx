@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input, Modal } from '../../Shared';
-import { User, PolicyRequest, Judgement } from '../../../types';
+import { User, PolicyRequest, Judgement, PendingTax } from '../../../types';
 
 // Simple Stats Chart
 const SimpleBarChart: React.FC<{ data: number[] }> = ({ data }) => {
@@ -70,7 +70,11 @@ export const GovernmentRoleViews: React.FC<Props> = ({ role, isPresident, isJust
     // --- Minister Logic ---
     const [fineAmount, setFineAmount] = useState('');
     const [fineReason, setFineReason] = useState('');
-    const unpaidTaxUsers = citizens.filter(c => (c.pendingTaxes || []).some(t => t.status !== 'paid'));
+    // Fix unpaidTaxUsers
+    const unpaidTaxUsers = citizens.filter(c => {
+        const taxes = (c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) : []) as PendingTax[];
+        return taxes.some(t => t.status !== 'paid');
+    });
 
     const handleImposeFine = async () => {
         if (selectedUsers.length === 0) return showModal("대상 시민을 선택하세요.");
@@ -106,14 +110,6 @@ export const GovernmentRoleViews: React.FC<Props> = ({ role, isPresident, isJust
         if (assets.length === 0) return buckets;
         const maxVal = Math.max(...assets) || 1;
         assets.forEach(val => {
-            // Simple Quintile Distribution Logic based on value relative to max (simplified)
-            // Or just split array into 5 chunks. Let's do chunks.
-            // Wait, chart needs histogram-like data or quintiles?
-            // "Approximate wealth status... quintiles"
-            // Let's do proper quintile buckets of count.
-            // Actually, if we just split users into 5 groups sorted by wealth, each bucket has same count.
-            // The chart should show wealth SHARE or avg wealth per quintile?
-            // "Wealth Stats" usually means histogram. Let's do 5 buckets from 0 to Max Wealth.
             const idx = Math.min(4, Math.floor((val / (maxVal * 1.01)) * 5));
             buckets[idx]++;
         });
@@ -190,12 +186,15 @@ export const GovernmentRoleViews: React.FC<Props> = ({ role, isPresident, isJust
                     <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
                         <h5 className="font-bold text-sm mb-2 text-red-800 dark:text-red-300">🚨 세금 미납자 명단 (한국은행 공유)</h5>
                         <div className="max-h-32 overflow-y-auto space-y-1 text-xs">
-                            {unpaidTaxUsers.map(u => (
-                                <div key={u.name} className="flex justify-between">
-                                    <span>{u.name}</span>
-                                    <span className="text-red-500">미납 {u.pendingTaxes?.filter(t=>t.status!=='paid').length}건</span>
-                                </div>
-                            ))}
+                            {unpaidTaxUsers.map(u => {
+                                const taxes = (u.pendingTaxes ? (Array.isArray(u.pendingTaxes) ? u.pendingTaxes : Object.values(u.pendingTaxes)) : []) as PendingTax[];
+                                return (
+                                    <div key={u.name} className="flex justify-between">
+                                        <span>{u.name}</span>
+                                        <span className="text-red-500">미납 {taxes.filter(t=>t.status!=='paid').length}건</span>
+                                    </div>
+                                );
+                            })}
                             {unpaidTaxUsers.length === 0 && <p className="text-gray-500">미납자가 없습니다.</p>}
                         </div>
                     </div>
@@ -205,18 +204,22 @@ export const GovernmentRoleViews: React.FC<Props> = ({ role, isPresident, isJust
                             <label className="text-sm font-bold block mb-2">과태료 부과 대상 ({selectedUsers.length}명)</label>
                             <Input placeholder="이름 검색" value={userSearch} onChange={e => setUserSearch(e.target.value)} className="mb-2 w-full text-sm" />
                             <div className="max-h-40 overflow-y-auto border rounded p-2 bg-white dark:bg-gray-800 space-y-1">
-                                {filteredCitizens.map(c => (
-                                    <div key={c.name} onClick={() => {
-                                        if(selectedUsers.includes(c.name)) setSelectedUsers(selectedUsers.filter(u=>u!==c.name));
-                                        else setSelectedUsers([...selectedUsers, c.name]);
-                                    }} className={`p-2 rounded cursor-pointer flex justify-between ${selectedUsers.includes(c.name) ? 'bg-red-100 dark:bg-red-900' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
-                                        <div className="flex flex-col">
-                                            <span>{c.name}</span>
-                                            {c.pendingTaxes && c.pendingTaxes.length > 0 && <span className="text-[10px] text-red-500">미납 세금 있음</span>}
+                                {filteredCitizens.map(c => {
+                                    const taxes = (c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) : []) as PendingTax[];
+                                    const hasUnpaid = taxes.some(t => t.status !== 'paid');
+                                    return (
+                                        <div key={c.name} onClick={() => {
+                                            if(selectedUsers.includes(c.name)) setSelectedUsers(selectedUsers.filter(u=>u!==c.name));
+                                            else setSelectedUsers([...selectedUsers, c.name]);
+                                        }} className={`p-2 rounded cursor-pointer flex justify-between ${selectedUsers.includes(c.name) ? 'bg-red-100 dark:bg-red-900' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
+                                            <div className="flex flex-col">
+                                                <span>{c.name}</span>
+                                                {hasUnpaid && <span className="text-[10px] text-red-500">미납 세금 있음</span>}
+                                            </div>
+                                            {selectedUsers.includes(c.name) && <span>✅</span>}
                                         </div>
-                                        {selectedUsers.includes(c.name) && <span>✅</span>}
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
@@ -244,9 +247,10 @@ export const GovernmentRoleViews: React.FC<Props> = ({ role, isPresident, isJust
                     <Input placeholder="시민 검색..." value={userSearch} onChange={e => setUserSearch(e.target.value)} />
                     <div className="max-h-96 overflow-y-auto space-y-2">
                         {filteredCitizens.map(c => {
-                            const fines = (c.pendingTaxes || []).filter(t => t.type === 'fine');
+                            const rawTaxes = (c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) : []) as PendingTax[];
+                            const fines = rawTaxes.filter(t => t.type === 'fine');
                             // Prosecutor sees all tax info as well for investigation
-                            const taxes = (c.pendingTaxes || []).filter(t => t.type !== 'fine');
+                            const taxes = rawTaxes.filter(t => t.type !== 'fine');
                             
                             return (
                                 <div key={c.name} className="p-3 border rounded-xl bg-white dark:bg-gray-800 text-sm shadow-sm">
