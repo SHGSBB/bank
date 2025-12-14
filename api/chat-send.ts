@@ -1,6 +1,6 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import * as admin from 'firebase-admin';
-import { db } from './db';
+import { db } from './db.js';
 
 export default async (req: VercelRequest, res: VercelResponse) => {
     // Enable CORS
