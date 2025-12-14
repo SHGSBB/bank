@@ -1,0 +1,74 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>성화 은행</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/png" href="/new-icon.png">
+    <link rel="apple-touch-icon" href="/new-icon.png">
+    <meta name="theme-color" content="#10B981">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    keyframes: {
+                        shake: {
+                            '0%, 100%': { transform: 'translateX(0)' },
+                            '10%, 30%, 50%, 70%, 90%': { transform: 'translateX(-4px)' },
+                            '20%, 40%, 60%, 80%': { transform: 'translateX(4px)' },
+                        },
+                        'scale-in': {
+                            '0%': { transform: 'scale(0.95)', opacity: '0' },
+                            '100%': { transform: 'scale(1)', opacity: '1' },
+                        },
+                        'fade-in': {
+                            '0%': { opacity: '0' },
+                            '100%': { opacity: '1' },
+                        },
+                        'slide-up': {
+                            '0%': { transform: 'translateY(20px)', opacity: '0' },
+                            '100%': { transform: 'translateY(0)', opacity: '1' },
+                        }
+                    },
+                    animation: {
+                        shake: 'shake 0.4s ease-in-out',
+                        'scale-in': 'scale-in 0.2s ease-out',
+                        'fade-in': 'fade-in 0.2s ease-out',
+                        'slide-up': 'slide-up 0.3s ease-out',
+                    }
+                }
+            }
+        }
+    </script>
+<script type="importmap">
+{
+  "imports": {
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://esm.run/@google/genai",
+    "@vercel/node": "https://aistudiocdn.com/@vercel/node@^5.5.15",
+    "firebase-admin": "https://aistudiocdn.com/firebase-admin@^13.6.0",
+    "@simplewebauthn/browser": "https://esm.run/@simplewebauthn/browser",
+    "bcryptjs": "https://esm.sh/bcryptjs@^3.0.3"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-[#E9E9EB] text-[#121212] dark:bg-[#121212] dark:text-[#E0E0E0] transition-colors duration-200 select-none overflow-y-auto">
+    <div id="root"></div>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
