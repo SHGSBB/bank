@@ -113,11 +113,8 @@ export const useGame = () => {
     return context;
 };
 
-// URL check for internal logic
-const isLocal = typeof window !== 'undefined' && window.location.hostname.includes('localhost');
-const API_BASE = isLocal 
-    ? '' 
-    : "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app";
+// URL check for internal logic - NOW EMPTY for relative paths
+const API_BASE = "";
 
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [db, setDb] = useState<DB>(DEFAULT_DB);
@@ -228,7 +225,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/api/game-action`, {
+            const res = await fetch(`/api/game-action`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -289,7 +286,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return true;
             }
 
-            const res = await fetch(`${API_BASE}/api/game-action`, {
+            const res = await fetch(`/api/game-action`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 

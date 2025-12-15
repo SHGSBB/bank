@@ -4,10 +4,9 @@ import { getAuth } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
-// [CRITICAL FIX] API Base URL 설정
-// If the frontend is hosted on Firebase (sunghwa-cffff.web.app) but the API is on Vercel,
-// we MUST use the absolute Vercel URL. Relative URL "" only works if frontend is also on Vercel.
-const API_BASE_URL = "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app";
+// [SINGLE DEPLOYMENT FIX] API Base URL 설정
+// Same domain deployment allows relative paths.
+const API_BASE_URL = "";
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -72,7 +71,8 @@ export const uploadImage = async (path: string, dataUrl: string): Promise<string
  */
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
     try {
-        const res = await fetch(`${API_BASE_URL}/api/game-action`, {
+        // Use relative path
+        const res = await fetch(`/api/game-action`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
@@ -349,7 +349,7 @@ export const chatService = {
 
     sendMessage: async (chatId: string, message: ChatMessage, chatMetaUpdate?: Partial<Chat>) => {
         try {
-            await fetch(`${API_BASE_URL}/api/chat-send`, {
+            await fetch(`/api/chat-send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
