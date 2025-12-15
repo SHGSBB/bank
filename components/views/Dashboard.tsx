@@ -370,9 +370,15 @@ export const Dashboard: React.FC = () => {
 
     const pendingTaxes = useMemo(() => {
         let taxes: PendingTax[] = [];
-        if (currentUser?.pendingTaxes) {
-            taxes = [...currentUser.pendingTaxes];
+        const rawTaxes = currentUser?.pendingTaxes;
+        
+        if (rawTaxes) {
+            // FIX: Safely handle both Array and Object (Firebase returns Object for lists with numeric keys sometimes)
+            taxes = Array.isArray(rawTaxes) 
+                ? [...rawTaxes] 
+                : Object.values(rawTaxes);
         }
+        
         if (currentUser?.pendingTax) {
             const exists = taxes.find(t => t.id === currentUser.pendingTax!.id || t.sessionId === currentUser.pendingTax!.sessionId);
             if (!exists) {
@@ -487,9 +493,18 @@ export const Dashboard: React.FC = () => {
         bank.balanceKRW += totalAmount;
         
         if (user.pendingTaxes) {
-            const taxIdx = user.pendingTaxes.findIndex(t => t.id === tax.id);
-            if (taxIdx > -1) {
-                user.pendingTaxes[taxIdx].status = 'paid';
+            // Find in raw object or array
+            let taxKey: string | number | undefined;
+            if (Array.isArray(user.pendingTaxes)) {
+                const idx = user.pendingTaxes.findIndex(t => t.id === tax.id);
+                if (idx > -1) taxKey = idx;
+            } else {
+                // Object iteration
+                taxKey = Object.keys(user.pendingTaxes).find(k => user.pendingTaxes![k].id === tax.id);
+            }
+
+            if (taxKey !== undefined) {
+                user.pendingTaxes[taxKey].status = 'paid';
             }
         }
         if (user.pendingTax && user.pendingTax.id === tax.id) {

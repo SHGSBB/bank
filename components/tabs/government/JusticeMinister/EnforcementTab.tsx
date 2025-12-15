@@ -1,8 +1,7 @@
-
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../../context/GameContext';
 import { Card, Button, Input, Modal } from '../../../Shared';
-import { User, Chat, ChatMessage } from '../../../../types';
+import { User, Chat, ChatMessage, PendingTax } from '../../../../types';
 
 export const EnforcementTab: React.FC = () => {
     const { db, showModal, serverAction, currentUser } = useGame();
@@ -13,7 +12,12 @@ export const EnforcementTab: React.FC = () => {
 
     const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen');
     const filteredCitizens = citizens.filter(u => u.name.includes(userSearch));
-    const unpaidTaxUsers = citizens.filter(c => (c.pendingTaxes || []).some(t => t.status !== 'paid'));
+    
+    // FIX: Safely iterate pendingTaxes whether it's an array or object map
+    const unpaidTaxUsers = citizens.filter(c => {
+        const taxes = c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) as PendingTax[] : [];
+        return taxes.some(t => t.status !== 'paid');
+    });
 
     // Fetch pending sentences from chat messages
     const pendingSentences = useMemo(() => {
@@ -66,12 +70,16 @@ export const EnforcementTab: React.FC = () => {
                 <div className="mb-6 p-4 bg-red-50 dark:bg-red-900/20 rounded-lg">
                     <h5 className="font-bold text-sm mb-2 text-red-800 dark:text-red-300">🚨 세금 미납자 명단 (한국은행 공유)</h5>
                     <div className="max-h-32 overflow-y-auto space-y-1 text-xs">
-                        {unpaidTaxUsers.map(u => (
-                            <div key={u.name} className="flex justify-between">
-                                <span>{u.name}</span>
-                                <span className="text-red-500">미납 {u.pendingTaxes?.filter(t=>t.status!=='paid').length}건</span>
-                            </div>
-                        ))}
+                        {unpaidTaxUsers.map(u => {
+                            const taxes = u.pendingTaxes ? (Array.isArray(u.pendingTaxes) ? u.pendingTaxes : Object.values(u.pendingTaxes)) as PendingTax[] : [];
+                            const count = taxes.filter(t => t.status !== 'paid').length;
+                            return (
+                                <div key={u.name} className="flex justify-between">
+                                    <span>{u.name}</span>
+                                    <span className="text-red-500">미납 {count}건</span>
+                                </div>
+                            );
+                        })}
                         {unpaidTaxUsers.length === 0 && <p className="text-gray-500">미납자가 없습니다.</p>}
                     </div>
                 </div>
@@ -88,7 +96,8 @@ export const EnforcementTab: React.FC = () => {
                                 }} className={`p-2 rounded cursor-pointer flex justify-between ${selectedUsers.includes(c.name) ? 'bg-red-100 dark:bg-red-900' : 'hover:bg-gray-100 dark:hover:bg-gray-700'}`}>
                                     <div className="flex flex-col">
                                         <span>{c.name}</span>
-                                        {c.pendingTaxes && c.pendingTaxes.length > 0 && <span className="text-[10px] text-red-500">미납 세금 있음</span>}
+                                        {/* FIX: Safe check for pending taxes */}
+                                        {(c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) : []).length > 0 && <span className="text-[10px] text-red-500">미납 세금 있음</span>}
                                     </div>
                                     {selectedUsers.includes(c.name) && <span>✅</span>}
                                 </div>

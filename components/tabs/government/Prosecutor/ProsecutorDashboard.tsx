@@ -1,10 +1,9 @@
-
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../../context/GameContext';
 import { Card, Button, Input } from '../../../Shared';
 import { TransactionHistoryTab } from '../../TransactionHistoryTab';
 import { TransferTab } from '../../TransferTab';
-import { User } from '../../../../types';
+import { User, PendingTax } from '../../../../types';
 
 export const ProsecutorDashboard: React.FC = () => {
     const { db, createChat, sendMessage, currentUser } = useGame();
@@ -51,8 +50,10 @@ export const ProsecutorDashboard: React.FC = () => {
                         <Input placeholder="시민 검색..." value={userSearch} onChange={e => setUserSearch(e.target.value)} />
                         <div className="max-h-96 overflow-y-auto space-y-2">
                             {filteredCitizens.map(c => {
-                                const fines = (c.pendingTaxes || []).filter(t => t.type === 'fine');
-                                const taxes = (c.pendingTaxes || []).filter(t => t.type !== 'fine');
+                                // FIX: Handle pendingTaxes as array or object
+                                const rawTaxes = (c.pendingTaxes ? (Array.isArray(c.pendingTaxes) ? c.pendingTaxes : Object.values(c.pendingTaxes)) : []) as PendingTax[];
+                                const fines = rawTaxes.filter(t => t.type === 'fine');
+                                const taxes = rawTaxes.filter(t => t.type !== 'fine');
                                 
                                 return (
                                     <div key={c.name} className="p-3 border rounded-xl bg-white dark:bg-gray-800 text-sm shadow-sm">
