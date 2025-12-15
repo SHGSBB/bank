@@ -1,11 +1,16 @@
-
-import * as firebaseApp from "firebase/app";
+import { initializeApp } from "firebase/app";
 import { getDatabase, ref, get, update, push as rtdbPush, query, limitToLast, off, runTransaction, onValue, orderByChild, startAt, endAt, equalTo, child } from "firebase/database";
 import { getAuth } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
-const API_BASE_URL = "";
+// [CRITICAL FIX] API Base URL 설정
+// Localhost: Use remote Vercel API (Cross-Origin, needs CORS)
+// Production: Use relative path (Same-Origin, no CORS needed)
+const isLocal = typeof window !== 'undefined' && window.location.hostname.includes('localhost');
+const API_BASE_URL = isLocal 
+    ? "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app" 
+    : ""; 
 
 // --- CONFIGURATION ---
 const firebaseConfig = {
@@ -19,7 +24,7 @@ const firebaseConfig = {
   measurementId: "G-SYXWCG1YKS"
 };
 
-const app = firebaseApp.initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig);
 export const database = getDatabase(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
@@ -76,10 +81,19 @@ export const fetchGlobalData = async (): Promise<Partial<DB>> => {
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
         });
         
-        if (!res.ok) throw new Error("서버 데이터 로드 실패");
+        const contentType = res.headers.get("content-type");
+        if (contentType && contentType.indexOf("application/json") === -1) {
+            // Not JSON (likely HTML error page)
+            const text = await res.text();
+            throw new Error(`Server returned non-JSON response: ${text.substring(0, 50)}...`);
+        }
+
+        if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            throw new Error(errorData.error || `HTTP Error ${res.status}`);
+        }
         
-        const data = await res.json();
-        return data;
+        return await res.json();
     } catch (e) {
         console.error("데이터 로드 중 오류 (백업 방식 사용):", e);
         // 서버 에러 시 비상용으로 기존 방식 사용 (보안 취약하지만 앱 멈춤 방지)

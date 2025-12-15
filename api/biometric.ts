@@ -1,12 +1,6 @@
-
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
-// Helper for CORS
-const setCors = (res: VercelResponse) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-};
+// CORS headers are handled by vercel.json
 
 // --- SIMULATED SERVER LOGIC ---
 // In a real production app, you would use @simplewebauthn/server here
@@ -14,7 +8,6 @@ const setCors = (res: VercelResponse) => {
 // For this frontend-focused demo, we return valid structures that the browser accepts.
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    setCors(res);
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 

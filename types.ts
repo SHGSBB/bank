@@ -1,4 +1,5 @@
 
+
 export interface ChatReaction {
     user: string;
     emoji: string;
@@ -178,7 +179,7 @@ export interface User {
     preferences?: UserPreferences;
     transactions?: Transaction[];
     notifications?: ToastNotification[] | Record<string, ToastNotification>;
-    pendingTaxes?: PendingTax[];
+    pendingTaxes?: PendingTax[] | Record<string, PendingTax>;
     pendingTax?: PendingTax;
     pendingRent?: RentRequest;
     

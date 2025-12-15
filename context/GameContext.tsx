@@ -1,10 +1,7 @@
-
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { fetchGlobalData, saveDb as firebaseSaveDb, generateId, chatService, assetService, fetchUser, fetchAllUsers, fetchUserByLoginId, database } from "../services/firebase";
 import { update, ref, push as rtdbPush, get, set, onValue, remove, onChildAdded, query, limitToLast } from "firebase/database";
 import { DB, DEFAULT_DB, User, GameNotification, MintingRequest, SignupSession, StickyNote, Chat, ChatMessage, ChatAttachment, Ad, PolicyRequest, ChatReaction, ToastNotification, PendingTax, TaxSession, AssetHistoryPoint } from "../types";
-
-const API_BASE_URL = "";
 
 interface GameContextType {
     db: DB;
@@ -116,6 +113,12 @@ export const useGame = () => {
     return context;
 };
 
+// URL check for internal logic
+const isLocal = typeof window !== 'undefined' && window.location.hostname.includes('localhost');
+const API_BASE = isLocal 
+    ? '' 
+    : "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app";
+
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [db, setDb] = useState<DB>(DEFAULT_DB);
     const dbRef = useRef<DB>(DEFAULT_DB);
@@ -225,16 +228,21 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch(`${API_BASE_URL}/api/game-action`, {
+            const res = await fetch(`${API_BASE}/api/game-action`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
             });
             
+            // Handle HTML response error (likely 404 from frontend router fallback)
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") === -1) {
+                const text = await res.text();
+                console.error("API returned non-JSON:", text.substring(0, 100));
+                throw new Error("API 엔드포인트 연결 실패 (서버 주소 확인 필요)");
+            }
+
             if (!res.ok) {
-                if (res.status === 404 || res.status === 405) {
-                    throw new Error("PREVIEW_MODE: Server API not available.");
-                }
                 throw new Error('Server action failed');
             }
             
@@ -281,7 +289,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return true;
             }
 
-            const res = await fetch(`${API_BASE_URL}/api/game-action`, {
+            const res = await fetch(`${API_BASE}/api/game-action`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
@@ -289,6 +297,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     payload: { userId: id, password: pass } 
                 })
             });
+
+            // JSON Validation
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.indexOf("application/json") === -1) {
+                if (!silent) setAlertMessage("서버 연결 실패 (API 경로 오류)");
+                return false;
+            }
 
             const data = await res.json();
 
