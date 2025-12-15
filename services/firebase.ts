@@ -5,12 +5,9 @@ import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "fir
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
 // [CRITICAL FIX] API Base URL 설정
-// Localhost: Use remote Vercel API (Cross-Origin, needs CORS)
-// Production: Use relative path (Same-Origin, no CORS needed)
-const isLocal = typeof window !== 'undefined' && window.location.hostname.includes('localhost');
-const API_BASE_URL = isLocal 
-    ? "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app" 
-    : ""; 
+// If the frontend is hosted on Firebase (sunghwa-cffff.web.app) but the API is on Vercel,
+// we MUST use the absolute Vercel URL. Relative URL "" only works if frontend is also on Vercel.
+const API_BASE_URL = "https://bank-8ct6a9yj1-lees-projects-2d0ac47e.vercel.app";
 
 // --- CONFIGURATION ---
 const firebaseConfig = {

@@ -1,11 +1,11 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import admin from 'firebase-admin';
 import bcrypt from 'bcryptjs';
-import { db } from './db.js';
+import { db } from './db';
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    // CORS headers are handled by vercel.json
-    
+    // CORS headers are handled by vercel.json routes.
+    // We only need to handle the OPTIONS method response status.
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
@@ -112,7 +112,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         // --- 1. Basic Transfer ---
         if (action === 'transfer') {
             const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload;
-            await db.ref('users').transaction((users: any) => {
+            await db.ref('users').transaction((users) => {
                 if (!users || !users[senderId] || !users[receiverId]) return users;
                 const sender = users[senderId];
                 const receiver = users[receiverId];
@@ -136,7 +136,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         if (action === 'purchase') {
             const { buyerId, items } = payload; // items: { sellerName, name, quantity, price, id }[]
             
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 if (!data || !data.users || !data.users[buyerId]) return data;
                 const buyer = data.users[buyerId];
                 const bank = data.users['한국은행'];
@@ -215,7 +215,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         if (action === 'exchange') {
             const { userId, fromCurrency, toCurrency, amount } = payload;
             
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 if (!data || !data.users || !data.users[userId]) return data;
                 const user = data.users[userId];
                 const bank = data.users['한국은행'];
@@ -271,7 +271,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         if (action === 'withdraw_savings') {
             const { userId, depositId } = payload;
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 if (!data.users[userId] || !data.termDeposits[depositId]) return data;
                 const deposit = data.termDeposits[depositId];
                 if (deposit.owner !== userId || deposit.status !== 'active') return;
@@ -299,7 +299,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         if (action === 'repay_loan') {
             const { userId, loanId } = payload;
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 const user = data.users?.[userId];
                 if (!user || !user.loans) return data;
                 
@@ -334,7 +334,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         // --- 6. Real Estate (Buy Offer / Pay Rent) ---
         if (action === 'accept_offer') {
             const { offerId } = payload;
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 const offer = data.realEstate?.offers?.[offerId];
                 if (!offer || offer.status !== 'pending') return data;
 
@@ -376,7 +376,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         if (action === 'pay_rent') {
             const { userId, ownerId, amount, propertyId } = payload;
-            await db.ref().transaction((data: any) => {
+            await db.ref().transaction((data) => {
                 const tenant = data.users[userId];
                 const owner = data.users[ownerId];
                 if (!tenant || !owner) return;
@@ -404,7 +404,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         // --- 7. Admin Features (Minting / Welfare) ---
         if (action === 'mint_currency') {
             const { amount, currency } = payload;
-            await db.ref('users/한국은행').transaction((bank: any) => {
+            await db.ref('users/한국은행').transaction((bank) => {
                 if (!bank) return bank;
                 if (currency === 'KRW') bank.balanceKRW += amount;
                 else bank.balanceUSD += amount;
@@ -420,7 +420,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         if (action === 'distribute_welfare') {
             const { targetUser, amount } = payload;
-            await db.ref('users').transaction((users: any) => {
+            await db.ref('users').transaction((users) => {
                 const user = users[targetUser];
                 const bank = users['한국은행'];
                 if (!user || !bank) return users;
@@ -447,7 +447,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             const { amount, userIds } = payload;
             const bankId = '한국은행';
             
-            await db.ref('users').transaction((users: any) => {
+            await db.ref('users').transaction((users) => {
                 if (!users || !users[bankId]) return users;
                 const bank = users[bankId];
                 userIds.forEach((uid: string) => {

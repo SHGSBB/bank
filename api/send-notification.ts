@@ -1,10 +1,9 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import admin from 'firebase-admin';
-import { db } from './db.js';
+import { db } from './db';
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    // CORS headers are handled by vercel.json
-
+    // CORS headers are handled by vercel.json routes.
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }

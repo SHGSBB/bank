@@ -1,13 +1,12 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
-// CORS headers are handled by vercel.json
-
 // --- SIMULATED SERVER LOGIC ---
 // In a real production app, you would use @simplewebauthn/server here
 // and store the expectedChallenge in a DB to verify against the response.
 // For this frontend-focused demo, we return valid structures that the browser accepts.
 
 export default async (req: VercelRequest, res: VercelResponse) => {
+    // CORS headers are handled by vercel.json routes.
     if (req.method === 'OPTIONS') return res.status(200).end();
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
