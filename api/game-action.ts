@@ -1,7 +1,7 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import * as admin from 'firebase-admin';
-import * as bcrypt from 'bcryptjs';
-import { db } from './db.js';
+import admin from 'firebase-admin';
+import bcrypt from 'bcryptjs';
+import { db } from './db';
 
 // Helper for CORS
 const setCors = (res: VercelResponse) => {
