@@ -1,5 +1,5 @@
 {
-  "name": "copy-of-copy-of-copy-of-copy-of-copy-of-all-of-the-bank",
+  "name": "copy-of-copy-of-final-developer-beta3-vercel",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -9,17 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@google/genai": "latest",
-    "@simplewebauthn/browser": "latest",
-    "@vercel/node": "^5.5.15",
-    "bcryptjs": "^3.0.3",
     "firebase": "^12.6.0",
-    "firebase-admin": "^13.6.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0"
+    "react-dom": "^19.2.0",
+    "@google/genai": "latest",
+    "@vercel/node": "^5.5.15",
+    "firebase-admin": "^13.6.0",
+    "@simplewebauthn/browser": "latest",
+    "bcryptjs": "^3.0.3"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "~5.8.2",

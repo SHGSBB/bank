@@ -22,6 +22,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     }
 
     try {
+        if (!db) {
+             console.error("Database not initialized");
+             return res.status(500).send('Database Error');
+        }
+
         // 1. Write the message to the message store
         await db.ref(`chatMessages/${chatId}/${message.id}`).set(message);
 

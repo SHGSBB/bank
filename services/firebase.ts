@@ -5,6 +5,8 @@ import { getAuth } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
+const API_BASE_URL = "";
+
 // --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyD5_YZU_luksAslG7nge_dQvauS1_lr3TA",
@@ -68,7 +70,7 @@ export const uploadImage = async (path: string, dataUrl: string): Promise<string
  */
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
     try {
-        const res = await fetch('/api/game-action', {
+        const res = await fetch(`${API_BASE_URL}/api/game-action`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
@@ -336,7 +338,7 @@ export const chatService = {
 
     sendMessage: async (chatId: string, message: ChatMessage, chatMetaUpdate?: Partial<Chat>) => {
         try {
-            await fetch('/api/chat-send', {
+            await fetch(`${API_BASE_URL}/api/chat-send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 

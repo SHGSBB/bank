@@ -1,27 +1,22 @@
+
 import { VercelRequest, VercelResponse } from '@vercel/node';
 
-// 👇 CORS 설정 함수 (업데이트됨)
+// Helper for CORS
 const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 };
 
 // --- SIMULATED SERVER LOGIC ---
-// In a real production app, you would use @simplewebauthn/server here.
+// In a real production app, you would use @simplewebauthn/server here
+// and store the expectedChallenge in a DB to verify against the response.
+// For this frontend-focused demo, we return valid structures that the browser accepts.
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    // 1. CORS 적용 (가장 먼저 실행)
     setCors(res);
-
-    // 2. Preflight 요청 처리 (OPTIONS 메서드)
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-
-    if (req.method !== 'POST') {
-        return res.status(405).send('Method Not Allowed');
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
     const { action, userId, username, data } = req.body;
     
@@ -68,6 +63,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         if (action === 'register-verify') {
             // 2. Verify Registration
+            // In a real app: verify data.response.attestationObject & clientDataJSON
             console.log("Mock Verify Registration for:", userId);
             return res.json({ verified: true });
         }

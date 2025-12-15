@@ -1,22 +1,17 @@
-
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import * as admin from 'firebase-admin';
 import * as bcrypt from 'bcryptjs';
-import { db } from './db.js'; // Shared admin db instance
+import { db } from './db';
 
-// 👇 CORS 설정 함수
+// Helper for CORS
 const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
 export default async (req: VercelRequest, res: VercelResponse) => {
-    setCors(res); // 👈 함수 맨 시작 부분에서 실행!
-
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
+    setCors(res);
 
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
@@ -28,6 +23,10 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     const { action, payload } = req.body;
 
     try {
+        if (!db) {
+            throw new Error("Database not initialized");
+        }
+
         // [Security 1] Fetch Initial Data (Sanitized)
         if (action === 'fetch_initial_data') {
             const snapshot = await db.ref().once('value');
@@ -70,10 +69,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             const { userId, password } = payload;
             
             // 1. Fetch user (with password)
-            // Use loginId query or direct fetch depending on structure. 
-            // Assuming payload.userId is the database Key (Name) or Login ID. 
-            // For safety, we search by ID field if it exists, otherwise assume Key.
-            
             let user = null;
             let userKey = '';
 
@@ -99,14 +94,10 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             
             // Check if password exists
             if (user.password) {
-                // Try bcrypt comparison first
-                // Note: bcrypt.compare throws if data is invalid bcrypt hash, so we wrap in try/catch or assume plain text fallback logic
                 const isHash = user.password.startsWith('$2'); 
-                
                 if (isHash) {
                     match = await bcrypt.compare(password, user.password);
                 } else {
-                    // Fallback for legacy plain text passwords
                     match = (user.password === password);
                 }
             }
@@ -118,7 +109,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             // 3. Return sanitized user
             user.password = "";
             user.pin = "";
-            // Ensure key is included if needed by client
             user.name = userKey; 
             
             return res.status(200).json({ success: true, user });

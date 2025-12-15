@@ -1,7 +1,7 @@
 
 import { startRegistration, startAuthentication, platformAuthenticatorIsAvailable } from '@simplewebauthn/browser';
 
-const API_URL = '/api/biometric';
+const API_URL = 'https://bank-one-mu.vercel.app/api/biometric';
 
 // Check if the device supports platform authenticators (FaceID, TouchID, etc.)
 export async function checkBiometricSupport(): Promise<boolean> {
