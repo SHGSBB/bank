@@ -1,6 +1,5 @@
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import admin from 'firebase-admin';
 import bcrypt from 'bcryptjs';
 import { db } from './db';
 
@@ -488,11 +487,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     status: 'pending',
                     breakdown: tax.breakdown
                 };
-                const userRef = db.ref(`users/${tax.userId}/pendingTaxes`);
+                const userRef = db!.ref(`users/${tax.userId}/pendingTaxes`);
                 const newRef = userRef.push();
                 updates[`users/${tax.userId}/pendingTaxes/${newRef.key}`] = pendingTax;
                 
-                const notifRef = db.ref(`users/${tax.userId}/notifications`).push();
+                const notifRef = db!.ref(`users/${tax.userId}/notifications`).push();
                 updates[`users/${tax.userId}/notifications/${notifRef.key}`] = {
                     id: notifRef.key,
                     message: `[세금 고지] ${tax.type} ₩${tax.amount.toLocaleString()}가 부과되었습니다.`,
@@ -504,7 +503,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 };
             });
 
-            await db.ref().update(updates);
+            await db!.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
