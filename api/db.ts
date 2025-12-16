@@ -1,14 +1,34 @@
+
 import * as admin from 'firebase-admin';
 
-// 환경 변수에 있는 JSON 문자열을 객체로 변환해서 사용
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || '{}');
+let dbInstance: admin.database.Database | null = null;
 
-if (!admin.apps.length) {
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
-    // 프로젝트 주소 (반드시 확인!)
-    databaseURL: "https://sunghwa-cffff-default-rtdb.asia-southeast1.firebasedatabase.app"
-  });
+try {
+    const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
+    // Only attempt initialization if the key exists and is valid JSON
+    if (key) {
+        let serviceAccount;
+        try {
+            serviceAccount = JSON.parse(key);
+        } catch (e) {
+            console.error("FIREBASE_SERVICE_ACCOUNT_KEY is not valid JSON.");
+        }
+
+        if (serviceAccount && !admin.apps.length) {
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount),
+                databaseURL: "https://sunghwa-cffff-default-rtdb.asia-southeast1.firebasedatabase.app"
+            });
+        }
+        
+        if (admin.apps.length) {
+            dbInstance = admin.database();
+        }
+    } else {
+        console.warn("FIREBASE_SERVICE_ACCOUNT_KEY is missing. Server actions will fail safely.");
+    }
+} catch (error) {
+    console.error("Firebase Admin Init Error:", error);
 }
 
-export const db = admin.database();
+export const db = dbInstance;

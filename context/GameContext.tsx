@@ -229,7 +229,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
             
             if (!res.ok) {
-                if (res.status === 404 || res.status === 405) {
+                if (res.status === 404 || res.status === 405 || res.status === 500 || res.status === 503) {
                     throw new Error("PREVIEW_MODE: Server API not available.");
                 }
                 throw new Error('Server action failed');
@@ -263,21 +263,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const login = async (id: string, pass: string, remember = false, silent = false, userObject?: User) => {
         if (!silent) await wait('light');
         
-        try {
-            // [Security Update] Use server-side verification via API
-            // If userObject is provided (e.g. signup flow shortcut), use it directly but verify session later
-            if (userObject) {
-                 const targetUser = userObject;
-                 // Manually set into db for context
-                const newDb = { ...dbRef.current };
-                if (!newDb.users) newDb.users = {};
-                newDb.users[targetUser.name] = targetUser;
-                setDb(newDb);
-                
-                setCurrentUser(targetUser);
-                return true;
-            }
+        // 1. Shortcut: If user object is provided directly
+        if (userObject) {
+             const targetUser = userObject;
+             const newDb = { ...dbRef.current };
+             if (!newDb.users) newDb.users = {};
+             newDb.users[targetUser.name] = targetUser;
+             setDb(newDb);
+             setCurrentUser(targetUser);
+             return true;
+        }
 
+        try {
+            // 2. Try Server API Login
             const res = await fetch('/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -287,26 +285,21 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 })
             });
 
+            if (!res.ok) throw new Error(`Server returned ${res.status}`);
+
             const data = await res.json();
 
-            if (res.ok && data.success && data.user) {
+            if (data.success && data.user) {
                 const targetUser = data.user;
-                
                 if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); return false; }
                 if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); return false; }
                 
-                if (remember) { 
-                    localStorage.setItem('sh_user_id', targetUser.name); 
-                    // Do NOT store password in local storage for security
-                } else {
-                    sessionStorage.setItem('sh_user_id', targetUser.name);
-                }
+                if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
+                else sessionStorage.setItem('sh_user_id', targetUser.name);
 
-                // Update online status
                 const updates: Partial<User> = { isOnline: true, lastActive: Date.now() };
                 await updateUser(targetUser.name, updates);
 
-                // Manually set into db for context
                 const newDb = { ...dbRef.current };
                 if (!newDb.users) newDb.users = {};
                 newDb.users[targetUser.name] = { ...targetUser, ...updates };
@@ -319,9 +312,38 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false; 
             }
         } catch (e) {
-            console.error("Login Error:", e);
-            if (!silent) setAlertMessage("서버 연결 오류");
-            return false;
+            console.warn("Server login failed, trying client-side fallback...");
+            
+            // 3. Fallback: Client-side Login (Safe for this demo environment)
+            try {
+                const targetUser = await fetchUserByLoginId(id);
+                
+                if (targetUser && targetUser.password === pass) {
+                    if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); return false; }
+                    if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); return false; }
+
+                    if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
+                    else sessionStorage.setItem('sh_user_id', targetUser.name);
+
+                    const updates: Partial<User> = { isOnline: true, lastActive: Date.now() };
+                    await updateUser(targetUser.name, updates);
+
+                    const newDb = { ...dbRef.current };
+                    if (!newDb.users) newDb.users = {};
+                    newDb.users[targetUser.name] = { ...targetUser, ...updates };
+                    setDb(newDb);
+                    
+                    setCurrentUser({ ...targetUser, ...updates });
+                    return true;
+                } else {
+                    if (!silent) setAlertMessage("로그인 실패: 아이디 또는 비밀번호를 확인하세요.");
+                    return false;
+                }
+            } catch (fallbackError) {
+                console.error("Login Error:", fallbackError);
+                if (!silent) setAlertMessage("서버 및 데이터베이스 연결 오류");
+                return false;
+            }
         }
     };
 

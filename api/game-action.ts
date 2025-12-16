@@ -21,6 +21,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         return res.status(405).send('Method Not Allowed');
     }
 
+    if (!db) {
+        console.error("Database not initialized (Missing Env Key)");
+        return res.status(503).json({ error: 'Server misconfiguration: Database not available.' });
+    }
+
     const { action, payload } = req.body;
 
     try {
@@ -65,11 +70,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         if (action === 'login') {
             const { userId, password } = payload;
             
-            // 1. Fetch user (with password)
-            // Use loginId query or direct fetch depending on structure. 
-            // Assuming payload.userId is the database Key (Name) or Login ID. 
-            // For safety, we search by ID field if it exists, otherwise assume Key.
-            
             let user = null;
             let userKey = '';
 
@@ -93,10 +93,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             // 2. Compare Password
             let match = false;
             
-            // Check if password exists
             if (user.password) {
-                // Try bcrypt comparison first
-                // Note: bcrypt.compare throws if data is invalid bcrypt hash, so we wrap in try/catch or assume plain text fallback logic
                 const isHash = user.password.startsWith('$2'); 
                 
                 if (isHash) {
@@ -114,7 +111,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             // 3. Return sanitized user
             user.password = "";
             user.pin = "";
-            // Ensure key is included if needed by client
             user.name = userKey; 
             
             return res.status(200).json({ success: true, user });
@@ -160,7 +156,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 let totalCost = 0;
                 let cashbackTotal = 0;
 
-                // Validate total cost first
                 items.forEach((item: any) => {
                     const isVatTarget = vatTargets.includes('all') || vatTargets.includes(item.sellerName);
                     const basePrice = item.price * item.quantity;
@@ -172,12 +167,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     }
                 });
 
-                if (buyer.balanceKRW < totalCost) return; // Abort
+                if (buyer.balanceKRW < totalCost) return; 
 
                 const date = new Date().toISOString();
                 let txId = Date.now();
 
-                // Process Items
                 items.forEach((item: any) => {
                     const seller = data.users[item.sellerName];
                     if (!seller) return;
@@ -202,7 +196,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     if (!seller.transactions) seller.transactions = [];
                     seller.transactions.push({ id: txId++, type: 'income', amount: basePrice, currency: 'KRW', description: `판매: ${item.name} (${item.quantity}개)`, date });
                     
-                    // Deduct Stock if tracked
                     if (seller.products && seller.products[item.id]) {
                         if (seller.products[item.id].stock > 0) {
                             seller.products[item.id].stock = Math.max(0, seller.products[item.id].stock - item.quantity);
@@ -210,7 +203,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     }
                 });
 
-                // Apply Cashback
                 if (cashbackTotal > 0 && bank && bank.balanceKRW >= cashbackTotal) {
                     buyer.balanceKRW += cashbackTotal;
                     bank.balanceKRW -= cashbackTotal;
@@ -235,25 +227,23 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 const rates = data.settings.exchangeRate;
                 const config = data.settings.exchangeConfig;
 
-                // Rate Calculation
                 let rate = 0;
                 if (fromCurrency === 'KRW' && toCurrency === 'USD') rate = 1 / rates.KRW_USD;
                 else if (fromCurrency === 'USD' && toCurrency === 'KRW') rate = rates.KRW_USD;
                 
-                if (rate === 0) return; // Invalid pair
+                if (rate === 0) return; 
 
                 const finalToAmount = amount * rate;
                 const fromKey = fromCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
                 const toKey = toCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
 
-                if (user[fromKey] < amount) return; // Insufficient funds
+                if (user[fromKey] < amount) return; 
 
-                // Auto Minting Logic check for Bank
                 if (bank[toKey] < finalToAmount) {
                     if (config?.autoMintLimit && (finalToAmount - bank[toKey]) < config.autoMintLimit) {
-                        bank[toKey] += (finalToAmount - bank[toKey]) * 1.5; // Mint deficit + buffer
+                        bank[toKey] += (finalToAmount - bank[toKey]) * 1.5; 
                     } else {
-                        return; // Bank bankrupt
+                        return; 
                     }
                 }
 
@@ -275,7 +265,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- 4. Savings (Apply / Withdraw) ---
+        // --- 4. Savings ---
         if (action === 'apply_savings') {
             const { application } = payload; 
             await db.ref(`pendingApplications/${application.id}`).set(application);
@@ -303,7 +293,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- 5. Loan (Apply / Repay) ---
+        // --- 5. Loan ---
         if (action === 'apply_loan') {
             const { application } = payload;
             await db.ref(`pendingApplications/${application.id}`).set(application);
@@ -316,19 +306,17 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 const user = data.users?.[userId];
                 if (!user || !user.loans) return data;
                 
-                // Find loan in array or object
                 const loanKey = Object.keys(user.loans).find(k => user.loans[k].id === loanId);
                 const loan = loanKey ? user.loans[loanKey] : null;
 
                 if (!loan || loan.status !== 'approved') return;
 
                 const repayAmount = Math.floor(loan.amount * (1 + loan.interestRate.rate / 100));
-                if (user.balanceKRW < repayAmount) return; // Insufficient
+                if (user.balanceKRW < repayAmount) return; 
 
                 user.balanceKRW -= repayAmount;
                 loan.status = 'repaid';
                 
-                // Pay Bank
                 if (data.users['한국은행']) {
                     data.users['한국은행'].balanceKRW += repayAmount;
                 }
@@ -344,7 +332,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- 6. Real Estate (Buy Offer / Pay Rent) ---
+        // --- 6. Real Estate ---
         if (action === 'accept_offer') {
             const { offerId } = payload;
             await db.ref().transaction((data) => {
@@ -357,11 +345,10 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
                 if (!buyer || !seller || !prop) return;
                 if (buyer.balanceKRW < offer.price) {
-                    offer.status = 'rejected'; // Insufficient funds auto-reject
+                    offer.status = 'rejected'; 
                     return data; 
                 }
 
-                // Execute
                 buyer.balanceKRW -= offer.price;
                 seller.balanceKRW += offer.price;
                 
@@ -394,12 +381,12 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 const owner = data.users[ownerId];
                 if (!tenant || !owner) return;
                 
-                if (tenant.balanceKRW < amount) return; // Fail
+                if (tenant.balanceKRW < amount) return; 
 
                 tenant.balanceKRW -= amount;
                 owner.balanceKRW += amount;
                 
-                delete tenant.pendingRent; // Clear request
+                delete tenant.pendingRent; 
 
                 const date = new Date().toISOString();
                 const now = Date.now();
@@ -414,7 +401,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- 7. Admin Features (Minting / Welfare) ---
+        // --- 7. Admin Features ---
         if (action === 'mint_currency') {
             const { amount, currency } = payload;
             await db.ref('users/한국은행').transaction((bank) => {
@@ -455,7 +442,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- Legacy Actions (Weekly Pay / Tax) ---
         if (action === 'weekly_pay') {
             const { amount, userIds } = payload;
             const bankId = '한국은행';

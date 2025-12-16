@@ -17,6 +17,10 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         return res.status(405).send('Method Not Allowed');
     }
 
+    if (!db) {
+        return res.status(503).send('Database unavailable');
+    }
+
     const { chatId, senderId, text } = req.body;
     
     try {
