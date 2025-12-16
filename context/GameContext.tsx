@@ -1,6 +1,5 @@
-
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
-import { fetchGlobalData, saveDb as firebaseSaveDb, generateId, chatService, assetService, fetchUser, fetchAllUsers, fetchUserByLoginId, database, clientSideActionHandler } from "../services/firebase";
+import { fetchGlobalData, saveDb as firebaseSaveDb, generateId, chatService, assetService, fetchUser, fetchAllUsers, fetchUserByLoginId, database } from "../services/firebase";
 import { update, ref, push as rtdbPush, get, set, onValue, remove, onChildAdded, query, limitToLast } from "firebase/database";
 import { DB, DEFAULT_DB, User, GameNotification, MintingRequest, SignupSession, StickyNote, Chat, ChatMessage, ChatAttachment, Ad, PolicyRequest, ChatReaction, ToastNotification, PendingTax, TaxSession, AssetHistoryPoint } from "../types";
 
@@ -229,28 +228,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 body: JSON.stringify({ action, payload })
             });
             
-            // Validate response type before parsing JSON to avoid syntax errors on HTML error pages
-            const contentType = res.headers.get("content-type");
-            if (res.ok && contentType && contentType.includes("application/json")) {
-                const data = await res.json();
-                await refreshData();
-                return data;
-            } else {
-                // If not JSON or not OK, throw to catch block for client-side fallback
-                throw new Error("API not available or returned non-JSON");
+            if (!res.ok) {
+                if (res.status === 404 || res.status === 405) {
+                    throw new Error("PREVIEW_MODE: Server API not available.");
+                }
+                throw new Error('Server action failed');
             }
+            
+            // Just refresh current user data after action
+            await refreshData();
+            return await res.json();
         } catch (e: any) {
-            console.warn(`Server action '${action}' failed, trying client-side fallback: ${e.message}`);
-            // Fallback Logic
-            try {
-                const result = await clientSideActionHandler(action, payload);
-                await refreshData();
-                return result;
-            } catch (clientError: any) {
-                console.error("Action Error:", clientError);
-                setAlertMessage("오류가 발생했습니다: " + clientError.message);
-                throw clientError;
-            }
+            console.error("Action Error:", e);
+            setAlertMessage("오류가 발생했습니다: " + e.message);
+            throw e;
         } finally {
             setSimulatedLoading(false);
         }
@@ -287,33 +278,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return true;
             }
 
-            let targetUser: User | null = null;
+            const res = await fetch('/api/game-action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ 
+                    action: 'login', 
+                    payload: { userId: id, password: pass } 
+                })
+            });
 
-            try {
-                const res = await fetch('/api/game-action', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        action: 'login', 
-                        payload: { userId: id, password: pass } 
-                    })
-                });
+            const data = await res.json();
 
-                const contentType = res.headers.get("content-type");
-                if (res.ok && contentType && contentType.includes("application/json")) {
-                    const data = await res.json();
-                    if (data.success && data.user) targetUser = data.user;
-                } else {
-                    throw new Error("API unavailable");
-                }
-            } catch (e) {
-                console.warn("API Login failed, trying client-side fallback...");
-                // Client-side Fallback
-                const result = await clientSideActionHandler('login', { userId: id, password: pass });
-                if (result.success) targetUser = result.user;
-            }
-
-            if (targetUser) {
+            if (res.ok && data.success && data.user) {
+                const targetUser = data.user;
+                
                 if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); return false; }
                 if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); return false; }
                 
@@ -549,11 +527,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updates[`signupSessions/${sessionId}`] = {
             id: sessionId,
             code,
-            createdAt: Date.now(), // Fixed property name match with type definition
+            createdAt: Date.now(),
             name, // 반 이름 또는 선생님 성함
             phone,
-            status: 'active',
-            attempts: 0
+            attempts: 0,
+            status: 'active'
         };
         
         await update(ref(database), updates);

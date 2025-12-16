@@ -74,16 +74,12 @@ export const fetchGlobalData = async (): Promise<Partial<DB>> => {
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
         });
         
-        // Check if response is actually JSON before parsing
-        const contentType = res.headers.get("content-type");
-        if (res.ok && contentType && contentType.includes("application/json")) {
-            const data = await res.json();
-            return data;
-        } else {
-            throw new Error("API returned non-JSON response");
-        }
+        if (!res.ok) throw new Error("서버 데이터 로드 실패");
+        
+        const data = await res.json();
+        return data;
     } catch (e) {
-        console.warn("API Server unavailable or invalid response, falling back to direct DB read (Preview Mode)");
+        console.error("데이터 로드 중 오류 (백업 방식 사용):", e);
         // 서버 에러 시 비상용으로 기존 방식 사용 (보안 취약하지만 앱 멈춤 방지)
         const snapshot = await get(ref(database));
         return snapshot.exists() ? snapshot.val() : {};
@@ -314,115 +310,12 @@ export const fetchUserListLite = async (category: 'all' | 'citizen' | 'mart' | '
 // NEW HELPER: Stub for Message Search
 export const searchMessages = async (userId: string, queryText: string): Promise<any[]> => {
     // Real implementation would require a server-side search index (like Algolia or a custom Cloud Function)
+    // For this RTDB setup, we can't efficiently search all message text.
+    // We will return empty for now, or implement a very expensive client scan (not recommended).
+    // The ChatSystem already does a client-side filter on loaded chat *previews* (lastMessage).
+    // Deep search is skipped for performance in this demo.
     return [];
 };
-
-// Client-Side Action Handler for Preview Mode (No Server Function)
-export const clientSideActionHandler = async (action: string, payload: any) => {
-    // Replicates logic from api/game-action.ts using client SDK
-    
-    if (action === 'login') {
-       const { userId, password } = payload;
-       const user = await fetchUserByLoginId(userId);
-       
-       if (!user) return { success: false, error: "User not found" };
-       // In preview, we trust client-side check if hashes match or if plain text
-       // Note: Should use bcrypt compare in a real app, but simplified for client-side fallback
-       if (user.password !== password) return { success: false, error: "Wrong password" };
-       
-       // Ensure key is included
-       user.name = user.name || Object.keys(user)[0] || userId;
-       
-       return { success: true, user };
-    }
-
-    if (action === 'transfer') {
-        const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload;
-        await runTransaction(ref(database, 'users'), (users) => {
-            if (!users || !users[senderId] || !users[receiverId]) return users;
-            const sender = users[senderId];
-            const receiver = users[receiverId];
-            if (sender.balanceKRW < amount) return; // Abort
-
-            sender.balanceKRW -= amount;
-            receiver.balanceKRW += amount;
-
-            const now = Date.now();
-            if (!sender.transactions) sender.transactions = [];
-            sender.transactions.push({ id: now, type: 'expense', amount: -amount, currency: 'KRW', description: senderMemo, date: new Date().toISOString() });
-            
-            if (!receiver.transactions) receiver.transactions = [];
-            receiver.transactions.push({ id: now + 1, type: 'income', amount: amount, currency: 'KRW', description: receiverMemo, date: new Date().toISOString() });
-            
-            return users;
-        });
-        return { success: true };
-    }
-    
-    if (action === 'purchase') {
-         const { buyerId, items } = payload;
-         await runTransaction(ref(database), (data) => {
-             if (!data || !data.users || !data.users[buyerId]) return data;
-             const buyer = data.users[buyerId];
-             let totalCost = 0;
-             items.forEach((item:any) => totalCost += item.price * item.quantity);
-             if(buyer.balanceKRW < totalCost) return;
-             
-             buyer.balanceKRW -= totalCost;
-             const now = Date.now();
-             
-             if (!buyer.transactions) buyer.transactions = [];
-             
-             items.forEach((item:any) => {
-                 buyer.transactions.push({ id: now, type: 'expense', amount: -(item.price * item.quantity), currency: 'KRW', description: `구매: ${item.name}`, date: new Date().toISOString() });
-                 
-                 if(data.users[item.sellerName]) {
-                     const seller = data.users[item.sellerName];
-                     seller.balanceKRW += item.price * item.quantity;
-                     if(!seller.transactions) seller.transactions = [];
-                     seller.transactions.push({ id: now, type: 'income', amount: item.price * item.quantity, currency: 'KRW', description: `판매: ${item.name}`, date: new Date().toISOString() });
-                 }
-             });
-             return data;
-         });
-         return { success: true };
-    }
-
-    if (action === 'exchange') {
-        const { userId, fromCurrency, toCurrency, amount } = payload;
-        await runTransaction(ref(database), (data) => {
-             if(!data.users[userId]) return;
-             const user = data.users[userId];
-             const bank = data.users['한국은행'];
-             const rates = data.settings?.exchangeRate || { KRW_USD: 1350 };
-             
-             let rate = 0;
-             if (fromCurrency === 'KRW' && toCurrency === 'USD') rate = 1 / rates.KRW_USD;
-             else if (fromCurrency === 'USD' && toCurrency === 'KRW') rate = rates.KRW_USD;
-             
-             const finalToAmount = amount * rate;
-             const fromKey = fromCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-             const toKey = toCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-             
-             if(user[fromKey] < amount) return;
-             
-             user[fromKey] -= amount;
-             user[toKey] += finalToAmount;
-             
-             if(bank) {
-                 bank[fromKey] += amount;
-                 bank[toKey] -= finalToAmount;
-             }
-             
-             return data;
-        });
-        return { success: true };
-    }
-
-    // Default fallthrough for other actions - just log
-    console.warn(`Client side action fallback for '${action}' - not fully implemented in preview mode.`);
-    return { success: true };
-}
 
 // --- CHAT SERVICES ---
 
@@ -443,7 +336,7 @@ export const chatService = {
 
     sendMessage: async (chatId: string, message: ChatMessage, chatMetaUpdate?: Partial<Chat>) => {
         try {
-            const res = await fetch('/api/chat-send', {
+            await fetch('/api/chat-send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
@@ -451,17 +344,8 @@ export const chatService = {
                     message 
                 }),
             });
-            // Fallback for preview mode or errors
-            if (!res.ok) {
-                throw new Error("API unavailable");
-            }
         } catch (error) {
-            // Offline/Preview Fallback
-            await update(ref(database, `chatMessages/${chatId}/${message.id}`), message);
-            await update(ref(database, `chatRooms/${chatId}`), {
-                lastMessage: message.text,
-                lastTimestamp: message.timestamp
-            });
+            console.error("Failed to send message via API:", error);
         }
     },
 

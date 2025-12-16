@@ -18,13 +18,17 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
 
     // Filter Data based on Period
     const chartData = useMemo(() => {
-        const now = Date.now();
+        const now = new Date();
         let startTime = 0;
         switch (period) {
-            case '1D': startTime = now - 24 * 60 * 60 * 1000; break;
-            case '1W': startTime = now - 7 * 24 * 60 * 60 * 1000; break;
-            case '1M': startTime = now - 30 * 24 * 60 * 60 * 1000; break;
-            case '1Y': startTime = now - 365 * 24 * 60 * 60 * 1000; break;
+            case '1D': 
+                // Set start time to 00:00 of today
+                const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+                startTime = startOfDay.getTime();
+                break;
+            case '1W': startTime = Date.now() - 7 * 24 * 60 * 60 * 1000; break;
+            case '1M': startTime = Date.now() - 30 * 24 * 60 * 60 * 1000; break;
+            case '1Y': startTime = Date.now() - 365 * 24 * 60 * 60 * 1000; break;
         }
         const filtered = data.filter(d => new Date(d.date).getTime() >= startTime);
         return filtered.length > 1 ? filtered : data.slice(-20); 

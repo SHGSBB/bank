@@ -178,7 +178,7 @@ export const StandardTableTab: React.FC = () => {
                         <span>주급 및 임금 기준</span>
                         <div className="flex items-center gap-2">
                             <span className="text-xs font-normal">역량별 주급</span>
-                            {isBankGovernor ? (
+                            {(isAdminOrPresident) ? (
                                 <Toggle checked={stds.competencyWageEnabled || false} onChange={v => setStds(prev => ({...prev, competencyWageEnabled: v}))} />
                             ) : (
                                 <span className={`text-xs font-bold px-2 py-1 rounded ${stds.competencyWageEnabled ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>

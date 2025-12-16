@@ -32,7 +32,7 @@ export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ c
         <div className="relative w-full">
             <input 
                 type={inputType}
-                className={`w-full p-4 rounded-2xl bg-[#F0F0F0] text-[#121212] dark:bg-[#2D2D2D] dark:text-[#E0E0E0] outline-none focus:ring-2 focus:ring-green-500 transition-shadow font-medium select-text ${className}`} 
+                className={`w-full p-4 rounded-2xl bg-[#F0F0F0] text-[#121212] dark:bg-[#2D2D2D] dark:text-[#E0E0E0] outline-none border border-transparent dark:border-gray-600 focus:ring-2 focus:ring-green-500 transition-all font-medium select-text ${className}`} 
                 {...props} 
             />
             {isPassword && (
@@ -453,12 +453,24 @@ export const ToastContainer = NotificationCenter;
 
 export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolver, setResolver }) => {
     const [pin, setPin] = useState('');
+    const [isError, setIsError] = useState(false);
     
-    // Auto-resolve when PIN length is reached
+    // Auto-resolve check or Error Shake
     useEffect(() => {
         if (pin.length === (resolver.pinLength || 4)) {
-            resolver.resolve(pin);
-            setResolver(null);
+            if (resolver.expectedPin && pin !== resolver.expectedPin) {
+                // Wrong PIN logic
+                setIsError(true);
+                if (navigator.vibrate) navigator.vibrate(200);
+                setTimeout(() => {
+                    setPin('');
+                    setIsError(false);
+                }, 400); // Wait for shake
+            } else {
+                // Correct PIN or no expected pin (setting new one)
+                resolver.resolve(pin);
+                setResolver(null);
+            }
         }
     }, [pin, resolver, setResolver]);
 
@@ -485,7 +497,9 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     useEffect(() => {
         if (resolver.allowBiometric) {
             const tryBio = async () => {
-                const success = await loginBiometrics('temp'); // Simplified logic, real app needs user id context
+                // In a real scenario, you'd pass the user ID from context, but here we assume the current user
+                // If resolver has userId attached or from context. For now, simplistic check.
+                const success = await loginBiometrics('temp'); 
                 if (success && resolver.expectedPin) {
                     resolver.resolve(resolver.expectedPin); // Auto-fill correct PIN on success
                     setResolver(null);
@@ -511,15 +525,17 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     // Z-Index 4000 to overlay standard Modals (z-3000)
     return (
         <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
-            <div className="bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative">
+            <div className={`bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake' : ''}`}>
                 <button onClick={() => { resolver.resolve(null); setResolver(null); }} className="absolute top-4 right-4 text-gray-400 p-2">✕</button>
                 
                 <h3 className="text-xl font-bold text-center mb-2 text-black dark:text-white">간편 비밀번호 입력</h3>
-                <p className="text-sm text-gray-500 text-center mb-8">{resolver.message}</p>
+                <p className={`text-sm text-center mb-8 ${isError ? 'text-red-500 font-bold' : 'text-gray-500'}`}>
+                    {isError ? "비밀번호가 일치하지 않습니다" : resolver.message}
+                </p>
                 
                 <div className="flex justify-center gap-4 mb-8">
                     {Array.from({ length: resolver.pinLength || 4 }).map((_, i) => (
-                        <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${i < pin.length ? 'bg-green-500 scale-110' : 'bg-gray-200 dark:bg-gray-700'}`}></div>
+                        <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${i < pin.length ? (isError ? 'bg-red-500' : 'bg-green-500 scale-110') : 'bg-gray-200 dark:bg-gray-700'}`}></div>
                     ))}
                 </div>
 
@@ -531,7 +547,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                     ))}
                     <div className="flex items-center justify-center">
                         {resolver.allowBiometric && (
-                            <button onClick={handleBioClick} className="p-4 rounded-full text-green-600 dark:text-green-400">
+                            <button onClick={handleBioClick} className="p-4 rounded-full text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20">
                                 <LineIcon icon="fingerprint" className="w-8 h-8" />
                             </button>
                         )}

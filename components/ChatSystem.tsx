@@ -249,10 +249,16 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({ isOpen, onClose, onAttac
             if (!e.shiftKey) {
                 e.preventDefault();
                 if (!e.nativeEvent.isComposing) {
-                    sendMessage(selectedChatId!, inputText);
-                    setInputText('');
+                    handleSendMessage();
                 }
             }
+        }
+    };
+
+    const handleSendMessage = async () => {
+        if (selectedChatId && inputText.trim()) {
+            await sendMessage(selectedChatId, inputText);
+            setInputText('');
         }
     };
 
@@ -599,7 +605,7 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({ isOpen, onClose, onAttac
                         
                         <div className="flex-1 bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-2 flex items-center min-h-[44px] mb-1">
                             <textarea 
-                                className="bg-transparent w-full border-none focus:ring-0 text-sm resize-none h-auto max-h-32" 
+                                className="bg-transparent w-full border-none focus:ring-0 text-sm resize-none h-auto max-h-32 outline-none text-black dark:text-white" 
                                 placeholder="메시지 입력"
                                 value={inputText}
                                 onChange={e => {
@@ -611,7 +617,7 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({ isOpen, onClose, onAttac
                                 rows={1}
                             />
                         </div>
-                        <button onClick={() => { sendMessage(selectedChatId!, inputText); setInputText(''); }} className={`p-3 rounded-md mb-1 ${inputText ? 'bg-yellow-400 text-black' : 'bg-gray-200 text-gray-400'}`}>
+                        <button type="button" onClick={handleSendMessage} className={`p-3 rounded-md mb-1 ${inputText ? 'bg-yellow-400 text-black' : 'bg-gray-200 text-gray-400'}`}>
                             <LineIcon icon="send" className="w-5 h-5"/>
                         </button>
                         <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={e => { if(e.target.files?.[0]) { const r = new FileReader(); r.onload=ev=>sendMessage(selectedChatId!, "사진", {type:'image', value:'사진', data:{image: ev.target?.result}}); r.readAsDataURL(e.target.files[0]); } }} />

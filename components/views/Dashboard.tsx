@@ -243,9 +243,10 @@ const Wallet: React.FC = () => {
                 {expandedCardData && (
                     <div 
                         className={`
-                            absolute inset-0 z-10 w-full h-full
+                            absolute inset-0 z-50 w-full h-full
                             rounded-[24px] p-6 cursor-pointer select-none border-2 shadow-2xl flex flex-col justify-center items-center text-center
-                            animate-scale-in origin-center bg-white dark:bg-[#1E1E1E] ${expandedCardData.bg}
+                            animate-scale-in origin-center bg-white dark:bg-[#1E1E1E] opacity-100
+                            ${expandedCardData.bg}
                         `}
                         onClick={() => setExpandedCard(null)}
                     >
@@ -360,6 +361,10 @@ export const Dashboard: React.FC = () => {
     const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
     const [mobileTabGroup, setMobileTabGroup] = useState<'finance' | 'assets' | 'gov'>('finance');
     const [showTaxBreakdown, setShowTaxBreakdown] = useState<PendingTax | null>(null);
+    const [currentTaxIndex, setCurrentTaxIndex] = useState(0);
+
+    // Tax Swipe Logic
+    const taxSwipeStart = useRef(0);
 
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
     const isPresident = currentUser?.isPresident;
@@ -370,15 +375,9 @@ export const Dashboard: React.FC = () => {
 
     const pendingTaxes = useMemo(() => {
         let taxes: PendingTax[] = [];
-        const rawTaxes = currentUser?.pendingTaxes;
-        
-        if (rawTaxes) {
-            // FIX: Safely handle both Array and Object (Firebase returns Object for lists with numeric keys sometimes)
-            taxes = Array.isArray(rawTaxes) 
-                ? [...rawTaxes] 
-                : Object.values(rawTaxes);
+        if (currentUser?.pendingTaxes) {
+            taxes = [...currentUser.pendingTaxes];
         }
-        
         if (currentUser?.pendingTax) {
             const exists = taxes.find(t => t.id === currentUser.pendingTax!.id || t.sessionId === currentUser.pendingTax!.sessionId);
             if (!exists) {
@@ -492,24 +491,16 @@ export const Dashboard: React.FC = () => {
         user.balanceKRW -= totalAmount;
         bank.balanceKRW += totalAmount;
         
-        if (user.pendingTaxes) {
-            // Find in raw object or array
-            let taxKey: string | number | undefined;
-            if (Array.isArray(user.pendingTaxes)) {
-                const idx = user.pendingTaxes.findIndex(t => t.id === tax.id);
-                if (idx > -1) taxKey = idx;
-            } else {
-                // Object iteration
-                taxKey = Object.keys(user.pendingTaxes).find(k => user.pendingTaxes![k].id === tax.id);
-            }
-
-            if (taxKey !== undefined) {
-                user.pendingTaxes[taxKey].status = 'paid';
-            }
-        }
-        if (user.pendingTax && user.pendingTax.id === tax.id) {
+        // Update user taxes
+        let updatedTaxes = [...(user.pendingTaxes || [])];
+        const taxIdx = updatedTaxes.findIndex(t => t.id === tax.id);
+        if (taxIdx > -1) {
+            updatedTaxes[taxIdx] = { ...updatedTaxes[taxIdx], status: 'paid' };
+        } else if (user.pendingTax && user.pendingTax.id === tax.id) {
+            // Legacy/Single
             user.pendingTax.status = 'paid';
         }
+        user.pendingTaxes = updatedTaxes;
         
         user.transactions = [...(user.transactions || []), { 
             id: Date.now(), type: 'tax', amount: -totalAmount, currency: 'KRW', description: penalty > 0 ? '세금 및 과태료 납부' : '세금 납부', date: new Date().toISOString() 
@@ -525,7 +516,8 @@ export const Dashboard: React.FC = () => {
         }
 
         await saveDb(newDb);
-        markToastPaid(tax.sessionId);
+        // Do NOT auto dismiss paid taxes from UI, user must close them.
+        markToastPaid(tax.sessionId); 
         notify(currentUser!.name, `세금 ₩${totalAmount.toLocaleString()} 납부가 완료되었습니다.`);
         
         alert(`납부 완료!\n금액: ₩${totalAmount.toLocaleString()}`);
@@ -534,6 +526,10 @@ export const Dashboard: React.FC = () => {
     const handleDismissTax = async (tax: PendingTax) => {
         if(tax.status === 'paid') {
             await clearPaidTax(tax.id);
+            // Adjust current index if needed
+            if (currentTaxIndex >= pendingTaxes.length - 1) {
+                setCurrentTaxIndex(Math.max(0, pendingTaxes.length - 2));
+            }
         }
     };
 
@@ -544,6 +540,23 @@ export const Dashboard: React.FC = () => {
         } else {
             sessionStorage.setItem(`closed_ann_session_${id}`, 'true');
         }
+    };
+
+    // Tax Navigation
+    const nextTax = () => {
+        if (currentTaxIndex < pendingTaxes.length - 1) setCurrentTaxIndex(currentTaxIndex + 1);
+    };
+    const prevTax = () => {
+        if (currentTaxIndex > 0) setCurrentTaxIndex(currentTaxIndex - 1);
+    };
+
+    const handleTaxTouchStart = (e: React.TouchEvent) => {
+        taxSwipeStart.current = e.touches[0].clientX;
+    };
+    const handleTaxTouchEnd = (e: React.TouchEvent) => {
+        const diff = taxSwipeStart.current - e.changedTouches[0].clientX;
+        if (diff > 50) nextTax();
+        if (diff < -50) prevTax();
     };
 
     if (isAdminMode) {
@@ -660,49 +673,80 @@ export const Dashboard: React.FC = () => {
                  </div>
              )}
 
-            {pendingTaxes.map(tax => {
-                const isPaid = tax.status === 'paid';
-                const isOverdue = new Date() > new Date(tax.dueDate);
-                return (
-                    <div key={tax.id} className={`mx-2 mb-4 p-6 rounded-2xl border-2 shadow-md animate-fade-in cursor-pointer relative ${isPaid ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600' : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800'}`} onClick={() => !isPaid && setShowTaxBreakdown(tax)}>
-                        {isPaid && (
-                            <button 
-                                onClick={(e) => { e.stopPropagation(); handleDismissTax(tax); }}
-                                className="absolute top-2 right-2 text-gray-400 hover:text-gray-600 font-bold p-2"
-                            >
-                                ✕
+            {/* Tax Carousel */}
+            {pendingTaxes.length > 0 && (
+                <div className="relative px-2 mb-4 group" onTouchStart={handleTaxTouchStart} onTouchEnd={handleTaxTouchEnd}>
+                    {/* Carousel Controls (PC) */}
+                    {pendingTaxes.length > 1 && (
+                        <>
+                            <button onClick={prevTax} disabled={currentTaxIndex === 0} className="hidden md:flex absolute left-[-10px] top-1/2 -translate-y-1/2 w-8 h-8 bg-white dark:bg-black rounded-full shadow-lg items-center justify-center z-20 disabled:opacity-30 hover:scale-110 transition-transform">
+                                <LineIcon icon="arrow-left" className="w-4 h-4"/>
                             </button>
-                        )}
-                        <div className="flex justify-between items-center">
-                            <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                    <h4 className={`text-xl font-bold ${isPaid ? 'text-gray-500' : 'text-red-700 dark:text-red-300'}`}>
-                                        {isPaid ? '✅ 납부 완료' : '🧾 세금 고지서'}
-                                    </h4>
-                                    {isOverdue && !isPaid && <span className="bg-red-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">미납 (Overdue)</span>}
+                            <button onClick={nextTax} disabled={currentTaxIndex === pendingTaxes.length - 1} className="hidden md:flex absolute right-[-10px] top-1/2 -translate-y-1/2 w-8 h-8 bg-white dark:bg-black rounded-full shadow-lg items-center justify-center z-20 disabled:opacity-30 hover:scale-110 transition-transform">
+                                <LineIcon icon="arrow-right" className="w-4 h-4"/>
+                            </button>
+                        </>
+                    )}
+
+                    {/* Active Tax Card */}
+                    {(() => {
+                        // Safety check
+                        const tax = pendingTaxes[currentTaxIndex] || pendingTaxes[0];
+                        if (!tax) return null;
+                        const isPaid = tax.status === 'paid';
+                        const isOverdue = new Date() > new Date(tax.dueDate);
+
+                        return (
+                            <div className={`p-6 rounded-2xl border-2 shadow-md animate-fade-in cursor-pointer relative transition-all duration-300 ${isPaid ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600' : 'bg-red-50 dark:bg-red-900/30 border-red-200 dark:border-red-800'}`} onClick={() => !isPaid && setShowTaxBreakdown(tax)}>
+                                {isPaid && (
+                                    <button 
+                                        onClick={(e) => { e.stopPropagation(); handleDismissTax(tax); }}
+                                        className="absolute top-2 right-2 text-gray-400 hover:text-gray-600 font-bold p-2"
+                                    >
+                                        ✕
+                                    </button>
+                                )}
+                                
+                                {pendingTaxes.length > 1 && (
+                                    <div className="absolute top-2 left-1/2 -translate-x-1/2 flex gap-1">
+                                        {pendingTaxes.map((_, i) => (
+                                            <div key={i} className={`w-1.5 h-1.5 rounded-full ${i === currentTaxIndex ? 'bg-red-500' : 'bg-red-200 dark:bg-red-900'}`}></div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="flex justify-between items-center">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <h4 className={`text-xl font-bold ${isPaid ? 'text-gray-500' : 'text-red-700 dark:text-red-300'}`}>
+                                                {isPaid ? '✅ 납부 완료' : '🧾 세금 고지서'}
+                                            </h4>
+                                            {isOverdue && !isPaid && <span className="bg-red-600 text-white text-[10px] px-2 py-0.5 rounded font-bold">미납 (Overdue)</span>}
+                                        </div>
+                                        <p className={`text-sm ${isPaid ? 'text-gray-400' : 'text-red-600 dark:text-red-400'}`}>
+                                            {tax.type === 'real_estate' ? '종합부동산세' : (tax.type === 'asset' ? '재산세(자산)' : (tax.type === 'fine' ? '과태료/벌금' : '소득세'))} (클릭하여 상세)
+                                        </p>
+                                        <div className="mt-2">
+                                            <p className={`text-2xl font-bold ${isPaid ? 'text-gray-400 decoration-line-through' : 'text-red-800 dark:text-white'}`}>
+                                                ₩ {(tax.amount + (tax.penalty || 0)).toLocaleString()}
+                                            </p>
+                                            {tax.penalty ? <p className="text-xs text-red-600 font-bold">+ 과태료: ₩{tax.penalty.toLocaleString()}</p> : null}
+                                        </div>
+                                        <p className="text-xs text-red-500 mt-1">기한: {new Date(tax.dueDate).toLocaleString([], {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'})}</p>
+                                    </div>
+                                    <Button 
+                                        onClick={(e) => { e.stopPropagation(); handlePayTax(tax); }} 
+                                        className={`border-none py-3 px-6 shadow-xl ${isPaid ? 'bg-gray-400 cursor-default hover:bg-gray-400' : (isOverdue ? 'bg-gray-500 cursor-not-allowed' : 'bg-red-600 hover:bg-red-500 text-white')}`}
+                                        disabled={isPaid || isOverdue}
+                                    >
+                                        {isPaid ? '완료' : (isOverdue ? '만료' : '납부')}
+                                    </Button>
                                 </div>
-                                <p className={`text-sm ${isPaid ? 'text-gray-400' : 'text-red-600 dark:text-red-400'}`}>
-                                    {tax.type === 'real_estate' ? '종합부동산세' : (tax.type === 'asset' ? '재산세(자산)' : (tax.type === 'fine' ? '과태료/벌금' : '소득세'))} (클릭하여 상세)
-                                </p>
-                                <div className="mt-2">
-                                    <p className={`text-2xl font-bold ${isPaid ? 'text-gray-400 decoration-line-through' : 'text-red-800 dark:text-white'}`}>
-                                        ₩ {(tax.amount + (tax.penalty || 0)).toLocaleString()}
-                                    </p>
-                                    {tax.penalty ? <p className="text-xs text-red-600 font-bold">+ 과태료: ₩{tax.penalty.toLocaleString()}</p> : null}
-                                </div>
-                                <p className="text-xs text-red-500 mt-1">기한: {new Date(tax.dueDate).toLocaleString([], {month:'numeric', day:'numeric', hour:'2-digit', minute:'2-digit'})}</p>
                             </div>
-                            <Button 
-                                onClick={(e) => { e.stopPropagation(); handlePayTax(tax); }} 
-                                className={`border-none py-3 px-6 shadow-xl ${isPaid ? 'bg-gray-400 cursor-default hover:bg-gray-400' : (isOverdue ? 'bg-gray-500 cursor-not-allowed' : 'bg-red-600 hover:bg-red-500 text-white')}`}
-                                disabled={isPaid || isOverdue}
-                            >
-                                {isPaid ? '완료' : (isOverdue ? '만료' : '납부')}
-                            </Button>
-                        </div>
-                    </div>
-                );
-            })}
+                        );
+                    })()}
+                </div>
+            )}
             
             <Wallet />
 
