@@ -376,13 +376,15 @@ export const Dashboard: React.FC = () => {
     const pendingTaxes = useMemo(() => {
         let taxes: PendingTax[] = [];
         if (currentUser?.pendingTaxes) {
-            taxes = [...currentUser.pendingTaxes];
+            const rawTaxes = currentUser.pendingTaxes;
+            // Handle both Array and Object (Firebase sparse array behavior)
+            taxes = Array.isArray(rawTaxes) ? [...rawTaxes] : Object.values(rawTaxes);
         }
         if (currentUser?.pendingTax) {
             const exists = taxes.find(t => t.id === currentUser.pendingTax!.id || t.sessionId === currentUser.pendingTax!.sessionId);
             if (!exists) {
                 // @ts-ignore
-                taxes.push({ ...currentUser.pendingTax, id: currentUser.pendingTax.sessionId }); 
+                taxes.push({ ...currentUser.pendingTax, id: currentUser.pendingTax.sessionId || currentUser.pendingTax.id }); 
             }
         }
         return taxes;
@@ -492,14 +494,11 @@ export const Dashboard: React.FC = () => {
         bank.balanceKRW += totalAmount;
         
         // Update user taxes
-        let updatedTaxes = [...(user.pendingTaxes || [])];
+        let updatedTaxes = [...(pendingTaxes || [])];
         const taxIdx = updatedTaxes.findIndex(t => t.id === tax.id);
         if (taxIdx > -1) {
             updatedTaxes[taxIdx] = { ...updatedTaxes[taxIdx], status: 'paid' };
-        } else if (user.pendingTax && user.pendingTax.id === tax.id) {
-            // Legacy/Single
-            user.pendingTax.status = 'paid';
-        }
+        } 
         user.pendingTaxes = updatedTaxes;
         
         user.transactions = [...(user.transactions || []), { 
