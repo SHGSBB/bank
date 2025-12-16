@@ -1,6 +1,6 @@
 
 import * as firebaseApp from "firebase/app";
-import { getDatabase, ref, get, update, push as rtdbPush, query, limitToLast, off, runTransaction, onValue, orderByChild, startAt, endAt, equalTo, child } from "firebase/database";
+import { getDatabase, ref, get, update, push as rtdbPush, query, limitToLast, off, runTransaction, onValue, orderByChild, startAt, endAt, equalTo, child, set } from "firebase/database";
 import { getAuth } from "firebase/auth";
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
@@ -320,11 +320,6 @@ export const fetchUserListLite = async (category: 'all' | 'citizen' | 'mart' | '
 
 // NEW HELPER: Stub for Message Search
 export const searchMessages = async (userId: string, queryText: string): Promise<any[]> => {
-    // Real implementation would require a server-side search index (like Algolia or a custom Cloud Function)
-    // For this RTDB setup, we can't efficiently search all message text.
-    // We will return empty for now, or implement a very expensive client scan (not recommended).
-    // The ChatSystem already does a client-side filter on loaded chat *previews* (lastMessage).
-    // Deep search is skipped for performance in this demo.
     return [];
 };
 
@@ -347,16 +342,26 @@ export const chatService = {
 
     sendMessage: async (chatId: string, message: ChatMessage, chatMetaUpdate?: Partial<Chat>) => {
         try {
-            await fetch('/api/chat-send', {
+            // 1. Write to DB directly for speed/reliability
+            await set(ref(database, `chatMessages/${chatId}/${message.id}`), message);
+            await update(ref(database, `chatRooms/${chatId}`), {
+                lastMessage: message.text,
+                lastTimestamp: message.timestamp
+            });
+
+            // 2. Call API for Notifications (Fire and Forget)
+            fetch('https://bank-one-mu.vercel.app/api/chat-send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
                     chatId, 
                     message 
                 }),
-            });
+            }).catch(e => console.warn("Notification trigger failed", e));
+
         } catch (error) {
-            console.error("Failed to send message via API:", error);
+            console.error("Failed to send message:", error);
+            throw error;
         }
     },
 

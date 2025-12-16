@@ -32,7 +32,7 @@ export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ c
         <div className="relative w-full">
             <input 
                 type={inputType}
-                className={`w-full p-4 rounded-2xl bg-[#F0F0F0] text-[#121212] dark:bg-[#2D2D2D] dark:text-[#E0E0E0] outline-none border border-transparent dark:border-gray-600 focus:ring-2 focus:ring-green-500 transition-all font-medium select-text ${className}`} 
+                className={`w-full p-4 rounded-2xl bg-[#F0F0F0] text-black dark:bg-[#2D2D2D] dark:text-white outline-none border border-transparent dark:border-gray-600 focus:ring-2 focus:ring-green-500 transition-all font-medium select-text ${className}`} 
                 {...props} 
             />
             {isPassword && (
@@ -115,11 +115,11 @@ export const Card: React.FC<{ children: React.ReactNode; className?: string }> =
 export const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title?: string; children: React.ReactNode; zIndex?: number; parentSelector?: string }> = ({ isOpen, onClose, title, children, zIndex = 3000, parentSelector }) => {
     if (!isOpen) return null;
     
-    // Z-index 3000 ensures it is above Mobile Tabs (40), Chat (100) and practically everything else
-    // Width increased to w-[98%] and max-w-5xl to provide a very wide view.
-    // Backdrop darkened to bg-black/80 to hide underlying content better.
+    // Ensure higher Z-index than floating elements like bottom nav
+    const finalZIndex = zIndex || 3000;
+
     const content = (
-        <div className={`fixed inset-0 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-fade-in`} style={{ zIndex }}>
+        <div className={`fixed inset-0 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-md animate-fade-in`} style={{ zIndex: finalZIndex }}>
             <div className="bg-white dark:bg-[#2C2C2C] rounded-[24px] w-[98%] max-w-5xl max-h-[90vh] overflow-hidden shadow-2xl animate-scale-in border border-transparent dark:border-gray-700 relative flex flex-col">
                 <div className="p-5 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-white dark:bg-[#2C2C2C] shrink-0">
                     <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100 truncate pr-4">{title || ''}</h3>
@@ -129,7 +129,7 @@ export const Modal: React.FC<{ isOpen: boolean; onClose: () => void; title?: str
                         </button>
                     )}
                 </div>
-                <div className="p-6 flex-1 overflow-y-auto">
+                <div className="p-6 flex-1 overflow-y-auto text-black dark:text-gray-200">
                     {children}
                 </div>
             </div>
@@ -166,12 +166,10 @@ export const SwipeableListItem: React.FC<{
         const currentX = e.touches[0].clientX;
         const diff = currentX - startX.current;
         
-        // Resistance effect (rubber banding)
         let newOffset = diff;
         if (!swipeLeftContent && diff < 0) newOffset = diff * 0.2;
         if (!swipeRightContent && diff > 0) newOffset = diff * 0.2;
         
-        // Cap max drag
         if (newOffset > 150) newOffset = 150 + (newOffset - 150) * 0.2;
         if (newOffset < -150) newOffset = -150 + (newOffset + 150) * 0.2;
 
@@ -182,28 +180,24 @@ export const SwipeableListItem: React.FC<{
         isTouch.current = false;
         
         if (swipeRightContent && offsetX > rightThreshold) {
-            setOffsetX(rightThreshold + 20); // Snap open
+            setOffsetX(rightThreshold + 20); 
         } else if (swipeLeftContent && offsetX < -leftThreshold) {
-            setOffsetX(-(leftThreshold + 20)); // Snap open
+            setOffsetX(-(leftThreshold + 20)); 
         } else {
-            setOffsetX(0); // Snap back
+            setOffsetX(0); 
         }
     };
 
-    // Close on click outside or on content click
     const reset = () => {
         setOffsetX(0);
     };
 
     return (
         <div className="relative overflow-hidden mb-0 bg-white dark:bg-[#121212] group border-b border-gray-100 dark:border-gray-800">
-            {/* Background Actions Layer */}
             <div className="absolute inset-0 flex justify-between items-center w-full h-full">
-                {/* Right Swipe Content (Shows on Left side) - Blue/Yellow typically */}
                 <div className="h-full absolute left-0 top-0 flex" style={{ width: Math.max(0, offsetX) }}>
                     {swipeRightContent}
                 </div>
-                {/* Left Swipe Content (Shows on Right side) - Red/Gray typically */}
                 <div className="h-full absolute right-0 top-0 flex justify-end" style={{ width: Math.max(0, -offsetX) }}>
                     {swipeLeftContent}
                 </div>

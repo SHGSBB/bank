@@ -6,7 +6,7 @@ import { Product, ProductVariant } from '../../types';
 import { uploadImage } from '../../services/firebase';
 
 export const MartProductTab: React.FC = () => {
-    const { currentUser, db, saveDb, showModal, showConfirm } = useGame();
+    const { currentUser, updateUser, showModal, showConfirm } = useGame();
     
     const [isEditing, setIsEditing] = useState<string | null>(null);
     const [name, setName] = useState('');
@@ -40,8 +40,6 @@ export const MartProductTab: React.FC = () => {
             }
         }
 
-        const newDb = { ...db };
-        const user = newDb.users[currentUser!.name];
         const prodId = isEditing || `prod_${Date.now()}`;
         
         // Base price is the first variant's price
@@ -61,9 +59,9 @@ export const MartProductTab: React.FC = () => {
             priceDisplayMethod // Store display preference
         };
         
-        user.products = { ...(user.products || {}), [prodId]: product };
+        const newProducts = { ...(currentUser!.products || {}), [prodId]: product };
+        await updateUser(currentUser!.name, { products: newProducts });
 
-        await saveDb(newDb);
         resetForm();
         showModal(isEditing ? '상품이 수정되었습니다.' : '상품이 등록되었습니다.');
     };
@@ -93,10 +91,9 @@ export const MartProductTab: React.FC = () => {
 
     const handleDelete = async (id: string) => {
         if (!(await showConfirm('정말 삭제하시겠습니까?'))) return;
-        const newDb = { ...db };
-        const user = newDb.users[currentUser!.name];
-        if (user.products) delete user.products[id];
-        await saveDb(newDb);
+        const newProducts = { ...(currentUser!.products || {}) };
+        delete newProducts[id];
+        await updateUser(currentUser!.name, { products: newProducts });
     };
 
     const handleAddVariant = () => {
@@ -135,7 +132,7 @@ export const MartProductTab: React.FC = () => {
                     
                     <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
                         <div className="flex justify-between items-center mb-2">
-                            <p className="font-bold text-sm">항목 (옵션/메뉴) 구성</p>
+                            <p className="font-bold text-sm text-black dark:text-white">항목 (옵션/메뉴) 구성</p>
                             <span className="text-xs text-gray-500">* 첫 번째 항목이 대표 가격이 됩니다.</span>
                         </div>
                         

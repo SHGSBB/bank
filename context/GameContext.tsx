@@ -262,7 +262,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const login = async (id: string, pass: string, remember = false, silent = false, userObject?: User) => {
-        if (!silent) await wait('light');
+        if (!silent) setSimulatedLoading(true);
         
         // 1. Shortcut: If user object is provided directly
         if (userObject) {
@@ -272,6 +272,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
              newDb.users[targetUser.name] = targetUser;
              setDb(newDb);
              setCurrentUser(targetUser);
+             
+             // Request Notification Permission on successful login
+             requestNotificationPermission();
+             
+             setSimulatedLoading(false);
              return true;
         }
 
@@ -292,8 +297,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             if (data.success && data.user) {
                 const targetUser = data.user;
-                if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); return false; }
-                if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); return false; }
+                if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); setSimulatedLoading(false); return false; }
+                if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); setSimulatedLoading(false); return false; }
                 
                 if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
                 else sessionStorage.setItem('sh_user_id', targetUser.name);
@@ -307,9 +312,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 setDb(newDb);
                 
                 setCurrentUser({ ...targetUser, ...updates });
+                requestNotificationPermission();
+                
+                setSimulatedLoading(false);
                 return true;
             } else {
                 if (!silent) setAlertMessage("로그인 실패: 아이디 또는 비밀번호를 확인하세요."); 
+                setSimulatedLoading(false);
                 return false; 
             }
         } catch (e) {
@@ -320,8 +329,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const targetUser = await fetchUserByLoginId(id);
                 
                 if (targetUser && targetUser.password === pass) {
-                    if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); return false; }
-                    if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); return false; }
+                    if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); setSimulatedLoading(false); return false; }
+                    if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); setSimulatedLoading(false); return false; }
 
                     if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
                     else sessionStorage.setItem('sh_user_id', targetUser.name);
@@ -335,14 +344,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     setDb(newDb);
                     
                     setCurrentUser({ ...targetUser, ...updates });
+                    requestNotificationPermission();
+                    
+                    setSimulatedLoading(false);
                     return true;
                 } else {
                     if (!silent) setAlertMessage("로그인 실패: 아이디 또는 비밀번호를 확인하세요.");
+                    setSimulatedLoading(false);
                     return false;
                 }
             } catch (fallbackError) {
                 console.error("Login Error:", fallbackError);
                 if (!silent) setAlertMessage("서버 및 데이터베이스 연결 오류");
+                setSimulatedLoading(false);
                 return false;
             }
         }
@@ -864,8 +878,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             {children}
             <div id="element-picker-bridge" data-active={isElementPicking} style={{display:'none'}}></div>
             {simulatedLoading && (
-                <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/20 backdrop-blur-sm">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white"></div>
+                <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                    <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-white"></div>
                 </div>
             )}
         </GameContext.Provider>

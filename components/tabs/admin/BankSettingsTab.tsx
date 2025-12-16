@@ -30,8 +30,8 @@ export const BankSettingsTab: React.FC = () => {
     const defaultSavings = typeof sInt.rate === 'number' ? {
         regular: { rate: 1, periodWeeks: 0 },
         // @ts-ignore
-        term: { rate: sInt.rate, periodWeeks: sInt.periodWeeks },
-        installment: { rate: 5, periodWeeks: 8 }
+        term: { rate: sInt.rate, periodWeeks: sInt.periodWeeks || 52 },
+        installment: { rate: 5, periodWeeks: 52 }
     } : sInt as SavingsConfig;
 
     const [savingsConfig, setSavingsConfig] = useState<SavingsConfig>(defaultSavings);
@@ -146,15 +146,15 @@ export const BankSettingsTab: React.FC = () => {
                     <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg w-full border border-yellow-200">
                         <h4 className="font-bold mb-3 text-sm text-gray-500 uppercase">대출 조건 (Loan)</h4>
                         <div className="flex justify-between items-center mb-2 w-full">
-                            <label className="font-medium">기간/이자</label>
+                            <label className="font-medium">최대 기간/이자</label>
                             <div className="flex items-center gap-2 text-sm">
                                 <Input type="number" value={loanWeeks} onChange={e => setLoanWeeks(e.target.value)} className="text-center w-16" />
-                                <span>주마다</span>
+                                <span>주 /</span>
                                 <Input type="number" value={loanRate} onChange={e => setLoanRate(e.target.value)} className="text-center w-16" />
                                 <span>%</span>
                             </div>
                         </div>
-                        <p className="text-xs text-gray-500 text-center">{loanWeeks}주 동안 {loanRate}% 이자</p>
+                        <p className="text-xs text-gray-500 text-center">최대 {loanWeeks}주 동안 {loanRate}% 이자</p>
                     </div>
                     
                     <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg w-full border border-blue-200">
@@ -168,14 +168,14 @@ export const BankSettingsTab: React.FC = () => {
                             <div className="flex justify-between items-center text-sm">
                                 <label className="w-20 font-bold">정기예금</label>
                                 <Input type="number" value={savingsConfig.term.periodWeeks} onChange={e => updateSavings('term', 'periodWeeks', e.target.value)} className="w-12 text-center py-1" />
-                                <span>주 /</span>
+                                <span>주(최대) /</span>
                                 <Input type="number" value={savingsConfig.term.rate} onChange={e => updateSavings('term', 'rate', e.target.value)} className="w-12 text-center py-1" />
                                 <span>%</span>
                             </div>
                             <div className="flex justify-between items-center text-sm">
                                 <label className="w-20 font-bold">정기적금</label>
                                 <Input type="number" value={savingsConfig.installment.periodWeeks} onChange={e => updateSavings('installment', 'periodWeeks', e.target.value)} className="w-12 text-center py-1" />
-                                <span>주 /</span>
+                                <span>주(최대) /</span>
                                 <Input type="number" value={savingsConfig.installment.rate} onChange={e => updateSavings('installment', 'rate', e.target.value)} className="w-12 text-center py-1" />
                                 <span>%</span>
                             </div>

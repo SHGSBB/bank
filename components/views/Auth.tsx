@@ -4,6 +4,8 @@ import { useGame } from '../../context/GameContext';
 import { Button, Input, Card, NoPasteInput, Modal, formatName, LineIcon } from '../Shared';
 import { saveDb, chatService, fetchUserByLoginId, searchUsersByName, fetchAllUsers } from '../../services/firebase';
 import { User, UserSubType, GovtBranch } from '../../types';
+import { ref, update } from "firebase/database";
+import { database } from '../../services/firebase';
 
 // Predefined Jobs for Auto-Complete
 const PREDEFINED_JOBS = [
@@ -647,6 +649,7 @@ export const AuthView: React.FC = () => {
             birthDate: sBirth,
             customJob: subType === 'mart' ? sName : (isPresident ? '대통령' : (subType === 'government' ? sGovRole : sJob)),
             linkedUser: linkedUser?.id || null, 
+            linkedAccounts: linkedUser?.id ? [linkedUser.id] : [],
             govtBranch: sGovBranches,
             govtRole: sGovRole,
             isPresident: isPresident,
@@ -654,6 +657,24 @@ export const AuthView: React.FC = () => {
             jointOwners: sJointOwners,
             consents: sConsents
         };
+
+        // If linking, update the citizen account too
+        if (linkedUser && linkedUser.id) {
+            // NOTE: We need the citizen's NAME (key) to update them. linkedUser.name holds this.
+            // But verify we have it. fetchUserByLoginId returns User which has name.
+            try {
+                // Fetch fresh user to get current links
+                const citizen = await fetchUserByLoginId(linkedUser.id);
+                if (citizen) {
+                    const currentLinks = citizen.linkedAccounts || [];
+                    if (!currentLinks.includes(sId)) {
+                        await update(ref(database, `users/${citizen.name}`), { linkedAccounts: [...currentLinks, sId] });
+                    }
+                }
+            } catch (e) {
+                console.error("Auto-linking citizen failed:", e);
+            }
+        }
 
         const sanitizedUser = JSON.parse(JSON.stringify(newUser));
         const newDb = JSON.parse(JSON.stringify(db));

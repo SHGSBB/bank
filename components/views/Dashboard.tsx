@@ -263,7 +263,7 @@ const Wallet: React.FC = () => {
             </div>
 
             {/* Asset Modal uses Generic Modal which has high z-index and blur */}
-            <Modal isOpen={isAssetModalOpen} onClose={() => setIsAssetModalOpen(false)} title="자산 포트폴리오 분석">
+            <Modal isOpen={isAssetModalOpen} onClose={() => setIsAssetModalOpen(false)} title="자산 포트폴리오 분석" zIndex={4000}>
                  <div className="space-y-8 p-4">
                      {/* 1. Net Worth & Rank */}
                      <div className="py-6 bg-white dark:bg-[#1E1E1E] border border-gray-200 dark:border-gray-700 rounded-[24px] shadow-lg relative overflow-hidden px-6">
@@ -350,7 +350,7 @@ const Wallet: React.FC = () => {
 
 export const Dashboard: React.FC = () => {
     // ... (rest of the file remains same, just wrapper logic)
-    const { currentUser, db, showPinModal, isAdminMode, setAdminMode, saveDb, notify, showModal, markToastPaid, showConfirm, clearPaidTax, logout, triggerHaptic } = useGame();
+    const { currentUser, db, showPinModal, isAdminMode, setAdminMode, saveDb, notify, showModal, markToastPaid, showConfirm, clearPaidTax, logout, triggerHaptic, requestNotificationPermission } = useGame();
     // ... (Use existing state logic)
     const [activeTab, setActiveTab] = useState<string>('');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
@@ -362,6 +362,7 @@ export const Dashboard: React.FC = () => {
     const [mobileTabGroup, setMobileTabGroup] = useState<'finance' | 'assets' | 'gov'>('finance');
     const [showTaxBreakdown, setShowTaxBreakdown] = useState<PendingTax | null>(null);
     const [currentTaxIndex, setCurrentTaxIndex] = useState(0);
+    const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
     // Tax Swipe Logic
     const taxSwipeStart = useRef(0);
@@ -391,6 +392,16 @@ export const Dashboard: React.FC = () => {
     }, [currentUser?.pendingTaxes, currentUser?.pendingTax]);
 
     useEffect(() => {
+        // PWA Install Prompt Listener
+        const handleInstallPrompt = (e: any) => {
+            e.preventDefault();
+            setDeferredPrompt(e);
+        };
+        window.addEventListener('beforeinstallprompt', handleInstallPrompt);
+
+        // Notification Permission
+        requestNotificationPermission();
+
         const handleResize = () => setIsMobile(window.innerWidth < 768);
         window.addEventListener('resize', handleResize);
         const handlePop = (e: PopStateEvent) => {
@@ -408,6 +419,7 @@ export const Dashboard: React.FC = () => {
         window.addEventListener('open-chat', handleOpenChat);
 
         return () => {
+            window.removeEventListener('beforeinstallprompt', handleInstallPrompt);
             window.removeEventListener('resize', handleResize);
             window.removeEventListener('popstate', handlePop);
             window.removeEventListener('open-chat', handleOpenChat);
@@ -424,6 +436,17 @@ export const Dashboard: React.FC = () => {
         else if (currentUser?.type === 'admin') setActiveTab('재정 관리');
         else setActiveTab('이체');
     }, [currentUser?.name, currentUser?.type, isPresident, isEasyMode]);
+
+    const handleInstallClick = () => {
+        if (deferredPrompt) {
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then((choiceResult: any) => {
+                if (choiceResult.outcome === 'accepted') {
+                    setDeferredPrompt(null);
+                }
+            });
+        }
+    };
 
     const tabs = useMemo(() => {
         if (isEasyMode) return ['이체', '구매', '저금', '대출', '환전'];
@@ -617,6 +640,15 @@ export const Dashboard: React.FC = () => {
             
             {!isChatOpen && (
                 <div className="fixed bottom-20 md:bottom-6 right-6 z-[60] block">
+                    {deferredPrompt && (
+                        <button 
+                            onClick={handleInstallClick} 
+                            className="w-14 h-14 rounded-full bg-black dark:bg-white text-white dark:text-black shadow-xl flex items-center justify-center text-xs font-bold hover:scale-110 transition-transform relative border border-white/20 mb-2"
+                            title="앱 설치"
+                        >
+                            APP
+                        </button>
+                    )}
                     <button 
                         onClick={() => { setIsChatOpen(true); window.history.pushState({modal: 'chat'},'',''); }} 
                         className="w-14 h-14 rounded-full bg-white/80 dark:bg-black/80 backdrop-blur-md text-blue-600 dark:text-blue-400 shadow-xl flex items-center justify-center text-2xl hover:scale-110 transition-transform relative border border-white/20"
