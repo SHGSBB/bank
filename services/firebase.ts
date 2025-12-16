@@ -1,4 +1,3 @@
-
 import * as firebaseApp from "firebase/app";
 import { getDatabase, ref, get, update, push as rtdbPush, query, limitToLast, off, runTransaction, onValue, orderByChild, startAt, endAt, equalTo, child, set } from "firebase/database";
 import { getAuth } from "firebase/auth";
@@ -68,7 +67,8 @@ export const uploadImage = async (path: string, dataUrl: string): Promise<string
  */
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
     try {
-        const res = await fetch('/api/game-action', {
+        // ✅ [수정 완료] 절대 경로(Vercel 주소)로 변경
+        const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
