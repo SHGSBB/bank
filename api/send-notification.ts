@@ -1,7 +1,7 @@
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import * as admin from 'firebase-admin';
-import { db } from './db.js';
+import admin from 'firebase-admin';
+import { db } from './db';
 
 export default async (req: VercelRequest, res: VercelResponse) => {
     // CORS와 POST 요청 처리
