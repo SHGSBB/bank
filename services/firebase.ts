@@ -86,29 +86,23 @@ export const fetchGlobalData = async (): Promise<Partial<DB>> => {
     }
 };
 
-const normalizeUser = (user: User): User => {
-    if (!user) return user;
-    if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) {
-        user.pendingTaxes = Object.values(user.pendingTaxes);
-    }
-    if (user.loans && !Array.isArray(user.loans)) {
-        user.loans = Object.values(user.loans);
-    }
-    // Optimize: Limit transaction history client-side if it wasn't done server-side
-    if (user.transactions && Array.isArray(user.transactions)) {
-        user.transactions = user.transactions.slice(-50); // Keep last 50
-    }
-    if (user.assetHistory) {
-        delete user.assetHistory;
-    }
-    return user;
-};
-
 export const fetchUser = async (userId: string): Promise<User | null> => {
     try {
         const snapshot = await get(ref(database, `users/${userId}`));
         if (!snapshot.exists()) return null;
-        return normalizeUser(snapshot.val());
+        
+        const user = snapshot.val();
+        
+        // Optimize: Limit transaction history client-side if it wasn't done server-side
+        if (user.transactions && Array.isArray(user.transactions)) {
+            user.transactions = user.transactions.slice(-50); // Keep last 50
+        }
+        
+        if (user.assetHistory) {
+            delete user.assetHistory;
+        }
+
+        return user;
     } catch (e) {
         console.error("Fetch user failed", e);
         return null;
@@ -122,7 +116,7 @@ export const fetchUserByLoginId = async (loginId: string): Promise<User | null> 
         const directSnapshot = await get(ref(database, `users/${loginId}`));
         if (directSnapshot.exists()) {
             const user = directSnapshot.val();
-            if (user && (user.id === loginId || !user.id)) return normalizeUser(user);
+            if (user && (user.id === loginId || !user.id)) return user;
         }
 
         try {
@@ -131,7 +125,7 @@ export const fetchUserByLoginId = async (loginId: string): Promise<User | null> 
             if (snapshot.exists()) {
                 const data = snapshot.val();
                 const key = Object.keys(data)[0];
-                return normalizeUser(data[key]);
+                return data[key];
             }
         } catch (queryError: any) {
             const msg = queryError.message || '';
@@ -141,7 +135,7 @@ export const fetchUserByLoginId = async (loginId: string): Promise<User | null> 
                     const allUsers = allSnap.val();
                     for (const key in allUsers) {
                         if (allUsers[key]?.id === loginId) {
-                            return normalizeUser(allUsers[key]);
+                            return allUsers[key];
                         }
                     }
                 }
@@ -161,7 +155,7 @@ export const fetchMartUsers = async (): Promise<User[]> => {
         const snapshot = await get(q);
         
         if (snapshot.exists()) {
-            return Object.values(snapshot.val()).map((u: any) => normalizeUser(u));
+            return Object.values(snapshot.val()) as User[];
         }
         return [];
     } catch (e: any) {
@@ -171,7 +165,7 @@ export const fetchMartUsers = async (): Promise<User[]> => {
                 const allSnap = await get(ref(database, 'users'));
                 if (!allSnap.exists()) return [];
                 const allUsers = Object.values(allSnap.val()) as User[];
-                return allUsers.filter(u => u.type === 'mart').map(u => normalizeUser(u));
+                return allUsers.filter(u => u.type === 'mart');
             } catch (fallbackError) {
                 return [];
             }
@@ -193,7 +187,7 @@ export const searchUsersByName = async (nameQuery: string): Promise<User[]> => {
         const usersObj = snapshot.val();
         const users = Object.values(usersObj) as User[];
         
-        return users.map(u => normalizeUser({
+        return users.map(u => ({
             ...u,
             transactions: [],
             notifications: [],
@@ -207,7 +201,7 @@ export const searchUsersByName = async (nameQuery: string): Promise<User[]> => {
              const all = Object.values(allSnap.val()) as User[];
              return all
                 .filter(u => u.name && u.name.includes(nameQuery))
-                .map(u => normalizeUser({ ...u, transactions: [], notifications: [], assetHistory: [] }));
+                .map(u => ({ ...u, transactions: [], notifications: [], assetHistory: [] }));
         }
         return [];
     }
@@ -215,12 +209,7 @@ export const searchUsersByName = async (nameQuery: string): Promise<User[]> => {
 
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
     const snapshot = await get(ref(database, 'users'));
-    const val = snapshot.val() || {};
-    // Normalize all
-    Object.keys(val).forEach(k => {
-        val[k] = normalizeUser(val[k]);
-    });
-    return val;
+    return snapshot.val() || {};
 };
 
 export const saveDb = async (data: DB) => {
