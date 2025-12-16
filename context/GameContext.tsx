@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { fetchGlobalData, saveDb as firebaseSaveDb, generateId, chatService, assetService, fetchUser, fetchAllUsers, fetchUserByLoginId, database } from "../services/firebase";
 import { update, ref, push as rtdbPush, get, set, onValue, remove, onChildAdded, query, limitToLast } from "firebase/database";
@@ -222,7 +223,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('/api/game-action', {
+            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -276,7 +277,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         try {
             // 2. Try Server API Login
-            const res = await fetch('/api/game-action', {
+            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ 
