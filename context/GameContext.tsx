@@ -7,20 +7,20 @@ import { DB, DEFAULT_DB, User, GameNotification, MintingRequest, SignupSession, 
 interface GameContextType {
     db: DB;
     currentUser: User | null;
-    isAdminMode: boolean; 
+    isAdminMode: boolean;
     setAdminMode: (val: boolean) => void;
     setCurrentUser: (user: User | null) => void;
     login: (id: string, pass: string, remember?: boolean, silent?: boolean, userObject?: User) => Promise<boolean>;
     logout: () => void;
     updateUser: (name: string, data: Partial<User>) => Promise<void>;
-    updateStock: (stockId: string, data: any) => Promise<void>; 
+    updateStock: (stockId: string, data: any) => Promise<void>;
     deleteAccount: (name: string) => Promise<void>;
     isLoading: boolean;
     showPinModal: (message: string, expectedPin?: string, length?: 4 | 6, allowBiometric?: boolean) => Promise<string | null>;
     showConfirm: (message: string) => Promise<boolean>;
     showModal: (message: string) => void;
     notify: (userName: string, message: string, isPersistent?: boolean, action?: any, actionData?: any) => void;
-    
+   
     // Toast System
     toasts: ToastNotification[];
     addToast: (toast: Omit<ToastNotification, 'id' | 'timestamp'>) => void;
@@ -35,7 +35,7 @@ interface GameContextType {
     createSignupSession: (name: string, phone: string) => Promise<string>;
     validateSignupCode: (sessionId: string, code: string) => Promise<boolean>;
     respondToAuctionInvite: (leaderName: string, accept: boolean, notifId: string) => Promise<void>;
-    
+   
     // Design Mode
     stickyNotes: StickyNote[];
     addStickyNote: (note: StickyNote) => void;
@@ -75,7 +75,7 @@ interface GameContextType {
     // UI Sharing
     isElementPicking: boolean;
     setElementPicking: (val: boolean, callback?: (data: any) => void) => void;
-    
+   
     applyBankruptcy: () => Promise<void>;
     clearPaidTax: (taxId?: string) => Promise<void>;
 
@@ -99,7 +99,7 @@ interface GameContextType {
     setConfirmResolver: any;
     alertMessage: string | null;
     setAlertMessage: (msg: string | null) => void;
-    
+   
     refreshData: () => Promise<void>;
     loadAllUsers: () => Promise<void>; // Admin helper
 }
@@ -113,7 +113,6 @@ export const useGame = () => {
     }
     return context;
 };
-
 export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [db, setDb] = useState<DB>(DEFAULT_DB);
     const dbRef = useRef<DB>(DEFAULT_DB);
@@ -121,13 +120,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [currentAssetHistory, setCurrentAssetHistory] = useState<AssetHistoryPoint[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isAdminMode, setAdminMode] = useState(false);
-    
+   
     const [pinResolver, setPinResolver] = useState<any>(null);
     const [confirmResolver, setConfirmResolver] = useState<any>(null);
     const [alertMessage, setAlertMessage] = useState<string | null>(null);
     const [simulatedLoading, setSimulatedLoading] = useState(false);
     const [toasts, setToasts] = useState<ToastNotification[]>([]);
-    
+   
     const [isElementPicking, setIsElementPickingState] = useState(false);
     const elementPickCallback = useRef<((data: any) => void) | null>(null);
 
@@ -150,7 +149,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     read: false,
                     isPersistent: data.isPersistent,
                     date: data.date,
-                    type: data.type || 'info', 
+                    type: data.type || 'info',
                     title: data.title,
                     action: data.action,
                     actionData: data.actionData
@@ -185,7 +184,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Fetch only global settings (NO USERS)
         const data = await fetchGlobalData();
         const val = { ...DEFAULT_DB, ...data };
-        
+       
         // Check for logged in user
         const storedUserId = localStorage.getItem('sh_user_id');
         // Use currentUser.name (Key) if available, NOT currentUser.id (Login ID)
@@ -198,13 +197,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 // Manually place current user into db.users for local access
                 if (!val.users) val.users = {};
                 val.users[me.name] = me;
-                
+               
                 setCurrentUser(me);
             } else {
                 if (storedUserId) logout();
             }
         }
-        
+       
         setDb(val as DB);
         dbRef.current = val as DB;
         setIsLoading(false);
@@ -228,15 +227,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
             });
-            
+           
             if (!res.ok) {
                 if (res.status === 404 || res.status === 405 || res.status === 500 || res.status === 503) {
                     throw new Error("PREVIEW_MODE: Server API not available.");
                 }
                 throw new Error('Server action failed');
             }
-            
-            // Just refresh current user data after action
+           // Just refresh current user data after action
             await refreshData();
             return await res.json();
         } catch (e: any) {
@@ -250,11 +248,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const saveDb = async (data: DB) => {
         const dataClone = JSON.parse(JSON.stringify(data));
-        setDb(dataClone); 
+        setDb(dataClone);
         await firebaseSaveDb(dataClone);
         refreshData();
     };
-    
+   
     const setElementPicking = (val: boolean, callback?: (data: any) => void) => {
         setIsElementPickingState(val);
         if (callback) elementPickCallback.current = callback;
@@ -263,7 +261,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const login = async (id: string, pass: string, remember = false, silent = false, userObject?: User) => {
         if (!silent) setSimulatedLoading(true);
-        
+       
         // 1. Shortcut: If user object is provided directly
         if (userObject) {
              const targetUser = userObject;
@@ -285,9 +283,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    action: 'login', 
-                    payload: { userId: id, password: pass } 
+                body: JSON.stringify({
+                    action: 'login',
+                    payload: { userId: id, password: pass }
                 })
             });
 
@@ -299,8 +297,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 const targetUser = data.user;
                 if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); setSimulatedLoading(false); return false; }
                 if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); setSimulatedLoading(false); return false; }
-                
-                if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
+               
+                if (remember) localStorage.setItem('sh_user_id', targetUser.name);
                 else sessionStorage.setItem('sh_user_id', targetUser.name);
 
                 const updates: Partial<User> = { isOnline: true, lastActive: Date.now() };
@@ -310,29 +308,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 if (!newDb.users) newDb.users = {};
                 newDb.users[targetUser.name] = { ...targetUser, ...updates };
                 setDb(newDb);
-                
+               
                 setCurrentUser({ ...targetUser, ...updates });
                 requestNotificationPermission();
-                
+               
                 setSimulatedLoading(false);
                 return true;
             } else {
-                if (!silent) setAlertMessage("로그인 실패: 아이디 또는 비밀번호를 확인하세요."); 
+                if (!silent) setAlertMessage("로그인 실패: 아이디 또는 비밀번호를 확인하세요.");
                 setSimulatedLoading(false);
-                return false; 
+                return false;
             }
         } catch (e) {
             console.warn("Server login failed, trying client-side fallback...");
-            
+           
             // 3. Fallback: Client-side Login (Safe for this demo environment)
             try {
                 const targetUser = await fetchUserByLoginId(id);
-                
+               
                 if (targetUser && targetUser.password === pass) {
                     if (targetUser.approvalStatus === 'pending') { if (!silent) setAlertMessage("승인 대기"); setSimulatedLoading(false); return false; }
                     if (targetUser.isSuspended) { if (!silent) setAlertMessage("정지된 계정"); setSimulatedLoading(false); return false; }
 
-                    if (remember) localStorage.setItem('sh_user_id', targetUser.name); 
+                    if (remember) localStorage.setItem('sh_user_id', targetUser.name);
                     else sessionStorage.setItem('sh_user_id', targetUser.name);
 
                     const updates: Partial<User> = { isOnline: true, lastActive: Date.now() };
@@ -342,10 +340,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     if (!newDb.users) newDb.users = {};
                     newDb.users[targetUser.name] = { ...targetUser, ...updates };
                     setDb(newDb);
-                    
+                   
                     setCurrentUser({ ...targetUser, ...updates });
                     requestNotificationPermission();
-                    
+                   
                     setSimulatedLoading(false);
                     return true;
                 } else {
@@ -362,32 +360,32 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const logout = () => { 
-        if (currentUser) updateUser(currentUser.name, { isOnline: false }); 
-        setCurrentUser(null); 
+    const logout = () => {
+        if (currentUser) updateUser(currentUser.name, { isOnline: false });
+        setCurrentUser(null);
         setCachedMarts([]);
         setCachedLinkedUsers([]);
-        localStorage.removeItem('sh_user_id'); 
+        localStorage.removeItem('sh_user_id');
         sessionStorage.removeItem('sh_user_id');
-        setAdminMode(false); 
+        setAdminMode(false);
         // Clear sensitive data from memory
         setDb({ ...DEFAULT_DB, settings: db.settings });
     };
 
-    const updateUser = async (name: string, data: Partial<User>) => { 
+    const updateUser = async (name: string, data: Partial<User>) => {
         const sanitizedData = JSON.parse(JSON.stringify(data)); // Remove undefined
-        
+       
         // Optimistic UI update
         const newDb = { ...dbRef.current };
-        if (newDb.users[name]) { 
-            newDb.users[name] = { ...newDb.users[name], ...sanitizedData }; 
+        if (newDb.users[name]) {
+            newDb.users[name] = { ...newDb.users[name], ...sanitizedData };
             setDb(newDb);
-            
+           
             if (currentUser && currentUser.name === name) {
                 setCurrentUser({ ...currentUser, ...sanitizedData });
             }
         }
-        
+       
         // Direct Firebase Update
         try {
             await update(ref(database, `users/${name}`), sanitizedData);
@@ -401,7 +399,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
             const sanitizedData = JSON.parse(JSON.stringify(data));
             await update(ref(database, `stocks/${stockId}`), sanitizedData);
-            
+           
             // Local optimistic
             const newDb = { ...dbRef.current };
             if (newDb.stocks) {
@@ -413,24 +411,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const deleteAccount = async (name: string) => { 
-        await wait('heavy'); 
+    const deleteAccount = async (name: string) => {
+        await wait('heavy');
         await update(ref(database, `users/${name}`), null);
         refreshData();
     };
-    
+   
     const wait = async (t: 'light'|'heavy') => { setSimulatedLoading(true); await new Promise(r => setTimeout(r, t==='light'?400:1200)); setSimulatedLoading(false); };
-    
-    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => 
+   
+    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) =>
         new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
-    
+   
     const showConfirm = (m: string) => new Promise<boolean>(r => setConfirmResolver({ resolve: r, message: m }));
     const showModal = (m: string) => setAlertMessage(m);
-    
+   
     // [1] 알림 보내기 (notify) - 이게 없으면 월급 들어와도 모름
     const notify = async (targetUser: string, message: string, isPersistent = false, action: any = null, actionData: any = null) => {
         if (!targetUser) return;
-        
+       
         // 알림 고유 ID 생성
         const notifId = `n_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
         const newNotif: GameNotification = {
@@ -448,26 +446,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const updates: any = {};
         // 해당 유저의 notifications 경로에 추가
         updates[`users/${targetUser}/notifications/${notifId}`] = newNotif;
-        
+       
         // DB 업데이트 (이 함수는 await을 안 걸어도 됨, 백그라운드 처리)
         update(ref(database), updates).catch(console.error);
     };
-    
+   
     const simulateSMS = (p: string) => { const c = "1234"; showModal(c); return c; };
-    
+   
     // [2] 계정 전환 (switchAccount) - 연동된 계정으로 바로 로그인
     const switchAccount = async (targetId: string): Promise<boolean> => {
         await refreshData(); // 최신 데이터 불러오기
-        
+       
         // Fetch specific user if not in context
         // Ensure array iteration is safe by handling potential null
         const currentUsers = dbRef.current.users || {};
         let targetUser = Object.values(currentUsers).find((u: any) => u.id === targetId) as User | undefined;
-        
+       
         if (!targetUser) {
             targetUser = await fetchUserByLoginId(targetId) || undefined;
         }
-        
+       
         if (!targetUser) {
             showModal("전환할 계정을 찾을 수 없습니다.");
             return false;
@@ -475,7 +473,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // 로그인 처리 (비밀번호 확인 없이 즉시 전환)
         localStorage.setItem('sh_user_id', targetUser.name);
-        
+       
         const newDb = { ...dbRef.current };
         if (!newDb.users) newDb.users = {};
         newDb.users[targetUser.name] = targetUser;
@@ -483,10 +481,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         setCurrentUser(targetUser);
         updateUser(targetUser.name, { isOnline: true, lastActive: Date.now() });
-        
+       
         showModal(`${targetUser.name}님으로 전환되었습니다.`);
         return true;
-    }; 
+    };
 
     // [1] 화폐 발행 요청 (한국은행 -> 관리자)
     const requestMinting = async (amount: number, currency: 'KRW' | 'USD') => {
@@ -510,11 +508,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const approveMinting = async (reqId: string) => {
         if (!db.mintingRequests || !db.mintingRequests[reqId]) return;
         const req = db.mintingRequests[reqId];
-        
+       
         const updates: any = {};
         // 1. 요청 상태 완료로 변경
         updates[`mintingRequests/${reqId}/status`] = 'approved';
-        
+       
         // 2. 한국은행 잔고 증가
         const bankName = '한국은행';
         const currentBankBalance = db.users[bankName]?.balanceKRW || 0;
@@ -534,7 +532,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const applyBankruptcy = async () => {
         if (!currentUser) return;
         if (!await showConfirm("정말 파산 신청을 하시겠습니까? \n신용 등급이 최하로 떨어지며 자산이 압류될 수 있습니다.")) return;
-        
+       
         await updateUser(currentUser.name, { bankruptcyStatus: 'pending' });
         notify('한국은행', `${currentUser.name}님이 파산 신청을 접수했습니다.`, true);
         showModal("파산 신청이 법원에 접수되었습니다.");
@@ -543,23 +541,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // [4] 세금 납부 후 고지서 삭제 (시민)
     const clearPaidTax = async (taxId?: string) => {
         if (!currentUser || !currentUser.pendingTaxes) return;
-        
+       
         // 납부된 세금(taxId)을 제외한 나머지만 남김 (Firebase는 배열 삭제가 까다로워 필터링 후 덮어쓰기)
-        const currentTaxes = Array.isArray(currentUser.pendingTaxes) 
-            ? currentUser.pendingTaxes 
+        const currentTaxes = Array.isArray(currentUser.pendingTaxes)
+            ? currentUser.pendingTaxes
             : Object.values(currentUser.pendingTaxes);
-            
+           
         const remainingTaxes = currentTaxes.filter((t: any) => t.id !== taxId);
-        
+       
         await updateUser(currentUser.name, { pendingTaxes: remainingTaxes as any });
     };
 
-    // [4] 회원가입 세션 생성 (선생님용)
+// [4] 회원가입 세션 생성 (선생님용)
     const createSignupSession = async (name: string, phone: string) => {
         // 6자리 랜덤 코드 생성
         const code = Math.floor(100000 + Math.random() * 900000).toString();
         const sessionId = `session_${code}`;
-        
+       
         const updates: any = {};
         updates[`signupSessions/${sessionId}`] = {
             id: sessionId,
@@ -570,7 +568,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             attempts: 0,
             status: 'active'
         };
-        
+       
         await update(ref(database), updates);
         return code; // 화면에 이 코드를 보여주면 됨
     };
@@ -579,7 +577,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const validateSignupCode = async (sessionId: string, code: string) => {
         const snapshot = await get(ref(database, 'signupSessions'));
         if (!snapshot.exists()) return false;
-        
+       
         const sessions = snapshot.val() as Record<string, any>; // Cast to avoid unknown error
         // 코드와 일치하고 활성화된 세션이 있는지 확인
         const isValid = Object.values(sessions).some((s: any) => s.code === code && s.status === 'active');
@@ -590,7 +588,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const respondToAuctionInvite = async (leaderName: string, accept: boolean, notifId: string) => {
         const user = currentUser as User;
         if (!user) return;
-        
+       
         // 1. 알림 지우기
         const notifs = user.notifications ? (Array.isArray(user.notifications) ? user.notifications : Object.values(user.notifications)) : [];
         const remainingNotifs = notifs.filter((n: any) => n.id !== notifId);
@@ -613,7 +611,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         const entry = entries.find(([_, m]: [string, any]) => m && m.name === user.name);
                         if(entry) myIndex = entry[0] as any;
                     }
-                    
+                   
                     if (myIndex !== -1) {
                         const updates: any = {};
                         updates[`auction/teams/${leaderName}/${myIndex}/status`] = 'accepted';
@@ -646,11 +644,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
          updates['settings/stickyNotes'] = newNotes;
          await update(ref(database), updates);
     };
-    
-    const createChat = async (p: string[], t: any = 'private', n?: string, isTeamChat: boolean = false) => { 
+   
+    const createChat = async (p: string[], t: any = 'private', n?: string, isTeamChat: boolean = false) => {
         const sender = currentUser?.name;
         if (!sender) throw new Error("User not identified");
-        
+       
         // Ensure unique participants
         const participants = Array.from(new Set([...p, sender])).sort();
 
@@ -662,16 +660,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // 2. Create new if not found
         // Corrected to pass arguments instead of object
-        return await chatService.createChat(participants, t, n, isTeamChat); 
+        return await chatService.createChat(participants, t, n, isTeamChat);
     };
 
-    const sendMessage = async (cid: string, t: string, att?: ChatAttachment, rep?: string, senderId?: string) => { 
+    const sendMessage = async (cid: string, t: string, att?: ChatAttachment, rep?: string, senderId?: string) => {
         const sender = senderId || currentUser?.name;
         if (!sender) throw new Error("User not identified for sending message");
-        await chatService.sendMessage(cid, {id: `msg_${Date.now()}`, sender: sender, text: t, timestamp: Date.now(), attachment: att, replyTo: rep}); 
+        await chatService.sendMessage(cid, {id: `msg_${Date.now()}`, sender: sender, text: t, timestamp: Date.now(), attachment: att, replyTo: rep});
     };
     const editMessage = async (cid: string, mid: string, t: string) => { await chatService.updateMessage(cid, mid, {text: t, isEdited: true}); };
-    
+   
     // [3] 채팅 이모지 반응 (addReaction)
     const addReaction = async (chatId: string, msgId: string, reaction: ChatReaction) => {
         // 현재 메시지의 반응 목록 가져오기
@@ -681,7 +679,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // 이미 내가 누른 반응인지 확인 (토글 기능)
         const existingIdx = reactions.findIndex(r => r.user === reaction.user && r.emoji === reaction.emoji);
-        
+       
         if (existingIdx !== -1) {
             // 이미 있으면 삭제 (취소)
             reactions.splice(existingIdx, 1);
@@ -689,14 +687,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // 없으면 추가
             reactions.push(reaction);
         }
-        
+       
         const updates: any = {};
         updates[`chatMessages/${chatId}/${msgId}/reactions`] = reactions;
         await update(ref(database), updates);
     };
 
     const deleteMessage = async (cid: string, mid: string) => { await chatService.deleteMessage(cid, mid); };
-    
+   
     // New Chat Functions
     const markChatRead = async (chatId: string) => {
         if (!currentUser) return;
@@ -707,7 +705,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!currentUser) return;
         await chatService.markManualUnread(chatId, currentUser.name);
     };
-    
+   
     const toggleChatPin = async (chatId: string, isPinned: boolean) => {
         if (!currentUser) return;
         await chatService.togglePinChat(chatId, currentUser.name, isPinned);
@@ -717,7 +715,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!currentUser) return;
         await chatService.updatePinnedOrder(chatId, currentUser.name, newOrder);
     };
-    
+   
     const deleteChat = async (chatId: string) => {
         if (!currentUser) return;
         await chatService.hideChat(chatId, currentUser.name);
@@ -732,7 +730,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!currentUser) return;
         await chatService.leaveChat(chatId, currentUser.name);
     }
-    
+   
     const muteChat = async (chatId: string, isMuted: boolean) => {
         if (!currentUser) return;
         await chatService.muteChat(chatId, currentUser.name, isMuted);
@@ -769,7 +767,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    // [5] 정책 변경 제안 (공무원/정부)
+   // [5] 정책 변경 제안 (공무원/정부)
     const requestPolicyChange = async (type: 'tax_rate'|'interest_rate'|'standard', data: any, description: string) => {
         const reqId = `pol_${Date.now()}`;
         const request: PolicyRequest = {
@@ -785,7 +783,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             requestedAt: new Date().toISOString(),
             votes: { [currentUser?.name || 'admin']: 'agree' } // 제안자는 자동 찬성
         };
-        
+       
         const updates: any = {};
         updates[`policyRequests/${reqId}`] = request;
         await update(ref(database), updates);
@@ -828,18 +826,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const requestNotificationPermission = async () => {
         if (!("Notification" in window)) return;
         if (Notification.permission === "granted") return;
-        
+       
         try {
             await Notification.requestPermission();
         } catch (e) {
             console.log("알림 권한 요청 실패");
         }
     };
-    
+   
     const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.name)); };
     const addToast = (t: any) => setToasts(p => [...p, { ...t, id: Date.now().toString(), timestamp: Date.now() }]);
     const removeToast = (id: string) => setToasts(p => p.filter(t => t.id !== id));
-    
+   
     // [9] 토스트 알림(화면 하단 팝업) 처리
     const markToastPaid = (id: string) => {
         // 토스트 목록에서 제거
@@ -858,8 +856,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     useEffect(() => { refreshData(); }, []);
 
     return (
-        <GameContext.Provider value={{ 
-            db, currentUser, isAdminMode, setAdminMode, setCurrentUser, login, logout, updateUser, updateStock, deleteAccount, isLoading, 
+        <GameContext.Provider value={{
+            db, currentUser, isAdminMode, setAdminMode, setCurrentUser, login, logout, updateUser, updateStock, deleteAccount, isLoading,
             showPinModal, showConfirm, showModal, notify, saveDb, simulateSMS, switchAccount,
             requestMinting, approveMinting, createSignupSession, validateSignupCode, respondToAuctionInvite,
             stickyNotes: db.settings.stickyNotes || [], addStickyNote, removeStickyNote,
@@ -885,3 +883,4 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </GameContext.Provider>
     );
 };
+
