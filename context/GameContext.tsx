@@ -222,7 +222,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
+            // Use relative path to avoid CORS issues
+            const res = await fetch('/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -279,8 +280,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
 
         try {
-            // 2. Try Server API Login
-            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
+            // 2. Try Server API Login with relative path
+            const res = await fetch('/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -883,4 +884,3 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         </GameContext.Provider>
     );
 };
-

@@ -257,8 +257,15 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({ isOpen, onClose, onAttac
 
     const handleSendMessage = async () => {
         if (selectedChatId && inputText.trim()) {
-            await sendMessage(selectedChatId, inputText);
-            setInputText('');
+            // Keep text in temp var before clearing to avoid race condition with state
+            const textToSend = inputText;
+            setInputText(''); // Clear immediately
+            
+            // Reset height
+            const textarea = document.querySelector('textarea');
+            if(textarea) textarea.style.height = 'auto';
+
+            await sendMessage(selectedChatId, textToSend);
         }
     };
 
@@ -450,6 +457,9 @@ export const ChatSystem: React.FC<ChatSystemProps> = ({ isOpen, onClose, onAttac
                         'bg-white dark:bg-gray-800 dark:text-white border border-transparent rounded-tl-none'
                     }`}>
                         <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                        {msg.attachment?.type === 'image' && msg.attachment.data?.image && (
+                            <img src={msg.attachment.data.image} alt="첨부 이미지" className="mt-2 rounded-lg max-w-full max-h-60 object-contain" />
+                        )}
                         <div className={`text-[10px] opacity-50 text-right mt-1`}>
                             {new Date(msg.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}
                         </div>

@@ -176,16 +176,12 @@ export const StandardTableTab: React.FC = () => {
                 <div className="border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
                     <div className="bg-gray-100 dark:bg-gray-800 p-4 font-bold text-lg flex justify-between items-center">
                         <span>주급 및 임금 기준</span>
-                        <div className="flex items-center gap-2">
-                            <span className="text-xs font-normal">역량별 주급</span>
-                            {(isAdminOrPresident) ? (
+                        {isAdminOrPresident && (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-normal">역량별 주급</span>
                                 <Toggle checked={stds.competencyWageEnabled || false} onChange={v => setStds(prev => ({...prev, competencyWageEnabled: v}))} />
-                            ) : (
-                                <span className={`text-xs font-bold px-2 py-1 rounded ${stds.competencyWageEnabled ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
-                                    {stds.competencyWageEnabled ? "ON" : "OFF"}
-                                </span>
-                            )}
-                        </div>
+                            </div>
+                        )}
                     </div>
                     <div className="p-4 space-y-4">
                         {!stds.competencyWageEnabled ? (

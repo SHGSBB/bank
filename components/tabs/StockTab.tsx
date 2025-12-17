@@ -31,7 +31,8 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
             case '1Y': startTime = Date.now() - 365 * 24 * 60 * 60 * 1000; break;
         }
         const filtered = data.filter(d => new Date(d.date).getTime() >= startTime);
-        return filtered.length > 1 ? filtered : data.slice(-20); 
+        // If 1D has no data (e.g. before market open), show the last known point or empty
+        return filtered.length > 0 ? filtered : (period === '1D' ? data.slice(-1) : []); 
     }, [data, period]);
 
     if (!chartData || chartData.length === 0) return <div className="h-64 flex items-center justify-center text-gray-500">데이터 없음</div>;

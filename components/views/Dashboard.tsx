@@ -245,7 +245,8 @@ const Wallet: React.FC = () => {
                         className={`
                             absolute inset-0 z-50 w-full h-full
                             rounded-[24px] p-6 cursor-pointer select-none border-2 shadow-2xl flex flex-col justify-center items-center text-center
-                            animate-scale-in origin-center bg-white dark:bg-[#1E1E1E] opacity-100
+                            animate-scale-in origin-center opacity-100
+                            bg-white dark:bg-[#1E1E1E]
                             ${expandedCardData.bg}
                         `}
                         onClick={() => setExpandedCard(null)}
@@ -388,7 +389,7 @@ export const Dashboard: React.FC = () => {
                 taxes.push({ ...currentUser.pendingTax, id: currentUser.pendingTax.sessionId || currentUser.pendingTax.id }); 
             }
         }
-        return taxes;
+        return taxes.sort((a,b) => (a.status === 'paid' ? 1 : -1)); // Sort paid to end, but actually better to just filter them out if needed
     }, [currentUser?.pendingTaxes, currentUser?.pendingTax]);
 
     useEffect(() => {
@@ -538,17 +539,17 @@ export const Dashboard: React.FC = () => {
         }
 
         await saveDb(newDb);
-        // Do NOT auto dismiss paid taxes from UI, user must close them.
-        markToastPaid(tax.sessionId); 
+        // Mark as paid in toast logic, but it stays in dashboard as 'paid'
+        // User can manually dismiss it from dashboard via X
         notify(currentUser!.name, `세금 ₩${totalAmount.toLocaleString()} 납부가 완료되었습니다.`);
-        
-        alert(`납부 완료!\n금액: ₩${totalAmount.toLocaleString()}`);
     };
 
     const handleDismissTax = async (tax: PendingTax) => {
-        if(tax.status === 'paid') {
+        // If it's unpaid, confirm dismissal (hiding without paying) - usually not allowed or just hides from UI
+        // If paid, just clear it.
+        if (tax.status === 'paid') {
             await clearPaidTax(tax.id);
-            // Adjust current index if needed
+            // Auto advance
             if (currentTaxIndex >= pendingTaxes.length - 1) {
                 setCurrentTaxIndex(Math.max(0, pendingTaxes.length - 2));
             }

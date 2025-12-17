@@ -455,11 +455,11 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
             if (resolver.expectedPin && pin !== resolver.expectedPin) {
                 // Wrong PIN logic
                 setIsError(true);
-                if (navigator.vibrate) navigator.vibrate(200);
+                if (navigator.vibrate) navigator.vibrate([100, 50, 100]); // Stronger vibration
                 setTimeout(() => {
                     setPin('');
                     setIsError(false);
-                }, 400); // Wait for shake
+                }, 500); // Wait for shake
             } else {
                 // Correct PIN or no expected pin (setting new one)
                 resolver.resolve(pin);
@@ -478,21 +478,22 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
             } else if (e.key === 'Backspace') {
                 setPin(prev => prev.slice(0, -1));
             } else if (e.key === 'Escape') {
-                resolver.resolve(null); 
-                setResolver(null);
+                // Do not close on Escape if error to enforce action, but generally Escape cancels
+                if(!isError) {
+                    resolver.resolve(null); 
+                    setResolver(null);
+                }
             }
         };
 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [pin, resolver, setResolver]);
+    }, [pin, resolver, setResolver, isError]);
 
     // Biometric Logic Hook
     useEffect(() => {
         if (resolver.allowBiometric) {
             const tryBio = async () => {
-                // In a real scenario, you'd pass the user ID from context, but here we assume the current user
-                // If resolver has userId attached or from context. For now, simplistic check.
                 const success = await loginBiometrics('temp'); 
                 if (success && resolver.expectedPin) {
                     resolver.resolve(resolver.expectedPin); // Auto-fill correct PIN on success
@@ -500,7 +501,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                 }
             };
             // Automatically prompt for bio if available
-            // tryBio(); // Disabled for now to prevent loop without user interaction
+            tryBio(); 
         }
     }, []);
 
@@ -519,8 +520,8 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     // Z-Index 4000 to overlay standard Modals (z-3000)
     return (
         <div className="fixed inset-0 z-[4000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
-            <div className={`bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake' : ''}`}>
-                <button onClick={() => { resolver.resolve(null); setResolver(null); }} className="absolute top-4 right-4 text-gray-400 p-2">✕</button>
+            <div className={`bg-white dark:bg-[#1E1E1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative transition-transform ${isError ? 'animate-shake border-red-500' : ''}`}>
+                <button onClick={() => { resolver.resolve(null); setResolver(null); }} className="absolute top-4 right-4 text-gray-400 p-2 hover:text-black dark:hover:text-white">✕</button>
                 
                 <h3 className="text-xl font-bold text-center mb-2 text-black dark:text-white">간편 비밀번호 입력</h3>
                 <p className={`text-sm text-center mb-8 ${isError ? 'text-red-500 font-bold' : 'text-gray-500'}`}>

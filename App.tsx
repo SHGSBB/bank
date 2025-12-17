@@ -1,7 +1,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { GameProvider, useGame } from './context/GameContext';
-import { AuthView } from './components/views/Auth';
+import { AuthView } from './components/tabs/Auth';
 import { Dashboard } from './components/views/Dashboard';
 import { PinModal, ToastContainer } from './components/Shared';
 
