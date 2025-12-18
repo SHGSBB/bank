@@ -50,20 +50,21 @@ export const uploadImage = async (path: string, dataUrl: string): Promise<string
 };
 
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
-    // Attempt API fetch but fall back immediately if it fails or returns error
     try {
+        // Use relative path to avoid CORS issues in preview/test environments
         const res = await fetch('/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
-        }).catch(() => null); // Catch network errors early
+        }).catch(() => null);
 
         if (res && res.ok) {
-            return await res.json();
+            const text = await res.text();
+            if (text.startsWith('<')) throw new Error("API Returned HTML instead of JSON");
+            return JSON.parse(text);
         }
         
-        // If not ok or res is null (network error), go to direct firebase
-        console.warn("API unavailable, falling back to direct Firebase fetch.");
+        console.warn("API unavailable or returned error, falling back to direct Firebase fetch.");
         const snapshot = await get(ref(database));
         return snapshot.exists() ? snapshot.val() : {};
     } catch (e) {

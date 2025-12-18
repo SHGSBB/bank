@@ -78,10 +78,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const refreshData = async () => {
         try {
-            // Set initial state from default to ensure something renders if fetch is slow
             const data = await fetchGlobalData();
             const val = { ...DEFAULT_DB, ...data };
-            
             const storedUserId = localStorage.getItem('sh_user_id') || sessionStorage.getItem('sh_user_id');
             if (storedUserId) {
                 const me = await fetchUser(storedUserId).catch(() => null);
@@ -90,16 +88,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     val.users[me.name] = me;
                     setCurrentUser(me);
                 } else {
-                    // Don't logout immediately on transient network failure
                     console.warn("Could not fetch current user details.");
                 }
             }
             setDb(val as DB);
             dbRef.current = val as DB;
         } catch(e) {
-            console.error("Refresh Data failed:", e);
+            console.error("Refresh Data failed", e);
         } finally {
-            // Critical: Always stop loading even if everything failed
             setIsLoading(false);
         }
     };
@@ -107,6 +103,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
+            // Use relative path for same-origin requests to prevent CORS 'Failed to fetch' errors
             const res = await fetch('/api/game-action', {
                 method: 'POST',
                 headers: { 
@@ -128,7 +125,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             
             const result = await res.json();
-            // Critical: Refresh data after any action to prevent PIN or balance sync issues
             await refreshData();
             return result;
         } catch (e: any) {
@@ -197,7 +193,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const switchAccount = async (targetName: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
-            // Find user by their DB Key (name) directly
             const targetUser = await fetchUser(targetName);
             if (!targetUser) {
                 setAlertMessage("사용자를 찾을 수 없습니다.");
@@ -218,7 +213,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const sanitizedData = JSON.parse(JSON.stringify(data, (k, v) => v === undefined ? null : v));
         try {
             await update(ref(database, `users/${name}`), sanitizedData);
-            await refreshData(); // PIN 등 중요한 정보 업데이트 시 즉시 동기화
+            await refreshData();
         } catch(e) { console.error("Update User Error", e); }
     };
 
@@ -287,7 +282,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         u.loans = {};
         u.pendingTaxes = [];
         
-        // Remove real estate
         if (newDb.realEstate?.grid) {
             newDb.realEstate.grid.forEach(cell => {
                 if (cell.owner === currentUser.name) cell.owner = null;
@@ -295,7 +289,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             });
         }
         
-        // Remove savings
         if (newDb.termDeposits) {
             Object.keys(newDb.termDeposits).forEach(k => {
                 if (newDb.termDeposits![k].owner === currentUser.name) {
@@ -326,7 +319,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (pol.type === 'standard') {
             newDb.settings.standards = pol.data;
         }
-        // apply other types...
         
         await update(ref(database, `policyRequests/${id}/status`), 'approved');
         await saveDb(newDb);

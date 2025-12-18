@@ -15,7 +15,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
     if (!db) return res.status(503).json({ error: 'DATABASE_UNAVAILABLE' });
 
-    const { action, payload } = req.body;
+    const { action, payload } = req.body || {};
+
+    if (!action) {
+        return res.status(400).json({ error: "MISSING_ACTION" });
+    }
 
     try {
         // --- 1. Initial Data Fetch ---
@@ -26,7 +30,9 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         // --- 2. Auth Actions ---
         if (action === 'login') {
-            const { userId, password } = payload;
+            const { userId, password } = payload || {};
+            if (!userId) return res.status(400).json({ error: "MISSING_USER_ID" });
+
             let user = null; let userKey = '';
             
             const directSnap = await db.ref(`users/${userId}`).once('value');
@@ -51,7 +57,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         // --- 3. Account Linking Actions ---
         if (action === 'fetch_linked_accounts') {
-            const { linkedIds } = payload;
+            const { linkedIds } = payload || {};
             if (!linkedIds || !Array.isArray(linkedIds)) return res.status(200).json({ accounts: [] });
 
             const accounts = [];
@@ -73,7 +79,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'link_account') {
-            const { myName, targetId, targetPw } = payload;
+            const { myName, targetId, targetPw } = payload || {};
             let targetUser = null; let targetKey = '';
             const querySnap = await db.ref('users').orderByChild('id').equalTo(targetId).limitToFirst(1).once('value');
             if (!querySnap.exists()) return res.status(400).json({ error: "TARGET_NOT_FOUND" });
@@ -95,7 +101,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'unlink_account') {
-            const { myName, targetName } = payload;
+            const { myName, targetName } = payload || {};
             const myLinkedSnap = await db.ref(`users/${myName}/linkedAccounts`).once('value');
             const targetLinkedSnap = await db.ref(`users/${targetName}/linkedAccounts`).once('value');
             const myLinked = (myLinkedSnap.val() || []).filter((id: string) => id !== targetName);
@@ -107,9 +113,9 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // --- 4. Financial Actions (Transfer, Exchange, etc) ---
+        // --- 4. Financial Actions ---
         if (action === 'transfer') {
-            const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload;
+            const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload || {};
             const date = new Date().toISOString();
             const updates: any = {};
             
@@ -142,7 +148,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'exchange') {
-            const { userId, fromCurrency, toCurrency, amount } = payload;
+            const { userId, fromCurrency, toCurrency, amount } = payload || {};
             const snap = await db.ref(`users/${userId}`).once('value');
             const user = snap.val();
             const rateSnap = await db.ref('settings/exchangeRate/KRW_USD').once('value');
@@ -170,7 +176,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'purchase') {
-            const { buyerId, items } = payload;
+            const { buyerId, items } = payload || {};
             const buyerSnap = await db.ref(`users/${buyerId}`).once('value');
             const buyer = buyerSnap.val();
             if (!buyer) return res.status(400).json({ error: "USER_NOT_FOUND" });
@@ -187,7 +193,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 const cost = item.price * item.quantity;
                 totalCost += cost;
 
-                // Credit Seller
                 updates[`users/${item.sellerName}/balanceKRW`] = (seller.balanceKRW || 0) + cost;
                 const sTx = { id: `sell_${Date.now()}_${item.id}`, type: 'income', amount: cost, currency: 'KRW', description: `판매: ${item.name} x${item.quantity}`, date };
                 updates[`users/${item.sellerName}/transactions`] = (seller.transactions || []).concat(sTx).slice(-50);
@@ -204,7 +209,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'pay_rent') {
-            const { userId, ownerId, amount, propertyId } = payload;
+            const { userId, ownerId, amount, propertyId } = payload || {};
             const updates: any = {};
             const userSnap = await db.ref(`users/${userId}`).once('value');
             const ownerSnap = await db.ref(`users/${ownerId}`).once('value');
@@ -232,7 +237,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
         // --- 5. Admin & Policy Actions ---
         if (action === 'weekly_pay') {
-            const { amount, userIds } = payload;
+            const { amount, userIds } = payload || {};
             const bankId = '한국은행';
             const date = new Date().toISOString();
             const bankSnap = await db.ref(`users/${bankId}`).once('value');
@@ -258,7 +263,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'collect_tax') {
-            const { taxSessionId, taxes, dueDate } = payload;
+            const { taxSessionId, taxes, dueDate } = payload || {};
             const updates: any = {};
             for (const t of taxes) {
                 const uSnap = await db.ref(`users/${t.userId}`).once('value');
@@ -275,7 +280,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'distribute_welfare') {
-            const { targetUser, amount } = payload;
+            const { targetUser, amount } = payload || {};
             const bankId = '한국은행';
             const bankSnap = await db.ref(`users/${bankId}`).once('value');
             const uSnap = await db.ref(`users/${targetUser}`).once('value');
@@ -292,7 +297,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
         }
 
         if (action === 'mint_currency') {
-            const { amount, currency } = payload;
+            const { amount, currency } = payload || {};
             const bankId = '한국은행';
             const bankSnap = await db.ref(`users/${bankId}`).once('value');
             const bank = bankSnap.val();

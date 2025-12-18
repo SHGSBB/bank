@@ -6,31 +6,34 @@ import { Card, Button, Input, Toggle } from '../../Shared';
 export const BankSettingsTab: React.FC = () => {
     const { db, saveDb, showModal } = useGame();
     
-    // Core Settings
-    const [rateUSD, setRateUSD] = useState(db.settings.exchangeRate.KRW_USD.toString());
-    const [isFrozen, setIsFrozen] = useState(db.settings.isFrozen || false);
-    const [signupRestricted, setSignupRestricted] = useState(db.settings.signupRestricted || false);
-    const [requireApproval, setRequireApproval] = useState(db.settings.requireSignupApproval !== false);
-    const [bypassPin, setBypassPin] = useState(db.settings.bypassPin || false);
-    const [taxSeparation, setTaxSeparation] = useState(db.settings.taxSeparation || false);
-    const [transferLimit, setTransferLimit] = useState(db.settings.transferLimit?.toString() || '1000000');
+    // Core Settings with safety checks
+    const [rateUSD, setRateUSD] = useState(db.settings?.exchangeRate?.KRW_USD?.toString() || '1350');
+    const [isFrozen, setIsFrozen] = useState(db.settings?.isFrozen || false);
+    const [signupRestricted, setSignupRestricted] = useState(db.settings?.signupRestricted || false);
+    const [requireApproval, setRequireApproval] = useState(db.settings?.requireSignupApproval !== false);
+    const [bypassPin, setBypassPin] = useState(db.settings?.bypassPin || false);
+    const [taxSeparation, setTaxSeparation] = useState(db.settings?.taxSeparation || false);
+    const [transferLimit, setTransferLimit] = useState(db.settings?.transferLimit?.toString() || '1000000');
 
     // Minting Control
-    const [krwMintDisabled, setKrwMintDisabled] = useState(db.settings.mintingRestriction?.krwDisabled || false);
-    const [usdMintDisabled, setUsdMintDisabled] = useState(db.settings.mintingRestriction?.usdDisabled || false);
+    const [krwMintDisabled, setKrwMintDisabled] = useState(db.settings?.mintingRestriction?.krwDisabled || false);
+    const [usdMintDisabled, setUsdMintDisabled] = useState(db.settings?.mintingRestriction?.usdDisabled || false);
 
-    // Interest Rates
-    const [loanRate, setLoanRate] = useState(db.settings.loanInterestRate.rate.toString());
-    const [loanWeeks, setLoanWeeks] = useState(db.settings.loanInterestRate.periodWeeks.toString());
+    // Interest Rates with safety checks
+    const [loanRate, setLoanRate] = useState(db.settings?.loanInterestRate?.rate?.toString() || '5');
+    const [loanWeeks, setLoanWeeks] = useState(db.settings?.loanInterestRate?.periodWeeks?.toString() || '4');
     
-    const [savRegRate, setSavRegRate] = useState(db.settings.savingsInterest.regular.rate.toString());
-    const [savTermRate, setSavTermRate] = useState(db.settings.savingsInterest.term.rate.toString());
-    const [savTermWeeks, setSavTermWeeks] = useState(db.settings.savingsInterest.term.periodWeeks.toString());
-    const [savInstRate, setSavInstRate] = useState(db.settings.savingsInterest.installment.rate.toString());
-    const [savInstWeeks, setSavInstWeeks] = useState(db.settings.savingsInterest.installment.periodWeeks.toString());
+    const [savRegRate, setSavRegRate] = useState(db.settings?.savingsInterest?.regular?.rate?.toString() || '1');
+    const [savTermRate, setSavTermRate] = useState(db.settings?.savingsInterest?.term?.rate?.toString() || '3');
+    const [savTermWeeks, setSavTermWeeks] = useState(db.settings?.savingsInterest?.term?.periodWeeks?.toString() || '4');
+    const [savInstRate, setSavInstRate] = useState(db.settings?.savingsInterest?.installment?.rate?.toString() || '5');
+    const [savInstWeeks, setSavInstWeeks] = useState(db.settings?.savingsInterest?.installment?.periodWeeks?.toString() || '8');
 
     const handleSave = async () => {
         const newDb = { ...db };
+        
+        if (!newDb.settings) newDb.settings = {} as any;
+        if (!newDb.settings.exchangeRate) newDb.settings.exchangeRate = { KRW_USD: 1350 };
         
         newDb.settings.exchangeRate.KRW_USD = parseFloat(rateUSD) || 1350;
         newDb.settings.isFrozen = isFrozen;
