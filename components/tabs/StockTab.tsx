@@ -193,9 +193,37 @@ export const StockTab: React.FC = () => {
     const myRate = myAvg > 0 ? ((currentPrice - myAvg) / myAvg) * 100 : 0;
 
     const marketSettings = db.settings.stockMarket || { isOpen: true, sungSpiBasePoint: 1000 };
+    
+    // Real SungSPI Logic: Calculate Market Cap Weight average price
     const sungSpi = useMemo(() => {
+        if (stocks.length === 0) return 1000;
         const totalCap = stocks.reduce((sum, s) => sum + (s.currentPrice * s.totalShares), 0);
         return (totalCap / (marketSettings.sungSpiBasePoint || 1000));
+    }, [stocks, marketSettings]);
+
+    // SungSPI History: Aggregate all stock histories
+    const spiHistory = useMemo(() => {
+        if (stocks.length === 0) return [];
+        // Flatten and sort all history points by date
+        const allPoints: StockHistory[] = [];
+        // Just take the history of the first stock as timeline reference, and re-calculate average for those points
+        // NOTE: This is a simplification. Ideally, we snapshot the index daily.
+        // For simulation, we create a synthetic history based on the first stock's dates.
+        const refStock = stocks[0];
+        if(!refStock.history) return [];
+
+        return refStock.history.map((h, i) => {
+            let totalCapAtTime = 0;
+            stocks.forEach(s => {
+                // Find closest history point
+                const pt = s.history[i] || s.history[s.history.length - 1];
+                if(pt) totalCapAtTime += (pt.price * s.totalShares);
+            });
+            return {
+                date: h.date,
+                price: (totalCapAtTime / (marketSettings.sungSpiBasePoint || 1000))
+            };
+        });
     }, [stocks, marketSettings]);
 
     const handleOrder = async () => {
@@ -367,12 +395,12 @@ export const StockTab: React.FC = () => {
                     <p className="text-4xl font-bold text-yellow-500 mb-6">{sungSpi.toFixed(2)}</p>
                     <div className="bg-gray-900 rounded-xl p-4 overflow-hidden">
                         <StockChart 
-                            data={stocks[0]?.history.map((h, i) => ({ date: h.date, price: h.price * (Math.random() * 0.5 + 0.8) })) || []} 
+                            data={spiHistory} 
                             color="#eab308" 
                             period="1D" 
                         />
                     </div>
-                    <p className="text-center text-gray-500 mt-4">종합주가지수는 시장 전체의 흐름을 나타냅니다.</p>
+                    <p className="text-center text-gray-500 mt-4">종합주가지수는 시장 전체(시가총액)의 흐름을 나타냅니다.</p>
                 </Card>
             ) : stock ? (
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

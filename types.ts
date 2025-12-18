@@ -1,4 +1,17 @@
 
+export interface AppInfoField {
+    label: string;
+    value: string;
+}
+
+export interface AppInfo {
+    version: string;
+    developer: string;
+    program: string;
+    support: string;
+    lastUpdate: string;
+    customFields?: AppInfoField[];
+}
 
 export interface ChatReaction {
     user: string;
@@ -32,25 +45,19 @@ export interface Chat {
     participants: string[]; 
     type?: 'private' | 'group' | 'feedback'; 
     groupName?: string;
-    localGroupNames?: Record<string, string>; // { userId: "My Custom Name" }
-    groupProfilePic?: string; // Global profile for team chats
-    
-    // Team Chat Features
+    localGroupNames?: Record<string, string>;
+    groupProfilePic?: string;
     isTeamChat?: boolean;
-    ownerId?: string; // Bang-jang
-    adminIds?: string[]; // Bu-bang-jang
-
+    ownerId?: string;
+    adminIds?: string[];
     lastMessage?: string;
     lastTimestamp?: number;
     feedbackStatus?: 'open' | 'closed'; 
     deletedBy?: Record<string, number>; 
     mutedBy?: string[]; 
-    
-    // Feature fields
     pinnedBy?: Record<string, number>; 
     manualUnread?: Record<string, boolean>; 
     readStatus?: Record<string, number>; 
-
     messages?: Record<string, ChatMessage>;
     unreadCount?: Record<string, number>; 
 }
@@ -123,7 +130,7 @@ export interface Product {
     isOnEvent?: boolean;
     eventDiscountPercent?: number;
     variants?: ProductVariant[];
-    priceDisplayMethod?: 'min' | 'avg'; // Controlled by seller
+    priceDisplayMethod?: 'min' | 'avg';
 }
 
 export type UserSubType = 'personal' | 'business' | 'govt' | 'teacher';
@@ -144,8 +151,6 @@ export interface User {
     customJob?: string;
     statusMessage?: string;
     phoneNumber?: string;
-    
-    // Auth & Status
     isOnline?: boolean;
     lastActive?: number;
     lastSessionId?: string;
@@ -154,48 +159,31 @@ export interface User {
     failedLoginAttempts?: number;
     lockoutUntil?: number;
     bankruptcyStatus?: 'pending' | 'approved' | 'rejected';
-    
-    // Relations
     linkedAccounts?: string[];
     linkedUser?: string;
     jointOwners?: string[];
-    
-    // Government
     govtBranch?: GovtBranch[];
     govtRole?: string;
     isPresident?: boolean;
     isHeadOfDept?: boolean;
-    
-    // Business
     isCorporation?: boolean;
     products?: Record<string, Product>;
-    
-    // Personal Info
     gender?: 'male' | 'female';
     birthDate?: string;
     idCard?: IDCard;
-    
-    // Settings & Data
     preferences?: UserPreferences;
     transactions?: Transaction[];
     notifications?: ToastNotification[] | Record<string, ToastNotification>;
     pendingTaxes?: PendingTax[];
     pendingTax?: PendingTax;
     pendingRent?: RentRequest;
-    
-    // Assets
     assetHistory?: AssetHistoryPoint[];
     stockHoldings?: Record<string, StockHolding>;
     realizedStockProfit?: number;
     loans?: Loan[] | Record<string, Loan>;
-    
-    // Chat
     blockedUsers?: string[];
     unreadMessageCount?: number;
-    
-    // GDPR/Consents
     consents?: Record<string, boolean>;
-    
     countryId?: string;
     fcmToken?: string;
 }
@@ -213,8 +201,6 @@ export interface ToastNotification {
     isPaid?: boolean;
     timestamp: number;
 }
-
-export type GameNotification = ToastNotification;
 
 export interface AssetHistoryPoint {
     date: string;
@@ -268,13 +254,11 @@ export interface Ad {
 export interface PolicyRequest {
     id: string;
     type: 'tax_rate' | 'interest_rate' | 'standard';
-    requester: string; // or proposer
-    data: any; // or targetValue
+    requester: string;
+    data: any;
     description: string;
     status: 'pending' | 'approved' | 'rejected';
-    requestedAt: string; // ISO String
-    
-    // New fields for compatibility
+    requestedAt: string;
     targetValue?: any;
     proposer?: string;
     timestamp?: number;
@@ -287,8 +271,6 @@ export interface MintingRequest {
     currency: 'KRW' | 'USD';
     requester: string;
     status: 'pending' | 'approved' | 'rejected';
-    
-    // New fields
     timestamp?: number;
     requestedBy?: string;
 }
@@ -316,7 +298,7 @@ export interface RentRequest {
     propertyId: number;
     owner: string;
     amount: number;
-    cartId?: string; // unused
+    cartId?: string;
 }
 
 export interface Announcement {
@@ -357,12 +339,11 @@ export interface ProgressiveRule {
 }
 
 export interface CompetencyWages {
-    prosecutor: number; // per indictment
-    legislator: number; // per legislation
-    speaker: number; // per legislation
-    judge: number; // per trial
-    chiefJustice: number; // per trial
-    // Add generic text fields if needed for expansion
+    prosecutor: number;
+    legislator: number;
+    speaker: number;
+    judge: number;
+    chiefJustice: number;
     [key: string]: number;
 }
 
@@ -376,17 +357,12 @@ export interface WelfareStandards {
 export interface Standards {
     taxRateProperty: number;
     taxRateIncome: number;
-    taxRateAcquisition?: number; // New
+    taxRateAcquisition?: number;
     weeklyWage: number;
     cleanerWage: number;
-    
-    // Competency Based
     competencyWageEnabled?: boolean;
     competencyWages?: CompetencyWages;
-
-    // Welfare
     welfare?: WelfareStandards;
-
     progressivePropertyRules?: ProgressiveRule[];
     progressiveIncomeRules?: ProgressiveRule[];
 }
@@ -465,7 +441,6 @@ export interface SavingsConfig {
     regular: SavingsRate;
     term: SavingsRate;
     installment: SavingsRate;
-    // Backwards compatibility optional
     rate?: number;
     periodWeeks?: number;
 }
@@ -490,7 +465,7 @@ export interface DB {
         automation?: { enabled: boolean, lastRunDate?: string };
         isFrozen?: boolean;
         signupRestricted?: boolean;
-        requireSignupApproval?: boolean; // New setting
+        requireSignupApproval?: boolean;
         bypassPin?: boolean;
         taxSeparation?: boolean;
         loadingDelays?: { light: number, heavy: number };
@@ -514,6 +489,8 @@ export interface DB {
         standards?: Standards;
         welfareTiers?: { threshold: number, amount: number }[];
         stickyNotes?: StickyNote[];
+        appInfo?: AppInfo;
+        mintingRestriction?: { krwDisabled: boolean, usdDisabled: boolean };
     };
     realEstate: {
         grid: RealEstateCell[];
@@ -534,8 +511,6 @@ export interface DB {
     signupSessions?: Record<string, SignupSession>;
     stocks?: Record<string, Stock>;
     judgements?: Record<string, Judgement>;
-    
-    // Chat
     chatRooms?: Record<string, Chat>;
     chatMessages?: Record<string, Record<string, ChatMessage>>;
     chats?: Record<string, Chat>;
@@ -551,6 +526,13 @@ export const DEFAULT_DB: DB = {
             term: { periodWeeks: 4, rate: 3 },
             installment: { periodWeeks: 8, rate: 5 }
         },
+        appInfo: {
+            version: '1.0.0',
+            developer: '성화은행 개발팀',
+            program: 'Digital Banking System',
+            support: 'support@bank.sh',
+            lastUpdate: new Date().toISOString()
+        }
     },
     realEstate: { grid: [] }
 };

@@ -3,7 +3,6 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
 import { db } from './db.js';
 
-// Helper for CORS
 const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -12,505 +11,303 @@ const setCors = (res: VercelResponse) => {
 
 export default async (req: VercelRequest, res: VercelResponse) => {
     setCors(res);
-
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
-    }
-    if (req.method !== 'POST') {
-        return res.status(405).send('Method Not Allowed');
-    }
-
-    if (!db) {
-        console.error("Database not initialized (Missing Env Key)");
-        return res.status(503).json({ error: 'Server misconfiguration: Database not available.' });
-    }
+    if (req.method === 'OPTIONS') return res.status(200).end();
+    if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
+    if (!db) return res.status(503).json({ error: 'DATABASE_UNAVAILABLE' });
 
     const { action, payload } = req.body;
 
     try {
-        // [Security 1] Fetch Initial Data (Sanitized)
+        // --- 1. Initial Data Fetch ---
         if (action === 'fetch_initial_data') {
-            const snapshot = await db.ref().once('value');
-            const fullData = snapshot.val() || {};
-
-            if (fullData.users) {
-                Object.keys(fullData.users).forEach(key => {
-                    const u = fullData.users[key];
-                    if (u) {
-                        u.password = ""; // Remove password
-                        u.pin = "";      // Remove PIN
-                    }
-                });
-            }
-            return res.status(200).json(fullData);
+            const snapshot = await db.ref('/').once('value');
+            return res.status(200).json(snapshot.val() || {});
         }
 
-        // [Security 2] Register or Update Password (Encrypted)
-        if (action === 'register_or_update_pw') {
-            const { userId, password, pin } = payload;
-            const updates: any = {};
-            
-            if (password) {
-                const hash = await bcrypt.hash(password, 10);
-                updates[`users/${userId}/password`] = hash;
-            }
-            if (pin) {
-                // PIN is stored as-is for now, or could be hashed if desired
-                updates[`users/${userId}/pin`] = pin; 
-            }
-            
-            if (Object.keys(updates).length > 0) {
-                await db.ref().update(updates);
-            }
-            return res.status(200).json({ success: true });
-        }
-
-        // [Security 3] Server-side Login Verification
+        // --- 2. Auth Actions ---
         if (action === 'login') {
             const { userId, password } = payload;
+            let user = null; let userKey = '';
             
-            let user = null;
-            let userKey = '';
-
-            // Try direct fetch first (assuming userId is the key/name)
-            const snapshot = await db.ref(`users/${userId}`).once('value');
-            if (snapshot.exists()) {
-                user = snapshot.val();
-                userKey = userId;
-            } else {
-                // Try searching by 'id' field
+            const directSnap = await db.ref(`users/${userId}`).once('value');
+            if (directSnap.exists()) { user = directSnap.val(); userKey = userId; }
+            else {
                 const querySnap = await db.ref('users').orderByChild('id').equalTo(userId).limitToFirst(1).once('value');
-                if (querySnap.exists()) {
-                    const data = querySnap.val();
-                    userKey = Object.keys(data)[0];
-                    user = data[userKey];
-                }
+                if (querySnap.exists()) { userKey = Object.keys(querySnap.val())[0]; user = querySnap.val()[userKey]; }
             }
+            
+            if (!user) return res.status(400).json({ error: "USER_NOT_FOUND" });
 
-            if (!user) return res.status(400).json({ error: "User not found" });
-
-            // 2. Compare Password
             let match = false;
-            
             if (user.password) {
-                const isHash = user.password.startsWith('$2'); 
-                
-                if (isHash) {
-                    match = await bcrypt.compare(password, user.password);
-                } else {
-                    // Fallback for legacy plain text passwords
-                    match = (user.password === password);
-                }
+                match = user.password.startsWith('$2') ? await bcrypt.compare(password, user.password) : (user.password === password);
             }
-
-            if (!match) {
-                return res.status(401).json({ error: "Wrong password" });
-            }
-
-            // 3. Return sanitized user
-            user.password = "";
-            user.pin = "";
-            user.name = userKey; 
             
-            return res.status(200).json({ success: true, user });
+            if (!match) return res.status(401).json({ error: "INVALID_PASSWORD" });
+            
+            const sanitized = { ...user, name: userKey, password: "" };
+            return res.status(200).json({ success: true, user: sanitized });
         }
 
-        // --- EXISTING GAME LOGIC ---
+        // --- 3. Account Linking Actions ---
+        if (action === 'fetch_linked_accounts') {
+            const { linkedIds } = payload;
+            if (!linkedIds || !Array.isArray(linkedIds)) return res.status(200).json({ accounts: [] });
 
-        // --- 1. Basic Transfer ---
+            const accounts = [];
+            for (const uid of linkedIds) {
+                const snap = await db.ref(`users/${uid}`).once('value');
+                if (snap.exists()) {
+                    const u = snap.val();
+                    accounts.push({
+                        name: uid,
+                        id: u.id,
+                        profilePic: u.profilePic,
+                        type: u.type,
+                        customJob: u.customJob,
+                        nickname: u.nickname
+                    });
+                }
+            }
+            return res.status(200).json({ accounts });
+        }
+
+        if (action === 'link_account') {
+            const { myName, targetId, targetPw } = payload;
+            let targetUser = null; let targetKey = '';
+            const querySnap = await db.ref('users').orderByChild('id').equalTo(targetId).limitToFirst(1).once('value');
+            if (!querySnap.exists()) return res.status(400).json({ error: "TARGET_NOT_FOUND" });
+            targetKey = Object.keys(querySnap.val())[0];
+            targetUser = querySnap.val()[targetKey];
+            if (targetKey === myName) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
+            const match = targetUser.password.startsWith('$2') ? await bcrypt.compare(targetPw, targetUser.password) : (targetUser.password === targetPw);
+            if (!match) return res.status(401).json({ error: "TARGET_PASSWORD_MISMATCH" });
+            const mySnap = await db.ref(`users/${myName}`).once('value');
+            const myUser = mySnap.val();
+            const myLinked = myUser.linkedAccounts || [];
+            const targetLinked = targetUser.linkedAccounts || [];
+            if (myLinked.includes(targetKey)) return res.status(400).json({ error: "ALREADY_LINKED" });
+            const updates: any = {};
+            updates[`users/${myName}/linkedAccounts`] = Array.from(new Set([...myLinked, targetKey]));
+            updates[`users/${targetKey}/linkedAccounts`] = Array.from(new Set([...targetLinked, myName]));
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
+        }
+
+        if (action === 'unlink_account') {
+            const { myName, targetName } = payload;
+            const myLinkedSnap = await db.ref(`users/${myName}/linkedAccounts`).once('value');
+            const targetLinkedSnap = await db.ref(`users/${targetName}/linkedAccounts`).once('value');
+            const myLinked = (myLinkedSnap.val() || []).filter((id: string) => id !== targetName);
+            const targetLinked = (targetLinkedSnap.val() || []).filter((id: string) => id !== myName);
+            const updates: any = {};
+            updates[`users/${myName}/linkedAccounts`] = myLinked;
+            updates[`users/${targetName}/linkedAccounts`] = targetLinked;
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
+        }
+
+        // --- 4. Financial Actions (Transfer, Exchange, etc) ---
         if (action === 'transfer') {
             const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload;
-            await db.ref('users').transaction((users) => {
-                if (!users || !users[senderId] || !users[receiverId]) return users;
-                const sender = users[senderId];
-                const receiver = users[receiverId];
-                if (sender.balanceKRW < amount) return; // Abort
-
-                sender.balanceKRW -= amount;
-                receiver.balanceKRW += amount;
-
-                const date = new Date().toISOString();
-                const now = Date.now();
-                if (!sender.transactions) sender.transactions = [];
-                sender.transactions.push({ id: now, type: 'expense', amount: -amount, currency: 'KRW', description: senderMemo, date });
-                if (!receiver.transactions) receiver.transactions = [];
-                receiver.transactions.push({ id: now + 1, type: 'income', amount: amount, currency: 'KRW', description: receiverMemo, date });
-                return users;
-            });
-            return res.status(200).json({ success: true });
-        }
-
-        // --- 2. Purchase (Mart) with Cashback ---
-        if (action === 'purchase') {
-            const { buyerId, items } = payload; // items: { sellerName, name, quantity, price, id }[]
+            const date = new Date().toISOString();
+            const updates: any = {};
             
-            await db.ref().transaction((data) => {
-                if (!data || !data.users || !data.users[buyerId]) return data;
-                const buyer = data.users[buyerId];
-                const bank = data.users['한국은행'];
-                const vatRate = data.settings?.vat?.rate || 0;
-                const vatTargets = data.settings?.vat?.targetMarts || [];
-                const cashback = data.settings?.cashback || { enabled: false, rate: 0 };
+            const senderSnap = await db.ref(`users/${senderId}`).once('value');
+            const receiverSnap = await db.ref(`users/${receiverId}`).once('value');
+            const sender = senderSnap.val();
+            const receiver = receiverSnap.val();
 
-                let totalCost = 0;
-                let cashbackTotal = 0;
+            if (!sender || !receiver) return res.status(400).json({ error: "USER_NOT_FOUND" });
+            if (sender.balanceKRW < amount) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
 
-                items.forEach((item: any) => {
-                    const isVatTarget = vatTargets.includes('all') || vatTargets.includes(item.sellerName);
-                    const basePrice = item.price * item.quantity;
-                    const vat = isVatTarget ? Math.floor(basePrice * (vatRate / 100)) : 0;
-                    totalCost += (basePrice + vat);
-                    
-                    if (cashback.enabled && cashback.rate > 0) {
-                        cashbackTotal += Math.floor((basePrice + vat) * (cashback.rate / 100));
-                    }
-                });
+            const txId = `tx_${Date.now()}`;
+            updates[`users/${senderId}/balanceKRW`] = (sender.balanceKRW || 0) - amount;
+            updates[`users/${receiverId}/balanceKRW`] = (receiver.balanceKRW || 0) + amount;
 
-                if (buyer.balanceKRW < totalCost) return; 
+            const sTx = { id: txId + '_s', type: 'transfer', amount: -amount, currency: 'KRW', description: senderMemo || `이체 (${receiverId})`, date };
+            const rTx = { id: txId + '_r', type: 'transfer', amount: amount, currency: 'KRW', description: receiverMemo || `수신 (${senderId})`, date };
+            
+            const sTxs = (sender.transactions || []).concat(sTx).slice(-50);
+            const rTxs = (receiver.transactions || []).concat(rTx).slice(-50);
+            
+            updates[`users/${senderId}/transactions`] = sTxs;
+            updates[`users/${receiverId}/transactions`] = rTxs;
 
-                const date = new Date().toISOString();
-                let txId = Date.now();
+            const notif = { id: `n_${txId}`, message: `₩${amount.toLocaleString()} 입금 완료 (${senderId})`, read: false, date, timestamp: Date.now() };
+            updates[`users/${receiverId}/notifications/${notif.id}`] = notif;
 
-                items.forEach((item: any) => {
-                    const seller = data.users[item.sellerName];
-                    if (!seller) return;
-
-                    const isVatTarget = vatTargets.includes('all') || vatTargets.includes(item.sellerName);
-                    const basePrice = item.price * item.quantity;
-                    const vat = isVatTarget ? Math.floor(basePrice * (vatRate / 100)) : 0;
-                    const total = basePrice + vat;
-
-                    buyer.balanceKRW -= total;
-                    seller.balanceKRW += basePrice;
-                    
-                    if (vat > 0 && bank) {
-                        bank.balanceKRW += vat;
-                        if (!bank.transactions) bank.transactions = [];
-                        bank.transactions.push({ id: txId++, type: 'tax', amount: vat, currency: 'KRW', description: `VAT (${seller.name})`, date });
-                    }
-
-                    if (!buyer.transactions) buyer.transactions = [];
-                    buyer.transactions.push({ id: txId++, type: 'expense', amount: -total, currency: 'KRW', description: `구매: ${item.name} (${item.quantity}개)`, date });
-
-                    if (!seller.transactions) seller.transactions = [];
-                    seller.transactions.push({ id: txId++, type: 'income', amount: basePrice, currency: 'KRW', description: `판매: ${item.name} (${item.quantity}개)`, date });
-                    
-                    if (seller.products && seller.products[item.id]) {
-                        if (seller.products[item.id].stock > 0) {
-                            seller.products[item.id].stock = Math.max(0, seller.products[item.id].stock - item.quantity);
-                        }
-                    }
-                });
-
-                if (cashbackTotal > 0 && bank && bank.balanceKRW >= cashbackTotal) {
-                    buyer.balanceKRW += cashbackTotal;
-                    bank.balanceKRW -= cashbackTotal;
-                    
-                    buyer.transactions.push({ id: txId++, type: 'cashback', amount: cashbackTotal, currency: 'KRW', description: `캐시백 환급 (${cashback.rate}%)`, date });
-                    bank.transactions.push({ id: txId++, type: 'expense', amount: -cashbackTotal, currency: 'KRW', description: `캐시백 지급 (${buyer.name})`, date });
-                }
-
-                return data;
-            });
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
-        // --- 3. Exchange ---
         if (action === 'exchange') {
             const { userId, fromCurrency, toCurrency, amount } = payload;
-            
-            await db.ref().transaction((data) => {
-                if (!data || !data.users || !data.users[userId]) return data;
-                const user = data.users[userId];
-                const bank = data.users['한국은행'];
-                const rates = data.settings.exchangeRate;
-                const config = data.settings.exchangeConfig;
+            const snap = await db.ref(`users/${userId}`).once('value');
+            const user = snap.val();
+            const rateSnap = await db.ref('settings/exchangeRate/KRW_USD').once('value');
+            const rate = rateSnap.val() || 1350;
 
-                let rate = 0;
-                if (fromCurrency === 'KRW' && toCurrency === 'USD') rate = 1 / rates.KRW_USD;
-                else if (fromCurrency === 'USD' && toCurrency === 'KRW') rate = rates.KRW_USD;
-                
-                if (rate === 0) return; 
+            if (!user) return res.status(400).json({ error: "USER_NOT_FOUND" });
+            const fromKey = fromCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
+            const toKey = toCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
 
-                const finalToAmount = amount * rate;
-                const fromKey = fromCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-                const toKey = toCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
+            if (user[fromKey] < amount) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
 
-                if (user[fromKey] < amount) return; 
+            let outAmount = 0;
+            if (fromCurrency === 'KRW' && toCurrency === 'USD') outAmount = amount / rate;
+            else if (fromCurrency === 'USD' && toCurrency === 'KRW') outAmount = amount * rate;
 
-                if (bank[toKey] < finalToAmount) {
-                    if (config?.autoMintLimit && (finalToAmount - bank[toKey]) < config.autoMintLimit) {
-                        bank[toKey] += (finalToAmount - bank[toKey]) * 1.5; 
-                    } else {
-                        return; 
-                    }
-                }
+            const updates: any = {};
+            updates[`users/${userId}/${fromKey}`] = user[fromKey] - amount;
+            updates[`users/${userId}/${toKey}`] = (user[toKey] || 0) + outAmount;
 
-                user[fromKey] -= amount;
-                user[toKey] += finalToAmount;
-                bank[fromKey] += amount;
-                bank[toKey] -= finalToAmount;
+            const tx = { id: `ex_${Date.now()}`, type: 'exchange', amount: -amount, currency: fromCurrency, description: `${fromCurrency} -> ${toCurrency} 환전`, date: new Date().toISOString() };
+            updates[`users/${userId}/transactions`] = (user.transactions || []).concat(tx).slice(-50);
 
-                const date = new Date().toISOString();
-                const txId = Date.now();
-                if (!user.transactions) user.transactions = [];
-                user.transactions.push(
-                    { id: txId, type: 'exchange', amount: -amount, currency: fromCurrency, description: `환전 (${fromCurrency}->${toCurrency})`, date },
-                    { id: txId+1, type: 'exchange', amount: finalToAmount, currency: toCurrency, description: `환전 (${fromCurrency}->${toCurrency})`, date }
-                );
-
-                return data;
-            });
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
-        // --- 4. Savings ---
-        if (action === 'apply_savings') {
-            const { application } = payload; 
-            await db.ref(`pendingApplications/${application.id}`).set(application);
-            return res.status(200).json({ success: true });
-        }
+        if (action === 'purchase') {
+            const { buyerId, items } = payload;
+            const buyerSnap = await db.ref(`users/${buyerId}`).once('value');
+            const buyer = buyerSnap.val();
+            if (!buyer) return res.status(400).json({ error: "USER_NOT_FOUND" });
 
-        if (action === 'withdraw_savings') {
-            const { userId, depositId } = payload;
-            await db.ref().transaction((data) => {
-                if (!data.users[userId] || !data.termDeposits[depositId]) return data;
-                const deposit = data.termDeposits[depositId];
-                if (deposit.owner !== userId || deposit.status !== 'active') return;
+            const updates: any = {};
+            let totalCost = 0;
+            const date = new Date().toISOString();
 
-                deposit.status = 'withdrawn';
-                data.users[userId].balanceKRW += deposit.amount;
-                
-                const date = new Date().toISOString();
-                if (!data.users[userId].transactions) data.users[userId].transactions = [];
-                data.users[userId].transactions.push({
-                    id: Date.now(), type: 'savings', amount: deposit.amount, currency: 'KRW', description: '예금 중도해지 (원금 반환)', date
-                });
-                
-                return data;
-            });
-            return res.status(200).json({ success: true });
-        }
+            for (const item of items) {
+                const sellerSnap = await db.ref(`users/${item.sellerName}`).once('value');
+                const seller = sellerSnap.val();
+                if (!seller) continue;
 
-        // --- 5. Loan ---
-        if (action === 'apply_loan') {
-            const { application } = payload;
-            await db.ref(`pendingApplications/${application.id}`).set(application);
-            return res.status(200).json({ success: true });
-        }
+                const cost = item.price * item.quantity;
+                totalCost += cost;
 
-        if (action === 'repay_loan') {
-            const { userId, loanId } = payload;
-            await db.ref().transaction((data) => {
-                const user = data.users?.[userId];
-                if (!user || !user.loans) return data;
-                
-                const loanKey = Object.keys(user.loans).find(k => user.loans[k].id === loanId);
-                const loan = loanKey ? user.loans[loanKey] : null;
+                // Credit Seller
+                updates[`users/${item.sellerName}/balanceKRW`] = (seller.balanceKRW || 0) + cost;
+                const sTx = { id: `sell_${Date.now()}_${item.id}`, type: 'income', amount: cost, currency: 'KRW', description: `판매: ${item.name} x${item.quantity}`, date };
+                updates[`users/${item.sellerName}/transactions`] = (seller.transactions || []).concat(sTx).slice(-50);
+            }
 
-                if (!loan || loan.status !== 'approved') return;
+            if (buyer.balanceKRW < totalCost) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
 
-                const repayAmount = Math.floor(loan.amount * (1 + loan.interestRate.rate / 100));
-                if (user.balanceKRW < repayAmount) return; 
+            updates[`users/${buyerId}/balanceKRW`] = buyer.balanceKRW - totalCost;
+            const bTx = { id: `buy_${Date.now()}`, type: 'expense', amount: -totalCost, currency: 'KRW', description: `물품 구매 (${items.length}종)`, date };
+            updates[`users/${buyerId}/transactions`] = (buyer.transactions || []).concat(bTx).slice(-50);
 
-                user.balanceKRW -= repayAmount;
-                loan.status = 'repaid';
-                
-                if (data.users['한국은행']) {
-                    data.users['한국은행'].balanceKRW += repayAmount;
-                }
-
-                const date = new Date().toISOString();
-                if (!user.transactions) user.transactions = [];
-                user.transactions.push({
-                    id: Date.now(), type: 'loan', amount: -repayAmount, currency: 'KRW', description: '대출 상환', date
-                });
-
-                return data;
-            });
-            return res.status(200).json({ success: true });
-        }
-
-        // --- 6. Real Estate ---
-        if (action === 'accept_offer') {
-            const { offerId } = payload;
-            await db.ref().transaction((data) => {
-                const offer = data.realEstate?.offers?.[offerId];
-                if (!offer || offer.status !== 'pending') return data;
-
-                const buyer = data.users[offer.from];
-                const seller = data.users[offer.to];
-                const prop = data.realEstate.grid.find((p: any) => p.id === offer.propertyId);
-
-                if (!buyer || !seller || !prop) return;
-                if (buyer.balanceKRW < offer.price) {
-                    offer.status = 'rejected'; 
-                    return data; 
-                }
-
-                buyer.balanceKRW -= offer.price;
-                seller.balanceKRW += offer.price;
-                
-                prop.owner = buyer.name;
-                prop.tenant = null;
-                prop.isJointOwnership = false;
-                
-                const date = new Date().toISOString();
-                const now = Date.now();
-                if(!buyer.transactions) buyer.transactions = [];
-                buyer.transactions.push({id: now, type: 'expense', amount: -offer.price, currency: 'KRW', description: `부동산 #${prop.id} 구매`, date});
-                
-                if(!seller.transactions) seller.transactions = [];
-                seller.transactions.push({id: now+1, type: 'income', amount: offer.price, currency: 'KRW', description: `부동산 #${prop.id} 판매`, date});
-
-                offer.status = 'accepted';
-                
-                if(!data.realEstate.recentTransactions) data.realEstate.recentTransactions = [];
-                data.realEstate.recentTransactions.unshift({ id: prop.id, seller: seller.name, buyer: buyer.name, price: offer.price, date });
-
-                return data;
-            });
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
         if (action === 'pay_rent') {
             const { userId, ownerId, amount, propertyId } = payload;
-            await db.ref().transaction((data) => {
-                const tenant = data.users[userId];
-                const owner = data.users[ownerId];
-                if (!tenant || !owner) return;
-                
-                if (tenant.balanceKRW < amount) return; 
+            const updates: any = {};
+            const userSnap = await db.ref(`users/${userId}`).once('value');
+            const ownerSnap = await db.ref(`users/${ownerId}`).once('value');
+            const user = userSnap.val();
+            const owner = ownerSnap.val();
 
-                tenant.balanceKRW -= amount;
-                owner.balanceKRW += amount;
-                
-                delete tenant.pendingRent; 
+            if (!user || !owner) return res.status(400).json({ error: "USER_NOT_FOUND" });
+            if (user.balanceKRW < amount) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
 
-                const date = new Date().toISOString();
-                const now = Date.now();
-                if(!tenant.transactions) tenant.transactions = [];
-                tenant.transactions.push({id: now, type: 'expense', amount: -amount, currency: 'KRW', description: `임대료 납부 (#${propertyId})`, date});
-                
-                if(!owner.transactions) owner.transactions = [];
-                owner.transactions.push({id: now+1, type: 'income', amount: amount, currency: 'KRW', description: `임대료 수입 (#${propertyId})`, date});
+            updates[`users/${userId}/balanceKRW`] = user.balanceKRW - amount;
+            updates[`users/${ownerId}/balanceKRW`] = (owner.balanceKRW || 0) + amount;
+            updates[`users/${userId}/pendingRent`] = null;
 
-                return data;
-            });
+            const txId = `rent_${Date.now()}`;
+            const date = new Date().toISOString();
+            const uTx = { id: txId + '_u', type: 'expense', amount: -amount, currency: 'KRW', description: `임대료 납부 (집 #${propertyId})`, date };
+            const oTx = { id: txId + '_o', type: 'income', amount: amount, currency: 'KRW', description: `임대료 수입 (집 #${propertyId}, ${userId})`, date };
+
+            updates[`users/${userId}/transactions`] = (user.transactions || []).concat(uTx).slice(-50);
+            updates[`users/${ownerId}/transactions`] = (owner.transactions || []).concat(oTx).slice(-50);
+
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
-        // --- 7. Admin Features ---
-        if (action === 'mint_currency') {
-            const { amount, currency } = payload;
-            await db.ref('users/한국은행').transaction((bank) => {
-                if (!bank) return bank;
-                if (currency === 'KRW') bank.balanceKRW += amount;
-                else bank.balanceUSD += amount;
-                
-                if(!bank.transactions) bank.transactions = [];
-                bank.transactions.push({
-                    id: Date.now(), type: 'income', amount, currency, description: '화폐 발권 (Minting)', date: new Date().toISOString()
-                });
-                return bank;
-            });
-            return res.status(200).json({ success: true });
-        }
-
-        if (action === 'distribute_welfare') {
-            const { targetUser, amount } = payload;
-            await db.ref('users').transaction((users) => {
-                const user = users[targetUser];
-                const bank = users['한국은행'];
-                if (!user || !bank) return users;
-                
-                if (bank.balanceKRW < amount) return;
-
-                user.balanceKRW += amount;
-                bank.balanceKRW -= amount;
-
-                const date = new Date().toISOString();
-                if(!user.transactions) user.transactions = [];
-                user.transactions.push({ id: Date.now(), type: 'income', amount, currency: 'KRW', description: '복지 지원금', date });
-                
-                if(!bank.transactions) bank.transactions = [];
-                bank.transactions.push({ id: Date.now()+1, type: 'expense', amount: -amount, currency: 'KRW', description: `${targetUser} 복지금`, date });
-
-                return users;
-            });
-            return res.status(200).json({ success: true });
-        }
-
+        // --- 5. Admin & Policy Actions ---
         if (action === 'weekly_pay') {
             const { amount, userIds } = payload;
             const bankId = '한국은행';
-            
-            await db.ref('users').transaction((users) => {
-                if (!users || !users[bankId]) return users;
-                const bank = users[bankId];
-                userIds.forEach((uid: string) => {
-                    if (users[uid]) {
-                        users[uid].balanceKRW += amount;
-                        bank.balanceKRW -= amount;
-                        
-                        const date = new Date().toISOString();
-                        const now = Date.now() + Math.random();
-
-                        if (!users[uid].transactions) users[uid].transactions = [];
-                        users[uid].transactions.push({
-                            id: now, type: 'income', amount: amount, currency: 'KRW', description: '주급 수령', date
-                        });
-                        
-                        if (!users[uid].notifications) users[uid].notifications = [];
-                        users[uid].notifications.unshift({
-                            id: now.toString(), message: `주급 ₩${amount.toLocaleString()}가 지급되었습니다.`, read: false, isPersistent: false, date
-                        });
-                    }
-                });
-                return users;
-            });
+            const date = new Date().toISOString();
+            const bankSnap = await db.ref(`users/${bankId}`).once('value');
+            const bank = bankSnap.val();
+            const total = amount * userIds.length;
+            if (!bank || bank.balanceKRW < total) return res.status(400).json({ error: "INSUFFICIENT_BANK_FUNDS" });
+            const updates: any = {};
+            updates[`users/${bankId}/balanceKRW`] = bank.balanceKRW - total;
+            for (const uid of userIds) {
+                const uSnap = await db.ref(`users/${uid}`).once('value');
+                const u = uSnap.val();
+                if (u) {
+                    const txId = `tx_${Date.now()}_${Math.random().toString(36).substr(2,5)}`;
+                    const tx = { id: txId, type: 'income', amount, currency: 'KRW', description: '주급 지급', date };
+                    const notif = { id: `n_${txId}`, message: `주급 ₩${amount.toLocaleString()} 지급 완료`, read: false, date, timestamp: Date.now() };
+                    updates[`users/${uid}/balanceKRW`] = (u.balanceKRW || 0) + amount;
+                    updates[`users/${uid}/transactions`] = (u.transactions || []).concat(tx).slice(-50);
+                    updates[`users/${uid}/notifications/${notif.id}`] = notif;
+                }
+            }
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
         if (action === 'collect_tax') {
             const { taxSessionId, taxes, dueDate } = payload;
             const updates: any = {};
-            
-            taxes.forEach((tax: any) => {
-                const taxId = `t_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-                const pendingTax = {
-                    id: taxId,
-                    sessionId: taxSessionId,
-                    amount: tax.amount,
-                    type: tax.type,
-                    dueDate: dueDate,
-                    status: 'pending',
-                    breakdown: tax.breakdown
-                };
-                const userRef = db!.ref(`users/${tax.userId}/pendingTaxes`);
-                const newRef = userRef.push();
-                updates[`users/${tax.userId}/pendingTaxes/${newRef.key}`] = pendingTax;
-                
-                const notifRef = db!.ref(`users/${tax.userId}/notifications`).push();
-                updates[`users/${tax.userId}/notifications/${notifRef.key}`] = {
-                    id: notifRef.key,
-                    message: `[세금 고지] ${tax.type} ₩${tax.amount.toLocaleString()}가 부과되었습니다.`,
-                    read: false, 
-                    isPersistent: true,
-                    date: new Date().toISOString(),
-                    action: 'tax_pay',
-                    actionData: pendingTax
-                };
-            });
-
-            await db!.ref().update(updates);
+            for (const t of taxes) {
+                const uSnap = await db.ref(`users/${t.userId}`).once('value');
+                const u = uSnap.val();
+                if (u) {
+                    const taxObj = { id: `tax_${Date.now()}_${t.userId}`, sessionId: taxSessionId, amount: t.amount, type: t.type, dueDate, status: 'pending', breakdown: t.breakdown };
+                    updates[`users/${t.userId}/pendingTaxes`] = (u.pendingTaxes || []).concat(taxObj);
+                    const notif = { id: `n_${taxObj.id}`, message: `세금 고지서 도착: ₩${t.amount.toLocaleString()} (${t.type})`, read: false, date: new Date().toISOString(), type: 'tax', timestamp: Date.now() };
+                    updates[`users/${t.userId}/notifications/${notif.id}`] = notif;
+                }
+            }
+            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
-        return res.status(400).send('Unknown action');
+        if (action === 'distribute_welfare') {
+            const { targetUser, amount } = payload;
+            const bankId = '한국은행';
+            const bankSnap = await db.ref(`users/${bankId}`).once('value');
+            const uSnap = await db.ref(`users/${targetUser}`).once('value');
+            const bank = bankSnap.val();
+            const user = uSnap.val();
+            if (!bank || bank.balanceKRW < amount) return res.status(400).json({ error: "BANK_FUNDS_LACK" });
+            const updates: any = {};
+            updates[`users/${bankId}/balanceKRW`] = bank.balanceKRW - amount;
+            updates[`users/${targetUser}/balanceKRW`] = (user.balanceKRW || 0) + amount;
+            const tx = { id: `wel_${Date.now()}`, type: 'income', amount, currency: 'KRW', description: '복지 지원금 수령', date: new Date().toISOString() };
+            updates[`users/${targetUser}/transactions`] = (user.transactions || []).concat(tx).slice(-50);
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
+        }
 
-    } catch (error) {
-        console.error("Game Action Error:", error);
-        return res.status(500).json({ error: 'Internal Server Error' });
+        if (action === 'mint_currency') {
+            const { amount, currency } = payload;
+            const bankId = '한국은행';
+            const bankSnap = await db.ref(`users/${bankId}`).once('value');
+            const bank = bankSnap.val();
+            const updates: any = {};
+            const key = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
+            updates[`users/${bankId}/${key}`] = (bank[key] || 0) + amount;
+            const tx = { id: `mint_${Date.now()}`, type: 'income', amount, currency, description: `화폐 발행 (${currency})`, date: new Date().toISOString() };
+            updates[`users/${bankId}/transactions`] = (bank.transactions || []).concat(tx).slice(-50);
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
+        }
+
+        return res.status(400).json({ error: "INVALID_ACTION", received: action });
+    } catch (e: any) {
+        console.error("Server Action Error:", e);
+        return res.status(500).json({ error: e.message });
     }
 };

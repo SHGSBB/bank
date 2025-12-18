@@ -22,66 +22,52 @@ export const database = getDatabase(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
+// Helper: Sanitize object for Firebase (remove undefined)
+const sanitize = (obj: any) => {
+    return JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
+};
+
 export const dbRef = ref(database, '/');
 
 export const uploadImage = async (path: string, dataUrl: string): Promise<string> => {
-    // 1. Basic Validation
     if (!dataUrl) return "";
     if (!dataUrl.startsWith('data:image')) {
-        // Assume it might already be a URL if not base64 image data
         if (dataUrl.startsWith('http')) return dataUrl;
-        console.warn("Invalid image format provided to uploadImage");
         return ""; 
     }
-
     try {
         const imageRef = storageRef(storage, path);
-        // Using uploadString is generally reliable for data_urls
-        await uploadString(imageRef, dataUrl, 'data_url', {
-            contentType: 'image/jpeg', // Defaulting/forcing content type can sometimes help stability
-        });
-        const url = await getDownloadURL(imageRef);
-        return url;
+        await uploadString(imageRef, dataUrl, 'data_url', { contentType: 'image/jpeg' });
+        return await getDownloadURL(imageRef);
     } catch (error: any) {
-        console.error("Image upload failed:", error);
-        
-        // Retry logic for specific error (retry-limit-exceeded)
         if (error.code === 'storage/retry-limit-exceeded') {
-             console.log("Retrying upload...");
-             try {
-                 // Simple one-time retry
-                 const imageRef = storageRef(storage, path);
-                 await uploadString(imageRef, dataUrl, 'data_url');
-                 return await getDownloadURL(imageRef);
-             } catch (retryError) {
-                 console.error("Retry failed:", retryError);
-                 throw retryError;
-             }
+             const imageRef = storageRef(storage, path);
+             await uploadString(imageRef, dataUrl, 'data_url');
+             return await getDownloadURL(imageRef);
         }
         throw error;
     }
 };
 
-/**
- * Fetches global data via Server API (Sanitized).
- * DB 전체를 직접 다운로드하지 않고, 비밀번호가 제거된 데이터를 서버에서 받아옵니다.
- */
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
+    // Attempt API fetch but fall back immediately if it fails or returns error
     try {
-        // Use relative path to avoid CORS/Network issues with hardcoded domains
         const res = await fetch('/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
-        });
+        }).catch(() => null); // Catch network errors early
+
+        if (res && res.ok) {
+            return await res.json();
+        }
         
-        if (!res.ok) throw new Error("서버 데이터 로드 실패");
-        
-        const data = await res.json();
-        return data;
+        // If not ok or res is null (network error), go to direct firebase
+        console.warn("API unavailable, falling back to direct Firebase fetch.");
+        const snapshot = await get(ref(database));
+        return snapshot.exists() ? snapshot.val() : {};
     } catch (e) {
-        console.error("데이터 로드 중 오류 (백업 방식 사용):", e);
-        // 서버 에러 시 비상용으로 기존 방식 사용 (보안 취약하지만 앱 멈춤 방지)
+        console.error("FetchGlobalData API Error, using direct fallback:", e);
         const snapshot = await get(ref(database));
         return snapshot.exists() ? snapshot.val() : {};
     }
@@ -89,156 +75,86 @@ export const fetchGlobalData = async (): Promise<Partial<DB>> => {
 
 const normalizeUser = (user: User): User => {
     if (!user) return user;
-    if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) {
-        user.pendingTaxes = Object.values(user.pendingTaxes);
-    }
-    if (user.loans && !Array.isArray(user.loans)) {
-        user.loans = Object.values(user.loans);
-    }
-    // Optimize: Limit transaction history client-side if it wasn't done server-side
-    if (user.transactions && Array.isArray(user.transactions)) {
-        user.transactions = user.transactions.slice(-50); // Keep last 50
-    }
-    if (user.assetHistory) {
-        delete user.assetHistory;
-    }
+    if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) user.pendingTaxes = Object.values(user.pendingTaxes);
+    if (user.loans && !Array.isArray(user.loans)) user.loans = Object.values(user.loans);
+    if (user.transactions && Array.isArray(user.transactions)) user.transactions = user.transactions.slice(-50);
     return user;
 };
 
 export const fetchUser = async (userId: string): Promise<User | null> => {
     try {
         const snapshot = await get(ref(database, `users/${userId}`));
-        if (!snapshot.exists()) return null;
-        return normalizeUser(snapshot.val());
-    } catch (e) {
-        console.error("Fetch user failed", e);
-        return null;
-    }
+        return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
+    } catch (e) { return null; }
 };
 
 export const fetchUserByLoginId = async (loginId: string): Promise<User | null> => {
     if (!loginId) return null;
-    
     try {
         const directSnapshot = await get(ref(database, `users/${loginId}`));
         if (directSnapshot.exists()) {
             const user = directSnapshot.val();
             if (user && (user.id === loginId || !user.id)) return normalizeUser(user);
         }
-
-        try {
-            const q = query(ref(database, 'users'), orderByChild('id'), equalTo(loginId), limitToLast(1));
-            const snapshot = await get(q);
-            if (snapshot.exists()) {
-                const data = snapshot.val();
-                const key = Object.keys(data)[0];
-                return normalizeUser(data[key]);
-            }
-        } catch (queryError: any) {
-            const msg = queryError.message || '';
-            if (msg.includes("Index not defined") || msg.includes("indexOn")) {
-                const allSnap = await get(ref(database, 'users'));
-                if (allSnap.exists()) {
-                    const allUsers = allSnap.val();
-                    for (const key in allUsers) {
-                        if (allUsers[key]?.id === loginId) {
-                            return normalizeUser(allUsers[key]);
-                        }
-                    }
-                }
-            } else {
-                throw queryError; 
-            }
-        }
-        return null;
-    } catch (e) {
-        return null;
-    }
-};
-
-export const fetchMartUsers = async (): Promise<User[]> => {
-    try {
-        const q = query(ref(database, 'users'), orderByChild('type'), equalTo('mart'));
+        const q = query(ref(database, 'users'), orderByChild('id'), equalTo(loginId), limitToLast(1));
         const snapshot = await get(q);
-        
         if (snapshot.exists()) {
-            return Object.values(snapshot.val()).map((u: any) => normalizeUser(u));
+            const data = snapshot.val();
+            const key = Object.keys(data)[0];
+            return normalizeUser(data[key]);
         }
-        return [];
-    } catch (e: any) {
-        const msg = e.message || '';
-        if (msg.includes("Index not defined") || msg.includes("indexOn")) {
-            try {
-                const allSnap = await get(ref(database, 'users'));
-                if (!allSnap.exists()) return [];
-                const allUsers = Object.values(allSnap.val()) as User[];
-                return allUsers.filter(u => u.type === 'mart').map(u => normalizeUser(u));
-            } catch (fallbackError) {
-                return [];
-            }
-        }
-        return [];
-    }
-};
-
-export const searchUsersByName = async (nameQuery: string): Promise<User[]> => {
-    if (!nameQuery) return [];
-    
-    try {
-        const userRef = ref(database, 'users');
-        const q = query(userRef, orderByChild('name'), startAt(nameQuery), endAt(nameQuery + "\uf8ff"));
-        
-        const snapshot = await get(q);
-        if (!snapshot.exists()) return [];
-        
-        const usersObj = snapshot.val();
-        const users = Object.values(usersObj) as User[];
-        
-        return users.map(u => normalizeUser({
-            ...u,
-            transactions: [],
-            notifications: [],
-            assetHistory: []
-        }));
-    } catch (e: any) {
-        const msg = e.message || '';
-        if (msg.includes("Index not defined") || msg.includes("indexOn")) {
-             const allSnap = await get(ref(database, 'users'));
-             if (!allSnap.exists()) return [];
-             const all = Object.values(allSnap.val()) as User[];
-             return all
-                .filter(u => u.name && u.name.includes(nameQuery))
-                .map(u => normalizeUser({ ...u, transactions: [], notifications: [], assetHistory: [] }));
-        }
-        return [];
-    }
+        return null;
+    } catch (e) { return null; }
 };
 
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
     const snapshot = await get(ref(database, 'users'));
     const val = snapshot.val() || {};
-    // Normalize all
-    Object.keys(val).forEach(k => {
-        val[k] = normalizeUser(val[k]);
-    });
+    Object.keys(val).forEach(k => { val[k] = normalizeUser(val[k]); });
     return val;
 };
 
 export const saveDb = async (data: DB) => {
     const updates: any = {};
     const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'bonds', 'pendingApplications', 'termDeposits', 'mintingRequests', 'policyRequests', 'taxSessions', 'auction', 'deferredAuctions', 'signupSessions', 'stocks'];
-    
     nodes.forEach(node => {
-        if ((data as any)[node] !== undefined) {
-            updates[node] = (data as any)[node];
-        }
+        if ((data as any)[node] !== undefined) updates[node] = (data as any)[node];
     });
-    
-    await update(ref(database), updates);
+    await update(ref(database), sanitize(updates));
 };
 
-export const generateId = (): string => {
-    return rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
+export const generateId = (): string => rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
+
+// Add missing search functions
+export const searchUsersByName = async (name: string): Promise<User[]> => {
+    try {
+        const snapshot = await get(ref(database, 'users'));
+        if (!snapshot.exists()) return [];
+        const users = snapshot.val();
+        return Object.values(users)
+            .filter((u: any) => u.name && u.name.toLowerCase().includes(name.toLowerCase()))
+            .map(u => normalizeUser(u as User));
+    } catch (e) { return []; }
+};
+
+export const fetchMartUsers = async (): Promise<User[]> => {
+    try {
+        const snapshot = await get(ref(database, 'users'));
+        if (!snapshot.exists()) return [];
+        const users = snapshot.val();
+        return Object.values(users)
+            .filter((u: any) => u.type === 'mart')
+            .map(u => normalizeUser(u as User));
+    } catch (e) { return []; }
+};
+
+export const searchMessages = async (chatId: string, term: string): Promise<ChatMessage[]> => {
+    try {
+        const snapshot = await get(ref(database, `chatMessages/${chatId}`));
+        if (!snapshot.exists()) return [];
+        const msgs = snapshot.val();
+        return Object.values(msgs).filter((m: any) => m.text && m.text.includes(term)) as ChatMessage[];
+    } catch (e) { return []; }
 };
 
 export const assetService = {
@@ -248,247 +164,134 @@ export const assetService = {
         if (!data) return [];
         return Array.isArray(data) ? data : Object.values(data);
     },
-
     recordHistory: async (userId: string, totalValue: number) => {
         const historyRef = ref(database, `asset_histories/${userId}`);
-        
         await runTransaction(historyRef, (currentHistory) => {
-            if (!currentHistory) {
-                return [{ date: new Date().toISOString(), totalValue }];
-            }
-            
+            if (!currentHistory) return [{ date: new Date().toISOString(), totalValue }];
             const history = Array.isArray(currentHistory) ? currentHistory : Object.values(currentHistory);
             const lastEntry = history[history.length - 1];
-            
-            if (!lastEntry) {
-                history.push({ date: new Date().toISOString(), totalValue });
-                return history;
-            }
-
-            const lastTime = new Date(lastEntry.date).getTime();
-            const now = Date.now();
-            const diffTime = now - lastTime;
-            const isTimeElapsed = diffTime > 60 * 60 * 1000;
-            const diffVal = Math.abs(totalValue - lastEntry.totalValue);
-            const isSignificantChange = lastEntry.totalValue > 0 ? (diffVal / lastEntry.totalValue) > 0.01 : diffVal > 0;
-
-            if (isTimeElapsed || isSignificantChange) {
+            if (!lastEntry || (Date.now() - new Date(lastEntry.date).getTime() > 3600000) || Math.abs(totalValue - lastEntry.totalValue) / (lastEntry.totalValue || 1) > 0.01) {
                 if (history.length > 100) history.shift();
                 history.push({ date: new Date().toISOString(), totalValue });
             }
-            
             return history;
         });
-    },
-
-    migrateUserHistory: async (userId: string, oldHistory: AssetHistoryPoint[]) => {
-        if (!oldHistory || oldHistory.length === 0) return;
-        const updates: any = {};
-        updates[`asset_histories/${userId}`] = oldHistory;
-        updates[`users/${userId}/assetHistory`] = null;
-        await update(ref(database), updates);
     }
 };
 
-// NEW HELPER: Fetch Lite User List for Chat Creation
 export const fetchUserListLite = async (category: 'all' | 'citizen' | 'mart' | 'gov' | 'teacher'): Promise<{name: string, type: string}[]> => {
     try {
-        // Optimization: In real app, use query by category. For now, fetch all keys/types
-        // Or if 'users' is huge, fetch name/type only via index (if set up)
         const snapshot = await get(ref(database, 'users'));
         if (!snapshot.exists()) return [];
         const users = snapshot.val();
-        
         const list: {name: string, type: string}[] = [];
-        
         Object.values(users).forEach((u: any) => {
-            let matches = false;
-            if (category === 'all') matches = true;
-            else if (category === 'citizen' && u.type === 'citizen') matches = true;
+            let matches = category === 'all';
+            if (category === 'citizen' && u.type === 'citizen') matches = true;
             else if (category === 'mart' && u.type === 'mart') matches = true;
             else if (category === 'gov' && (u.type === 'government' || u.type === 'official' || u.subType === 'govt')) matches = true;
             else if (category === 'teacher' && (u.type === 'admin' || u.type === 'root' || u.subType === 'teacher')) matches = true;
-            
             if (matches) list.push({ name: u.name, type: u.type });
         });
-        
         return list.sort((a,b) => a.name.localeCompare(b.name));
-    } catch (e) {
-        console.error("Fetch lite users failed", e);
-        return [];
-    }
+    } catch (e) { return []; }
 };
-
-// NEW HELPER: Stub for Message Search
-export const searchMessages = async (userId: string, queryText: string): Promise<any[]> => {
-    return [];
-};
-
-// --- CHAT SERVICES ---
 
 export const chatService = {
     subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => {
         const chatsRef = ref(database, 'chatRooms');
-        return onValue(chatsRef, (snapshot) => {
-            callback(snapshot.val() || {});
-        });
+        return onValue(chatsRef, (snapshot) => callback(snapshot.val() || {}));
     },
-
     subscribeToMessages: (chatId: string, limit: number = 20, callback: (messages: Record<string, ChatMessage>) => void) => {
         const msgsRef = query(ref(database, `chatMessages/${chatId}`), limitToLast(limit));
-        return onValue(msgsRef, (snapshot) => {
-            callback(snapshot.val() || {});
-        });
+        return onValue(msgsRef, (snapshot) => callback(snapshot.val() || {}));
     },
-
-    sendMessage: async (chatId: string, message: ChatMessage, chatMetaUpdate?: Partial<Chat>) => {
+    sendMessage: async (chatId: string, message: ChatMessage) => {
         try {
-            // 1. Write to DB directly for speed/reliability
-            await set(ref(database, `chatMessages/${chatId}/${message.id}`), message);
+            const sanitizedMsg = sanitize(message);
+            await set(ref(database, `chatMessages/${chatId}/${message.id}`), sanitizedMsg);
             await update(ref(database, `chatRooms/${chatId}`), {
                 lastMessage: message.text,
                 lastTimestamp: message.timestamp
             });
-
-            // 2. Call API for Notifications (Fire and Forget)
             fetch('/api/chat-send', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                    chatId, 
-                    message 
-                }),
-            }).catch(e => console.warn("Notification trigger failed", e));
-
-        } catch (error) {
-            console.error("Failed to send message:", error);
-            throw error;
-        }
+                body: JSON.stringify({ chatId, message: sanitizedMsg }),
+            }).catch(() => {});
+        } catch (error) { throw error; }
     },
-
     createChat: async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string, isTeamChat: boolean = false) => {
         const chatId = `chat_${Date.now()}`;
-        const updates: any = {};
-        
-        const chatData: any = {
+        const chatData = sanitize({
             id: chatId,
             participants,
             type,
-            groupName: groupName || (type === 'group' ? '그룹 채팅' : undefined),
-            messages: {}
-        };
-
-        if (isTeamChat && type === 'group') {
-            chatData.isTeamChat = true;
-            // First participant is usually creator
-            chatData.ownerId = participants[0]; 
-            chatData.adminIds = [];
-        }
-
-        updates[`chatRooms/${chatId}`] = chatData;
-        await update(ref(database), updates);
+            groupName: groupName || (type === 'group' ? '그룹 채팅' : null),
+            messages: {},
+            isTeamChat: isTeamChat && type === 'group' ? true : null,
+            ownerId: isTeamChat && type === 'group' ? participants[0] : null
+        });
+        await update(ref(database, `chatRooms/${chatId}`), chatData);
         return chatId;
     },
-
     updateChatMetadata: async (chatId: string, data: Partial<Chat>) => {
-        const sanitizedData = JSON.parse(JSON.stringify(data));
-        await update(ref(database, `chatRooms/${chatId}`), sanitizedData);
+        await update(ref(database, `chatRooms/${chatId}`), sanitize(data));
     },
-
     findExistingPrivateChat: async (participants: string[]): Promise<string | null> => {
         const snapshot = await get(ref(database, 'chatRooms'));
         if (!snapshot.exists()) return null;
         const rooms = snapshot.val();
-        
         const sortedTarget = [...participants].sort();
-        
         for (const [id, room] of Object.entries(rooms) as [string, Chat][]) {
             if (room.type === 'private' && room.participants) {
-                const sortedRoom = [...room.participants].sort();
-                if (JSON.stringify(sortedTarget) === JSON.stringify(sortedRoom)) {
-                    return id;
-                }
+                if (JSON.stringify(sortedTarget) === JSON.stringify([...room.participants].sort())) return id;
             }
         }
         return null;
     },
-
     updateMessage: async (chatId: string, msgId: string, data: Partial<ChatMessage>) => {
-        const sanitizedData = JSON.parse(JSON.stringify(data));
-        await update(ref(database, `chatMessages/${chatId}/${msgId}`), sanitizedData);
+        await update(ref(database, `chatMessages/${chatId}/${msgId}`), sanitize(data));
     },
-
     deleteMessage: async (chatId: string, msgId: string) => {
-        const updates: any = {};
-        updates[`chatMessages/${chatId}/${msgId}/isDeleted`] = true;
-        updates[`chatMessages/${chatId}/${msgId}/text`] = "삭제된 메시지입니다.";
-        updates[`chatMessages/${chatId}/${msgId}/attachment`] = null;
-        await update(ref(database), updates);
+        await update(ref(database, `chatMessages/${chatId}/${msgId}`), { isDeleted: true, text: "삭제된 메시지입니다.", attachment: null });
     },
-
     leaveChat: async (chatId: string, userId: string) => {
         const chatRef = ref(database, `chatRooms/${chatId}`);
         await runTransaction(chatRef, (chat) => {
-            if (chat) {
-                if (chat.participants) {
-                    chat.participants = chat.participants.filter((p: string) => p !== userId);
-                }
-            }
+            if (chat && chat.participants) chat.participants = chat.participants.filter((p: string) => p !== userId);
             return chat;
         });
     },
-
     hideChat: async (chatId: string, userId: string) => {
-        const updates: any = {};
-        updates[`chatRooms/${chatId}/deletedBy/${userId}`] = Date.now();
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}/deletedBy/${userId}`), Date.now());
     },
-
     restoreChat: async (chatId: string, userId: string) => {
-        const updates: any = {};
-        updates[`chatRooms/${chatId}/deletedBy/${userId}`] = null;
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}/deletedBy/${userId}`), null);
     },
-
     markRead: async (chatId: string, userId: string) => {
-        const updates: any = {};
-        updates[`chatRooms/${chatId}/readStatus/${userId}`] = Date.now();
-        updates[`chatRooms/${chatId}/manualUnread/${userId}`] = null;
-        updates[`chatRooms/${chatId}/deletedBy/${userId}`] = null;
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}`), {
+            [`readStatus/${userId}`]: Date.now(),
+            [`manualUnread/${userId}`]: null,
+            [`deletedBy/${userId}`]: null
+        });
     },
-
+    // Add missing methods to chatService
     markManualUnread: async (chatId: string, userId: string) => {
-        const updates: any = {};
-        updates[`chatRooms/${chatId}/manualUnread/${userId}`] = true;
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}/manualUnread/${userId}`), true);
     },
-
     togglePinChat: async (chatId: string, userId: string, isPinned: boolean) => {
-        const updates: any = {};
-        if (isPinned) {
-            updates[`chatRooms/${chatId}/pinnedBy/${userId}`] = Date.now();
-        } else {
-            updates[`chatRooms/${chatId}/pinnedBy/${userId}`] = null;
-        }
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}/pinnedBy/${userId}`), isPinned ? Date.now() : null);
     },
-
     updatePinnedOrder: async (chatId: string, userId: string, newOrder: number) => {
-        const updates: any = {};
-        updates[`chatRooms/${chatId}/pinnedBy/${userId}`] = newOrder;
-        await update(ref(database), updates);
+        await update(ref(database, `chatRooms/${chatId}/pinnedBy/${userId}`), newOrder);
     },
-
     muteChat: async (chatId: string, userId: string, isMuted: boolean) => {
         const chatRef = ref(database, `chatRooms/${chatId}/mutedBy`);
         await runTransaction(chatRef, (mutedBy) => {
             let list = mutedBy || [];
-            if (isMuted) {
-                if (!list.includes(userId)) list.push(userId);
-            } else {
-                list = list.filter((id: string) => id !== userId);
-            }
+            if (isMuted) { if (!list.includes(userId)) list.push(userId); }
+            else { list = list.filter((id: string) => id !== userId); }
             return list;
         });
     }
