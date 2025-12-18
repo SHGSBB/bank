@@ -70,6 +70,7 @@ const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
     ].filter(a => a.val > 0);
 
     const handleCardClick = (id: string) => { triggerHaptic(); setExpandedCard(expandedCard === id ? null : id); };
+    /* Fix: Error in line 73: Cannot find name 'i'. Changed 'i' to 'c.id' to correctly find the expanded card data. */
     const expandedCardData = assetCards.find(c => c.id === expandedCard);
 
     return (
@@ -110,9 +111,14 @@ export const Dashboard: React.FC = () => {
     const isPresident = currentUser?.isPresident;
     const isEasyMode = currentUser?.preferences?.isEasyMode && currentUser?.type === 'citizen';
     
+    // Fix: Explicitly cast taxes to PendingTax[] to fix type unknown errors
     const pendingTaxes = useMemo(() => {
-        let taxes = currentUser?.pendingTaxes ? (Array.isArray(currentUser.pendingTaxes) ? [...currentUser.pendingTaxes] : Object.values(currentUser.pendingTaxes)) : [];
-        return taxes.sort((a,b) => (a.status === 'paid' ? 1 : -1) || new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime());
+        const taxes = (currentUser?.pendingTaxes ? (Array.isArray(currentUser.pendingTaxes) ? [...currentUser.pendingTaxes] : Object.values(currentUser.pendingTaxes)) : []) as PendingTax[];
+        return taxes.sort((a, b) => {
+            const statusOrder = (a.status === 'paid' ? 1 : -1) - (b.status === 'paid' ? 1 : -1);
+            if (statusOrder !== 0) return statusOrder;
+            return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
+        });
     }, [currentUser?.pendingTaxes]);
 
     const tabs = useMemo(() => {
@@ -219,7 +225,8 @@ export const Dashboard: React.FC = () => {
                         </div>
                     )}
                     {(() => {
-                        const tax = pendingTaxes[currentTaxIndex] || pendingTaxes[0];
+                        // Fix: explicitly type the extracted tax item
+                        const tax = (pendingTaxes[currentTaxIndex] || pendingTaxes[0]) as PendingTax;
                         const isPaid = tax.status === 'paid';
                         return (
                             <div className={`p-6 rounded-2xl border-2 shadow-md transition-all ${isPaid ? 'bg-gray-100 dark:bg-gray-800 opacity-60' : 'bg-red-50 dark:bg-red-900/30 border-red-200'}`}>

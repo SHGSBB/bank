@@ -19,7 +19,7 @@ export const BankSettingsTab: React.FC = () => {
     const [krwMintDisabled, setKrwMintDisabled] = useState(db.settings?.mintingRestriction?.krwDisabled || false);
     const [usdMintDisabled, setUsdMintDisabled] = useState(db.settings?.mintingRestriction?.usdDisabled || false);
 
-    // Interest Rates with safety checks
+    // Interest Rates with safety checks (1단계 수정 사항 반영)
     const [loanRate, setLoanRate] = useState(db.settings?.loanInterestRate?.rate?.toString() || '5');
     const [loanWeeks, setLoanWeeks] = useState(db.settings?.loanInterestRate?.periodWeeks?.toString() || '4');
     

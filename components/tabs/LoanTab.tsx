@@ -2,7 +2,7 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput, Modal } from '../Shared';
-import { Loan, RealEstateCell } from '../../types';
+import { Loan, RealEstateCell, Application } from '../../types';
 
 export const LoanTab: React.FC = () => {
     const { currentUser, db, showModal, createChat, sendMessage } = useGame();
@@ -10,105 +10,67 @@ export const LoanTab: React.FC = () => {
     const [selectedProperty, setSelectedProperty] = useState<RealEstateCell | null>(null);
     const [showPropModal, setShowPropModal] = useState(false);
 
-    const interestSettings = db.settings.loanInterestRate;
-    const interestDisplay = `${interestSettings.periodWeeks}주에 ${interestSettings.rate}%`;
-
-    const myProperties = useMemo(() => (db.realEstate.grid || []).filter(p => p.owner === currentUser?.name), [db.realEstate.grid, currentUser]);
-    const myLoans = currentUser?.loans ? (Array.isArray(currentUser.loans) ? currentUser.loans : Object.values(currentUser.loans)) : [];
+    const myApplications = useMemo(() => {
+        return (Object.values(db.pendingApplications || {}) as Application[])
+            .filter(a => a.applicantName === currentUser?.name && a.type === 'loan');
+    }, [db.pendingApplications, currentUser]);
 
     const handleApply = async () => {
         const valAmount = parseInt(amount);
         if (isNaN(valAmount) || valAmount <= 0) return showModal('금액을 입력하세요.');
 
         const chatId = await createChat(['한국은행'], 'private');
-        
         const collateralText = selectedProperty ? `집 #${selectedProperty.id} (₩${selectedProperty.price.toLocaleString()})` : "신용 대출 (담보 없음)";
 
-        await sendMessage(chatId, `[대출 신청]\n금액: ₩${valAmount.toLocaleString()}\n담보: ${collateralText}`, {
+        await sendMessage(chatId, `[대출 신청]\n신청자: ${currentUser?.name}\n금액: ₩${valAmount.toLocaleString()}\n담보: ${collateralText}`, {
             type: 'application',
             value: '대출 신청',
             data: {
                 appType: 'loan',
                 amount: valAmount,
                 collateral: selectedProperty ? `prop_${selectedProperty.id}` : null,
-                id: `loan_req_${Date.now()}`
+                id: `loan_req_${Date.now()}`,
+                isThreadRoot: true 
             }
         });
 
-        showModal("한국은행에 대출 신청 메시지를 보냈습니다. 채팅방에서 협상을 진행하세요.");
+        showModal("한국은행에 대출 신청을 보냈습니다. 메시지 탭의 스레드 대화에서 심사 과정을 확인하세요.");
         setAmount('');
         setSelectedProperty(null);
     };
 
     return (
         <div className="space-y-6">
-            <h3 className="text-2xl font-bold">대출 신청</h3>
+            <h3 className="text-2xl font-bold">대출 서비스</h3>
             
-            <div className="bg-yellow-50 dark:bg-yellow-900/20 p-4 rounded-xl text-center border border-yellow-200 dark:border-yellow-800">
-                <p className="text-sm text-gray-500 font-bold uppercase mb-1">현재 대출 금리</p>
-                <p className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{interestDisplay}</p>
-            </div>
-
-            <Card>
-                <div className="space-y-4">
+            <Card className="bg-black text-white p-8 rounded-[35px] border-none shadow-xl">
+                <div className="space-y-6">
                     <div>
-                        <label className="text-sm font-bold block mb-2">필요 금액</label>
-                        <MoneyInput 
-                            value={amount} 
-                            onChange={e => setAmount(e.target.value)} 
-                            placeholder="대출 금액 (₩)" 
-                            className="text-right text-xl font-bold p-3"
-                        />
+                        <label className="text-[10px] font-black text-gray-500 mb-2 block uppercase tracking-widest">Amount to Borrow</label>
+                        <MoneyInput value={amount} onChange={e => setAmount(e.target.value)} placeholder="₩ 0" className="bg-transparent text-4xl font-black border-none p-0 focus:ring-0 placeholder-gray-800" />
                     </div>
-
-                    <div>
-                        <label className="text-sm font-bold block mb-2">담보 설정 (선택)</label>
-                        <button 
-                            onClick={() => setShowPropModal(true)}
-                            className={`w-full p-4 rounded-xl border-2 border-dashed text-left transition-colors ${selectedProperty ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20' : 'border-gray-300 hover:border-gray-400'}`}
-                        >
-                            {selectedProperty ? (
-                                <div>
-                                    <p className="font-bold text-blue-600">🏠 집 #{selectedProperty.id}</p>
-                                    <p className="text-xs text-gray-500">감정가: ₩{selectedProperty.price.toLocaleString()}</p>
-                                </div>
-                            ) : (
-                                <span className="text-gray-400">+ 소유 부동산 선택하기</span>
-                            )}
-                        </button>
-                    </div>
-
-                    <Button onClick={handleApply} className="w-full py-4 text-lg bg-purple-600 hover:bg-purple-500">채팅으로 신청하기</Button>
+                    <Button onClick={handleApply} className="w-full py-5 bg-green-500 text-black text-lg font-black rounded-2xl hover:bg-green-400 active:scale-95 transition-all">신청서 제출</Button>
                 </div>
             </Card>
 
-            <div className="mt-8">
-                <h4 className="font-bold text-lg mb-3">내 대출 현황</h4>
-                {myLoans.length === 0 ? <p className="text-gray-500 text-center py-6">진행 중인 대출이 없습니다.</p> : 
-                    <div className="space-y-3">
-                        {myLoans.map((l: Loan) => (
-                            <div key={l.id} className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 shadow-sm">
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="font-bold text-lg">₩{l.amount.toLocaleString()}</span>
-                                    <span className={`text-xs px-2 py-1 rounded ${l.status==='approved' ? 'bg-green-100 text-green-700' : 'bg-gray-200'}`}>{l.status}</span>
-                                </div>
-                                <p className="text-xs text-gray-500">상환 예정일: {l.repaymentDate ? new Date(l.repaymentDate).toLocaleDateString() : '-'}</p>
+            {myApplications.length > 0 && (
+                <div className="space-y-4">
+                    <h4 className="font-bold text-sm text-gray-400 px-1 uppercase tracking-wider">나의 신청 현황</h4>
+                    {myApplications.map(app => (
+                        <div key={app.id} className="p-5 bg-white dark:bg-[#1E1E1E] rounded-3xl border dark:border-gray-800 flex justify-between items-center shadow-sm">
+                            <div>
+                                <p className="font-black text-lg">₩ {app.amount.toLocaleString()}</p>
+                                <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold">{app.status === 'pending' ? 'Reviewing' : app.status}</p>
                             </div>
-                        ))}
-                    </div>
-                }
-            </div>
-
-            <Modal isOpen={showPropModal} onClose={() => setShowPropModal(false)} title="담보물 선택">
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                    {myProperties.map(p => (
-                        <div key={p.id} onClick={() => { setSelectedProperty(p); setShowPropModal(false); }} className="p-3 border rounded cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700">
-                            <span className="font-bold">집 #{p.id}</span> (₩{p.price.toLocaleString()})
+                            <div className="flex items-center gap-2">
+                                <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${app.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : (app.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}`}>
+                                    {app.status === 'pending' ? '심사 중' : (app.status === 'approved' ? '승인됨' : '거절됨')}
+                                </span>
+                            </div>
                         </div>
                     ))}
-                    {myProperties.length === 0 && <p className="text-center text-gray-500 py-4">소유한 부동산이 없습니다.</p>}
                 </div>
-            </Modal>
+            )}
         </div>
     );
 };

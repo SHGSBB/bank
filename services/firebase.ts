@@ -1,11 +1,34 @@
 
 import * as firebaseApp from "firebase/app";
-import { getDatabase, ref, get, update, push as rtdbPush, query, limitToLast, off, runTransaction, onValue, orderByChild, startAt, endAt, equalTo, child, set } from "firebase/database";
-import { getAuth } from "firebase/auth";
+import { 
+    getDatabase, 
+    ref, 
+    get, 
+    update, 
+    push as rtdbPush, 
+    query, 
+    limitToLast, 
+    onValue, 
+    orderByChild, 
+    equalTo, 
+    set, 
+    remove,
+    startAt,
+    endAt 
+} from "firebase/database";
+import { 
+    getAuth, 
+    createUserWithEmailAndPassword, 
+    signInWithEmailAndPassword, 
+    signOut, 
+    onAuthStateChanged, 
+    sendEmailVerification,
+    sendPasswordResetEmail,
+    User as FirebaseUser 
+} from "firebase/auth";
 import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
-// --- CONFIGURATION ---
 const firebaseConfig = {
   apiKey: "AIzaSyD5_YZU_luksAslG7nge_dQvauS1_lr3TA",
   authDomain: "sunghwa-cffff.firebaseapp.com",
@@ -22,55 +45,60 @@ export const database = getDatabase(app);
 export const auth = getAuth(app);
 export const storage = getStorage(app);
 
-// Helper: Sanitize object for Firebase (remove undefined)
-const sanitize = (obj: any) => {
-    return JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
-};
+const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
-export const dbRef = ref(database, '/');
+/**
+ * Converts dot (.) to underscore (_) for safe Firebase RTDB keys
+ */
+export const toSafeId = (id: string) => id.replace(/\./g, '_');
 
-export const uploadImage = async (path: string, dataUrl: string): Promise<string> => {
-    if (!dataUrl) return "";
-    if (!dataUrl.startsWith('data:image')) {
-        if (dataUrl.startsWith('http')) return dataUrl;
-        return ""; 
+// [회원가입] 이메일 중복 시 자동 에일리어싱 (+1, +2...) 시도
+export const registerWithAutoRetry = async (email: string, pass: string, retryCount = 0): Promise<FirebaseUser> => {
+    let tryEmail = email;
+    if (retryCount > 0) {
+        const [local, domain] = email.split('@');
+        tryEmail = `${local}+${retryCount}@${domain}`;
     }
+
     try {
-        const imageRef = storageRef(storage, path);
-        await uploadString(imageRef, dataUrl, 'data_url', { contentType: 'image/jpeg' });
-        return await getDownloadURL(imageRef);
+        const userCredential = await createUserWithEmailAndPassword(auth, tryEmail, pass);
+        await sendEmailVerification(userCredential.user);
+        return userCredential.user;
     } catch (error: any) {
-        if (error.code === 'storage/retry-limit-exceeded') {
-             const imageRef = storageRef(storage, path);
-             await uploadString(imageRef, dataUrl, 'data_url');
-             return await getDownloadURL(imageRef);
+        if (error.code === 'auth/email-already-in-use' && retryCount < 20) {
+            return registerWithAutoRetry(email, pass, retryCount + 1);
         }
         throw error;
     }
 };
 
+export const loginWithEmail = async (email: string, pass: string) => {
+    const userCredential = await signInWithEmailAndPassword(auth, email, pass);
+    return userCredential.user;
+};
+
+// [비밀번호 재설정]
+export const resetUserPassword = async (email: string) => {
+    await sendPasswordResetEmail(auth, email);
+    return true;
+};
+
+export const logoutFirebase = async () => signOut(auth);
+
+export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => onAuthStateChanged(auth, callback);
+
 export const fetchGlobalData = async (): Promise<Partial<DB>> => {
     try {
-        // Use relative path to avoid CORS issues in preview/test environments
-        const res = await fetch('/api/game-action', {
+        const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
         }).catch(() => null);
-
-        if (res && res.ok) {
-            const text = await res.text();
-            if (text.startsWith('<')) throw new Error("API Returned HTML instead of JSON");
-            return JSON.parse(text);
-        }
-        
-        console.warn("API unavailable or returned error, falling back to direct Firebase fetch.");
+        if (res && res.ok) return await res.json();
         const snapshot = await get(ref(database));
         return snapshot.exists() ? snapshot.val() : {};
     } catch (e) {
-        console.error("FetchGlobalData API Error, using direct fallback:", e);
-        const snapshot = await get(ref(database));
-        return snapshot.exists() ? snapshot.val() : {};
+        return {};
     }
 };
 
@@ -78,46 +106,92 @@ const normalizeUser = (user: User): User => {
     if (!user) return user;
     if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) user.pendingTaxes = Object.values(user.pendingTaxes);
     if (user.loans && !Array.isArray(user.loans)) user.loans = Object.values(user.loans);
-    if (user.transactions && Array.isArray(user.transactions)) user.transactions = user.transactions.slice(-50);
     return user;
 };
 
-export const fetchUser = async (userId: string): Promise<User | null> => {
-    try {
-        const snapshot = await get(ref(database, `users/${userId}`));
-        return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
-    } catch (e) { return null; }
+// [성능 최적화] 특정 유저 정보만 콕 집어서 가져오기
+export const fetchUser = async (userName: string): Promise<User | null> => {
+    const snapshot = await get(ref(database, `users/${toSafeId(userName)}`));
+    return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
 };
 
-export const fetchUserByLoginId = async (loginId: string): Promise<User | null> => {
-    if (!loginId) return null;
-    try {
-        const directSnapshot = await get(ref(database, `users/${loginId}`));
-        if (directSnapshot.exists()) {
-            const user = directSnapshot.val();
-            if (user && (user.id === loginId || !user.id)) return normalizeUser(user);
-        }
-        const q = query(ref(database, 'users'), orderByChild('id'), equalTo(loginId), limitToLast(1));
-        const snapshot = await get(q);
-        if (snapshot.exists()) {
-            const data = snapshot.val();
-            const key = Object.keys(data)[0];
-            return normalizeUser(data[key]);
-        }
-        return null;
-    } catch (e) { return null; }
+export const fetchUserByEmail = async (email: string): Promise<User | null> => {
+    // Index-independent lookup (fetch all and find)
+    const snapshot = await get(ref(database, 'users'));
+    if (snapshot.exists()) {
+        const users = snapshot.val();
+        const found = Object.values(users).find((u: any) => u.email === email) as User;
+        return found ? normalizeUser(found) : null;
+    }
+    return null;
+};
+
+// [아이디 찾기] 이름과 생년월일로 이메일 조회
+export const findUserIdByInfo = async (name: string, birth: string): Promise<string | null> => {
+    const snapshot = await get(ref(database, 'users'));
+    if (snapshot.exists()) {
+        const users = Object.values(snapshot.val()) as User[];
+        const found = users.find(u => u.name === name && u.birthDate === birth);
+        return found ? (found.id || found.email || null) : null;
+    }
+    return null;
 };
 
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
     const snapshot = await get(ref(database, 'users'));
-    const val = snapshot.val() || {};
-    Object.keys(val).forEach(k => { val[k] = normalizeUser(val[k]); });
-    return val;
+    return snapshot.val() || {};
+};
+
+// [아이디로 유저 조회] 로그인 아이디(id 필드)로 유저 정보 조회
+export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
+    // Index-independent lookup
+    const snapshot = await get(ref(database, 'users'));
+    if (snapshot.exists()) {
+        const users = snapshot.val();
+        // Check ID field OR Check Name (Key)
+        const found = Object.values(users).find((u: any) => u.id === id || u.name === id) as User;
+        if (found) return normalizeUser(found);
+        
+        // Also check transformed ID in keys
+        const safeId = toSafeId(id);
+        if (users[safeId]) return normalizeUser(users[safeId]);
+    }
+    return null;
+};
+
+// [마트 조회] 마트 타입의 유저만 필터링해서 가져오기
+export const fetchMartUsers = async (): Promise<User[]> => {
+    const snapshot = await get(ref(database, 'users'));
+    if (snapshot.exists()) {
+        const data = snapshot.val();
+        return (Object.values(data) as User[]).filter(u => u.type === 'mart').map(normalizeUser);
+    }
+    return [];
+};
+
+// [유저 검색] 이름으로 유저 목록 검색
+export const searchUsersByName = async (name: string): Promise<User[]> => {
+    const snapshot = await get(ref(database, 'users'));
+    if (snapshot.exists()) {
+        const data = snapshot.val();
+        const searchTerm = name.toLowerCase();
+        return (Object.values(data) as User[])
+            .filter(u => u.name.toLowerCase().includes(searchTerm))
+            .map(normalizeUser);
+    }
+    return [];
+};
+
+// [이미지 업로드] 프로필/상품 이미지 Firebase Storage 저장
+export const uploadImage = async (path: string, base64: string): Promise<string> => {
+    const fileRef = storageRef(storage, path);
+    await uploadString(fileRef, base64, 'data_url');
+    return getDownloadURL(fileRef);
 };
 
 export const saveDb = async (data: DB) => {
     const updates: any = {};
-    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'bonds', 'pendingApplications', 'termDeposits', 'mintingRequests', 'policyRequests', 'taxSessions', 'auction', 'deferredAuctions', 'signupSessions', 'stocks'];
+    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'stocks'];
     nodes.forEach(node => {
         if ((data as any)[node] !== undefined) updates[node] = (data as any)[node];
     });
@@ -126,174 +200,23 @@ export const saveDb = async (data: DB) => {
 
 export const generateId = (): string => rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
 
-// Add missing search functions
-export const searchUsersByName = async (name: string): Promise<User[]> => {
-    try {
-        const snapshot = await get(ref(database, 'users'));
-        if (!snapshot.exists()) return [];
-        const users = snapshot.val();
-        return Object.values(users)
-            .filter((u: any) => u.name && u.name.toLowerCase().includes(name.toLowerCase()))
-            .map(u => normalizeUser(u as User));
-    } catch (e) { return []; }
-};
-
-export const fetchMartUsers = async (): Promise<User[]> => {
-    try {
-        const snapshot = await get(ref(database, 'users'));
-        if (!snapshot.exists()) return [];
-        const users = snapshot.val();
-        return Object.values(users)
-            .filter((u: any) => u.type === 'mart')
-            .map(u => normalizeUser(u as User));
-    } catch (e) { return []; }
-};
-
-export const searchMessages = async (chatId: string, term: string): Promise<ChatMessage[]> => {
-    try {
-        const snapshot = await get(ref(database, `chatMessages/${chatId}`));
-        if (!snapshot.exists()) return [];
-        const msgs = snapshot.val();
-        return Object.values(msgs).filter((m: any) => m.text && m.text.includes(term)) as ChatMessage[];
-    } catch (e) { return []; }
+export const chatService = {
+    subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => onValue(ref(database, 'chatRooms'), (s) => callback(s.val() || {})),
+    subscribeToMessages: (chatId: string, limit: number = 20, callback: (messages: Record<string, ChatMessage>) => void) => onValue(query(ref(database, `chatMessages/${chatId}`), limitToLast(limit)), (s) => callback(s.val() || {})),
+    sendMessage: async (chatId: string, message: ChatMessage) => {
+        await set(ref(database, `chatMessages/${chatId}/${message.id}`), sanitize(message));
+        await update(ref(database, `chatRooms/${chatId}`), { lastMessage: message.text, lastTimestamp: message.timestamp });
+    },
+    createChat: async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string) => {
+        const chatId = `chat_${Date.now()}`;
+        await update(ref(database, `chatRooms/${chatId}`), sanitize({ id: chatId, participants, type, groupName: groupName || null }));
+        return chatId;
+    }
 };
 
 export const assetService = {
     fetchHistory: async (userId: string): Promise<AssetHistoryPoint[]> => {
-        const snapshot = await get(ref(database, `asset_histories/${userId}`));
-        const data = snapshot.val();
-        if (!data) return [];
-        return Array.isArray(data) ? data : Object.values(data);
-    },
-    recordHistory: async (userId: string, totalValue: number) => {
-        const historyRef = ref(database, `asset_histories/${userId}`);
-        await runTransaction(historyRef, (currentHistory) => {
-            if (!currentHistory) return [{ date: new Date().toISOString(), totalValue }];
-            const history = Array.isArray(currentHistory) ? currentHistory : Object.values(currentHistory);
-            const lastEntry = history[history.length - 1];
-            if (!lastEntry || (Date.now() - new Date(lastEntry.date).getTime() > 3600000) || Math.abs(totalValue - lastEntry.totalValue) / (lastEntry.totalValue || 1) > 0.01) {
-                if (history.length > 100) history.shift();
-                history.push({ date: new Date().toISOString(), totalValue });
-            }
-            return history;
-        });
-    }
-};
-
-export const fetchUserListLite = async (category: 'all' | 'citizen' | 'mart' | 'gov' | 'teacher'): Promise<{name: string, type: string}[]> => {
-    try {
-        const snapshot = await get(ref(database, 'users'));
-        if (!snapshot.exists()) return [];
-        const users = snapshot.val();
-        const list: {name: string, type: string}[] = [];
-        Object.values(users).forEach((u: any) => {
-            let matches = category === 'all';
-            if (category === 'citizen' && u.type === 'citizen') matches = true;
-            else if (category === 'mart' && u.type === 'mart') matches = true;
-            else if (category === 'gov' && (u.type === 'government' || u.type === 'official' || u.subType === 'govt')) matches = true;
-            else if (category === 'teacher' && (u.type === 'admin' || u.type === 'root' || u.subType === 'teacher')) matches = true;
-            if (matches) list.push({ name: u.name, type: u.type });
-        });
-        return list.sort((a,b) => a.name.localeCompare(b.name));
-    } catch (e) { return []; }
-};
-
-export const chatService = {
-    subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => {
-        const chatsRef = ref(database, 'chatRooms');
-        return onValue(chatsRef, (snapshot) => callback(snapshot.val() || {}));
-    },
-    subscribeToMessages: (chatId: string, limit: number = 20, callback: (messages: Record<string, ChatMessage>) => void) => {
-        const msgsRef = query(ref(database, `chatMessages/${chatId}`), limitToLast(limit));
-        return onValue(msgsRef, (snapshot) => callback(snapshot.val() || {}));
-    },
-    sendMessage: async (chatId: string, message: ChatMessage) => {
-        try {
-            const sanitizedMsg = sanitize(message);
-            await set(ref(database, `chatMessages/${chatId}/${message.id}`), sanitizedMsg);
-            await update(ref(database, `chatRooms/${chatId}`), {
-                lastMessage: message.text,
-                lastTimestamp: message.timestamp
-            });
-            fetch('/api/chat-send', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chatId, message: sanitizedMsg }),
-            }).catch(() => {});
-        } catch (error) { throw error; }
-    },
-    createChat: async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string, isTeamChat: boolean = false) => {
-        const chatId = `chat_${Date.now()}`;
-        const chatData = sanitize({
-            id: chatId,
-            participants,
-            type,
-            groupName: groupName || (type === 'group' ? '그룹 채팅' : null),
-            messages: {},
-            isTeamChat: isTeamChat && type === 'group' ? true : null,
-            ownerId: isTeamChat && type === 'group' ? participants[0] : null
-        });
-        await update(ref(database, `chatRooms/${chatId}`), chatData);
-        return chatId;
-    },
-    updateChatMetadata: async (chatId: string, data: Partial<Chat>) => {
-        await update(ref(database, `chatRooms/${chatId}`), sanitize(data));
-    },
-    findExistingPrivateChat: async (participants: string[]): Promise<string | null> => {
-        const snapshot = await get(ref(database, 'chatRooms'));
-        if (!snapshot.exists()) return null;
-        const rooms = snapshot.val();
-        const sortedTarget = [...participants].sort();
-        for (const [id, room] of Object.entries(rooms) as [string, Chat][]) {
-            if (room.type === 'private' && room.participants) {
-                if (JSON.stringify(sortedTarget) === JSON.stringify([...room.participants].sort())) return id;
-            }
-        }
-        return null;
-    },
-    updateMessage: async (chatId: string, msgId: string, data: Partial<ChatMessage>) => {
-        await update(ref(database, `chatMessages/${chatId}/${msgId}`), sanitize(data));
-    },
-    deleteMessage: async (chatId: string, msgId: string) => {
-        await update(ref(database, `chatMessages/${chatId}/${msgId}`), { isDeleted: true, text: "삭제된 메시지입니다.", attachment: null });
-    },
-    leaveChat: async (chatId: string, userId: string) => {
-        const chatRef = ref(database, `chatRooms/${chatId}`);
-        await runTransaction(chatRef, (chat) => {
-            if (chat && chat.participants) chat.participants = chat.participants.filter((p: string) => p !== userId);
-            return chat;
-        });
-    },
-    hideChat: async (chatId: string, userId: string) => {
-        await update(ref(database, `chatRooms/${chatId}/deletedBy/${userId}`), Date.now());
-    },
-    restoreChat: async (chatId: string, userId: string) => {
-        await update(ref(database, `chatRooms/${chatId}/deletedBy/${userId}`), null);
-    },
-    markRead: async (chatId: string, userId: string) => {
-        await update(ref(database, `chatRooms/${chatId}`), {
-            [`readStatus/${userId}`]: Date.now(),
-            [`manualUnread/${userId}`]: null,
-            [`deletedBy/${userId}`]: null
-        });
-    },
-    // Add missing methods to chatService
-    markManualUnread: async (chatId: string, userId: string) => {
-        await update(ref(database, `chatRooms/${chatId}/manualUnread/${userId}`), true);
-    },
-    togglePinChat: async (chatId: string, userId: string, isPinned: boolean) => {
-        await update(ref(database, `chatRooms/${chatId}/pinnedBy/${userId}`), isPinned ? Date.now() : null);
-    },
-    updatePinnedOrder: async (chatId: string, userId: string, newOrder: number) => {
-        await update(ref(database, `chatRooms/${chatId}/pinnedBy/${userId}`), newOrder);
-    },
-    muteChat: async (chatId: string, userId: string, isMuted: boolean) => {
-        const chatRef = ref(database, `chatRooms/${chatId}/mutedBy`);
-        await runTransaction(chatRef, (mutedBy) => {
-            let list = mutedBy || [];
-            if (isMuted) { if (!list.includes(userId)) list.push(userId); }
-            else { list = list.filter((id: string) => id !== userId); }
-            return list;
-        });
+        const snapshot = await get(ref(database, `asset_histories/${toSafeId(userId)}`));
+        return snapshot.exists() ? Object.values(snapshot.val()) : [];
     }
 };

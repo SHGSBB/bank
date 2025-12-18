@@ -1,67 +1,4 @@
 
-export interface AppInfoField {
-    label: string;
-    value: string;
-}
-
-export interface AppInfo {
-    version: string;
-    developer: string;
-    program: string;
-    support: string;
-    lastUpdate: string;
-    customFields?: AppInfoField[];
-}
-
-export interface ChatReaction {
-    user: string;
-    emoji: string;
-}
-
-export interface ChatAttachment {
-    type: 'id_card' | 'ui_element' | 'proposal' | 'image' | 'file' | 'application';
-    value: string; 
-    data?: any; 
-}
-
-export interface ChatMessage {
-    id: string;
-    sender: string;
-    text: string;
-    timestamp: number;
-    attachment?: ChatAttachment;
-    readBy?: string[];
-    replyTo?: string; 
-    threadId?: string;
-    isThreadRoot?: boolean;
-    isCollapsed?: boolean;
-    reactions?: ChatReaction[]; 
-    isDeleted?: boolean;
-    isEdited?: boolean;
-}
-
-export interface Chat {
-    id: string;
-    participants: string[]; 
-    type?: 'private' | 'group' | 'feedback'; 
-    groupName?: string;
-    localGroupNames?: Record<string, string>;
-    groupProfilePic?: string;
-    isTeamChat?: boolean;
-    ownerId?: string;
-    adminIds?: string[];
-    lastMessage?: string;
-    lastTimestamp?: number;
-    feedbackStatus?: 'open' | 'closed'; 
-    deletedBy?: Record<string, number>; 
-    mutedBy?: string[]; 
-    pinnedBy?: Record<string, number>; 
-    manualUnread?: Record<string, boolean>; 
-    readStatus?: Record<string, number>; 
-    messages?: Record<string, ChatMessage>;
-    unreadCount?: Record<string, number>; 
-}
-
 export interface UserPreferences {
     theme?: 'system' | 'light' | 'dark';
     isEasyMode?: boolean;
@@ -70,6 +7,7 @@ export interface UserPreferences {
     assetDisplayMode?: 'full' | 'rounded';
     biometricEnabled?: boolean;
     saveLoginHistory?: boolean;
+    use2FA?: boolean; // 2단계 인증 사용 여부
 }
 
 export interface IDCard {
@@ -139,6 +77,7 @@ export type GovtBranch = 'executive' | 'legislative' | 'judicial';
 export interface User {
     name: string;
     id?: string;
+    email?: string;
     password?: string;
     type: 'citizen' | 'mart' | 'government' | 'admin' | 'teacher' | 'root' | 'official';
     subType?: UserSubType;
@@ -453,6 +392,43 @@ export interface Judgement {
     timestamp: string;
     status: 'pending' | 'executed' | 'commuted';
     ministerNote?: string;
+}
+
+/**
+ * Added missing interfaces for AppInfo and Chat
+ */
+export interface AppInfo {
+    version: string;
+    developer: string;
+    program: string;
+    support: string;
+    lastUpdate: string;
+    customFields?: { label: string; value: string }[];
+}
+
+export interface ChatAttachment {
+    type: 'image' | 'file' | 'proposal' | 'application';
+    value: string;
+    data?: any;
+}
+
+export interface ChatMessage {
+    id: string;
+    sender: string;
+    text: string;
+    timestamp: number;
+    attachment?: ChatAttachment;
+    threadId?: string;
+}
+
+export interface Chat {
+    id: string;
+    participants: string[];
+    type: 'private' | 'group' | 'feedback';
+    groupName?: string;
+    lastMessage?: string;
+    lastTimestamp?: number;
+    messages?: Record<string, ChatMessage>;
 }
 
 export interface DB {

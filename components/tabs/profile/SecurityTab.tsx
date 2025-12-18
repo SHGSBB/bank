@@ -47,14 +47,10 @@ export const SecurityTab: React.FC = () => {
     const handlePinChangeSimple = async () => {
         if (!newPinSimple || (newPinSimple.length !== 4 && newPinSimple.length !== 6)) return showModal("PIN은 4자리 또는 6자리 숫자여야 합니다.");
         
-        // Re-verify current PIN before changing
         const current = await showPinModal("변경 확인을 위해 현재 PIN을 입력하세요.", currentUser?.pin!, (currentUser?.pinLength as 4 | 6) || 4);
         if(current !== currentUser?.pin) return;
         
-        // Update user state immediately
-        const updates = { pin: newPinSimple, pinLength: newPinSimple.length as any };
-        await updateUser(currentUser!.name, updates);
-        
+        await updateUser(currentUser!.name, { pin: newPinSimple, pinLength: newPinSimple.length as any });
         showModal('간편번호가 변경되었습니다.');
         setNewPinSimple('');
     };
@@ -68,7 +64,6 @@ export const SecurityTab: React.FC = () => {
 
     const handleToggleBiometric = async (val: boolean) => {
         if (val) {
-            // Registering
             const pin = await showPinModal("생체 인식을 등록하려면 PIN을 입력하세요.", currentUser?.pin!, (currentUser?.pinLength as 4 | 6) || 4, false);
             if (pin !== currentUser?.pin) return;
 
@@ -82,7 +77,6 @@ export const SecurityTab: React.FC = () => {
                 showModal("❌ 생체 정보 등록에 실패했습니다.");
             }
         } else {
-            // Disabling
             const prefs = currentUser?.preferences || {};
             await updateUser(currentUser!.name, { preferences: { ...prefs, biometricEnabled: false } });
             setBioEnabled(false);
@@ -90,8 +84,25 @@ export const SecurityTab: React.FC = () => {
         }
     };
 
+    const handleToggle2FA = async (val: boolean) => {
+        const prefs = currentUser?.preferences || {};
+        await updateUser(currentUser!.name, { preferences: { ...prefs, use2FA: val } });
+        showModal(val ? "로그인 시 2단계 인증(PIN)이 활성화되었습니다." : "2단계 인증이 비활성화되었습니다.");
+    };
+
     return (
         <div className="space-y-6">
+            {/* 2FA Section */}
+            <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-800">
+                <div className="flex justify-between items-center">
+                    <div>
+                        <h5 className="font-bold text-sm text-indigo-700 dark:text-indigo-300 uppercase mb-1">2단계 인증 (PIN)</h5>
+                        <p className="text-xs text-gray-500">로그인 시 추가로 간편번호를 확인합니다.</p>
+                    </div>
+                    <Toggle checked={currentUser?.preferences?.use2FA || false} onChange={handleToggle2FA} />
+                </div>
+            </div>
+
             {/* View Credentials Section */}
             <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-2xl border border-blue-200 dark:border-blue-800">
                 <h5 className="font-bold mb-2 text-sm text-blue-700 dark:text-blue-300 uppercase">내 계정 정보</h5>
@@ -99,15 +110,15 @@ export const SecurityTab: React.FC = () => {
                     <div className="space-y-2">
                         <div className="flex justify-between items-center p-2 bg-white dark:bg-black rounded">
                             <span className="text-sm text-gray-500">아이디</span>
-                            <span className="font-mono font-bold">{currentUser?.id}</span>
+                            <span className="font-mono font-bold text-black dark:text-white">{currentUser?.id}</span>
                         </div>
                         <div className="flex justify-between items-center p-2 bg-white dark:bg-black rounded">
                             <span className="text-sm text-gray-500">비밀번호</span>
-                            <span className="font-mono font-bold">{currentUser?.password}</span>
+                            <span className="font-mono font-bold text-black dark:text-white">{currentUser?.password}</span>
                         </div>
                         <div className="flex justify-between items-center p-2 bg-white dark:bg-black rounded">
                             <span className="text-sm text-gray-500">PIN</span>
-                            <span className="font-mono font-bold">{currentUser?.pin}</span>
+                            <span className="font-mono font-bold text-black dark:text-white">{currentUser?.pin}</span>
                         </div>
                         <Button onClick={() => setShowCredentials(false)} variant="secondary" className="w-full mt-2 py-2 text-xs">숨기기</Button>
                     </div>
