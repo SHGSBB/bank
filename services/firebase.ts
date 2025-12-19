@@ -1,4 +1,3 @@
-
 import * as firebaseApp from "firebase/app";
 import { 
     getDatabase, 
@@ -47,12 +46,9 @@ export const storage = getStorage(app);
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
-/**
- * Converts dot (.) to underscore (_) for safe Firebase RTDB keys
- */
-export const toSafeId = (id: string) => id.replace(/\./g, '_');
+// Standardized safe ID generator for both client and API
+export const toSafeId = (id: string) => (id || '').trim().toLowerCase().replace(/[@.]/g, '_');
 
-// [회원가입] 이메일 중복 시 자동 에일리어싱 (+1, +2...) 시도
 export const registerWithAutoRetry = async (email: string, pass: string, retryCount = 0): Promise<FirebaseUser> => {
     let tryEmail = email;
     if (retryCount > 0) {
@@ -77,7 +73,6 @@ export const loginWithEmail = async (email: string, pass: string) => {
     return userCredential.user;
 };
 
-// [비밀번호 재설정]
 export const resetUserPassword = async (email: string) => {
     await sendPasswordResetEmail(auth, email);
     return true;
@@ -109,7 +104,6 @@ const normalizeUser = (user: User): User => {
     return user;
 };
 
-// [성능 최적화] 특정 유저 정보만 콕 집어서 가져오기
 export const fetchUser = async (userName: string): Promise<User | null> => {
     const snapshot = await get(ref(database, `users/${toSafeId(userName)}`));
     return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
@@ -120,14 +114,10 @@ export const fetchUserByEmail = async (email: string): Promise<User | null> => {
     if (snapshot.exists()) {
         const users = snapshot.val();
         const searchTerm = email.trim().toLowerCase();
-        
-        // Exact match or Aliased match (e.g. user@gmail.com matches user+1@gmail.com record if it's the base email)
         const found = Object.values(users).find((u: any) => {
             if (!u.email) return false;
             const userEmail = u.email.toLowerCase();
             if (userEmail === searchTerm) return true;
-            
-            // Check if the provided email is the "base" of an aliased email
             if (searchTerm.includes('@') && userEmail.includes('+')) {
                 const [inputLocal, inputDomain] = searchTerm.split('@');
                 const [storedLocal, storedDomain] = userEmail.split('@');
@@ -136,13 +126,11 @@ export const fetchUserByEmail = async (email: string): Promise<User | null> => {
             }
             return false;
         }) as User;
-        
         return found ? normalizeUser(found) : null;
     }
     return null;
 };
 
-// [아이디 찾기] 이름과 생년월일로 이메일 조회
 export const findUserIdByInfo = async (name: string, birth: string): Promise<string | null> => {
     const searchName = name.trim().toLowerCase();
     const searchBirth = birth.trim();
@@ -160,66 +148,56 @@ export const fetchAllUsers = async (): Promise<Record<string, User>> => {
     return snapshot.val() || {};
 };
 
-// [아이디로 유저 조회] 로그인 아이디(id 필드)로 유저 정보 조회
+// Fix for TransferTab: Added missing searchUsersByName helper
+export const searchUsersByName = async (name: string): Promise<User[]> => {
+    const users = await fetchAllUsers();
+    const term = name.trim().toLowerCase();
+    return Object.values(users).filter(u => 
+        (u.name || "").toLowerCase().includes(term) || 
+        (u.nickname || "").toLowerCase().includes(term)
+    );
+};
+
+// Fix for PurchaseTab: Added missing fetchMartUsers helper
+export const fetchMartUsers = async (): Promise<User[]> => {
+    const users = await fetchAllUsers();
+    return Object.values(users).filter(u => u.type === 'mart' && u.approvalStatus === 'approved');
+};
+
 export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
     const input = id.trim().toLowerCase();
     const snapshot = await get(ref(database, 'users'));
     if (snapshot.exists()) {
         const users = snapshot.val();
-        
-        // 1. Check direct fields: ID, Name, or Email (Case-insensitive)
         const found = Object.values(users).find((u: any) => 
             (u.id || "").toLowerCase() === input || 
             (u.name || "").toLowerCase() === input || 
             (u.email || "").toLowerCase() === input
         ) as User;
-        
         if (found) return normalizeUser(found);
-
-        // 2. Also check transformed ID in keys
-        const safeId = toSafeId(id.trim()); // Original case for key lookup first
+        const safeId = toSafeId(id.trim());
         if (users[safeId]) return normalizeUser(users[safeId]);
-        
-        // Try safeId with lowercase if not found
-        const safeIdLower = toSafeId(input);
-        if (users[safeIdLower]) return normalizeUser(users[safeIdLower]);
-        
-        // 3. If input is email, try aliased match
-        if (input.includes('@')) {
-            return fetchUserByEmail(input);
-        }
     }
     return null;
 };
 
-// [마트 조회] 마트 타입의 유저만 필터링해서 가져오기
-export const fetchMartUsers = async (): Promise<User[]> => {
-    const snapshot = await get(ref(database, 'users'));
-    if (snapshot.exists()) {
-        const data = snapshot.val();
-        return (Object.values(data) as User[]).filter(u => u.type === 'mart').map(normalizeUser);
-    }
-    return [];
-};
-
-// [유저 검색] 이름으로 유저 목록 검색
-export const searchUsersByName = async (name: string): Promise<User[]> => {
-    const snapshot = await get(ref(database, 'users'));
-    if (snapshot.exists()) {
-        const data = snapshot.val();
-        const searchTerm = name.toLowerCase();
-        return (Object.values(data) as User[])
-            .filter(u => (u.name || "").toLowerCase().includes(searchTerm))
-            .map(normalizeUser);
-    }
-    return [];
-};
-
-// [이미지 업로드] 프로필/상품 이미지 Firebase Storage 저장
 export const uploadImage = async (path: string, base64: string): Promise<string> => {
-    const fileRef = storageRef(storage, path);
-    await uploadString(fileRef, base64, 'data_url');
-    return getDownloadURL(fileRef);
+    // Standardize path and remove potential dangerous chars
+    const cleanPath = path.trim().replace(/[^a-zA-Z0-9\/._-]/g, '_');
+    const fileRef = storageRef(storage, cleanPath);
+    
+    if (!base64.startsWith('data:')) {
+        throw new Error('Invalid image format: Must be a data_url');
+    }
+
+    try {
+        await uploadString(fileRef, base64, 'data_url');
+        const url = await getDownloadURL(fileRef);
+        return url;
+    } catch (e: any) {
+        console.error("Firebase Storage Upload Error:", e);
+        throw new Error(`Upload failed: ${e.message}`);
+    }
 };
 
 export const saveDb = async (data: DB) => {

@@ -11,24 +11,24 @@ export const AccountTab: React.FC = () => {
     const [isInternalLoading, setIsInternalLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     
-    // 무한 로딩 방지를 위한 상태 관리 레퍼런스
     const fetchStatusRef = useRef<'idle' | 'loading' | 'success' | 'error'>('idle');
 
+    const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
+
     const loadLinked = async () => {
-        // 이미 로딩 중이거나 성공했다면 다시 호출하지 않음
         if (fetchStatusRef.current === 'loading' || !currentUser) return;
 
-        const linkedIds = currentUser.linkedAccounts || [];
-        if (linkedIds.length === 0) {
+        const linkedEmails = currentUser.linkedAccounts || [];
+        if (linkedEmails.length === 0) {
             setCachedLinkedUsers([]);
             fetchStatusRef.current = 'success';
             return;
         }
 
-        // 캐시된 데이터와 실제 데이터 개수가 같고 내용이 같다면 로딩 스킵
-        const cachedIds = cachedLinkedUsers.map(u => u.name);
-        const isAlreadyMatched = linkedIds.length === cachedIds.length && 
-                               linkedIds.every(id => cachedIds.includes(id));
+        // Compare using emails to prevent disappearing due to key mismatch
+        const cachedEmails = cachedLinkedUsers.map(u => u.email);
+        const isAlreadyMatched = linkedEmails.length === cachedEmails.length && 
+                               linkedEmails.every(e => cachedEmails.includes(e));
         
         if (isAlreadyMatched && fetchStatusRef.current === 'success') {
             return;
@@ -39,7 +39,7 @@ export const AccountTab: React.FC = () => {
         setLoadError(null);
 
         try {
-            const res = await serverAction('fetch_linked_accounts', { linkedIds });
+            const res = await serverAction('fetch_linked_accounts', { linkedIds: linkedEmails });
             if (res && res.accounts) {
                 setCachedLinkedUsers(res.accounts);
                 fetchStatusRef.current = 'success';
@@ -47,7 +47,6 @@ export const AccountTab: React.FC = () => {
                 throw new Error("Invalid response");
             }
         } catch (e) {
-            console.error("Linked accounts load failed", e);
             setLoadError("계정 정보를 불러오지 못했습니다.");
             fetchStatusRef.current = 'error';
         } finally {
@@ -56,20 +55,18 @@ export const AccountTab: React.FC = () => {
     };
 
     useEffect(() => {
-        // 컴포넌트 마운트 시 혹은 연동 계정 목록이 바뀌었을 때만 실행
         fetchStatusRef.current = 'idle';
         loadLinked();
-    }, [currentUser?.linkedAccounts?.join(',')]);
+    }, [currentUser?.linkedAccounts?.length]); // Watch length to trigger reload on change
 
-    const handleSwitch = async (targetName: string | undefined) => {
-        if (!targetName) return;
+    const handleSwitch = async (targetEmail: string | undefined) => {
+        if (!targetEmail) return;
         const pin = await showPinModal("계정 전환 인증", currentUser?.pin!, (currentUser?.pinLength as any) || 4);
         if (pin !== currentUser?.pin) return;
 
-        const success = await switchAccount(targetName);
+        const success = await switchAccount(targetEmail);
         if (success) {
             showModal("계정이 전환되었습니다.");
-            // 전환 후에는 새로운 사용자 기준으로 다시 로드해야 하므로 idle 상태로 변경
             fetchStatusRef.current = 'idle';
             await refreshData();
         }
@@ -79,18 +76,21 @@ export const AccountTab: React.FC = () => {
         if (!linkId || !linkPw) return showModal("정보를 입력하세요.");
         setIsInternalLoading(true);
         try {
-            await serverAction('link_account', {
-                myName: currentUser!.name,
-                targetId: linkId,
-                targetPw: linkPw
+            const res = await serverAction('link_account', {
+                myEmail: currentUser!.email,
+                targetId: linkId.trim(),
+                targetPw: linkPw.trim()
             });
+            
+            if (res.error) throw new Error(res.error);
+
             showModal("계정이 성공적으로 연동되었습니다.");
             setIsLinkModalOpen(false);
             setLinkId(''); setLinkPw('');
-            fetchStatusRef.current = 'idle'; // 새로운 연동이 생겼으므로 다시 불러오기 유도
-            await refreshData(); 
+            fetchStatusRef.current = 'idle';
+            await refreshData(); // Pull latest linkedAccounts array
         } catch (e: any) {
-            showModal("연동 실패: 정보가 일치하지 않거나 이미 연동된 계정입니다.");
+            showModal("연동 실패: " + (e.message || "정보가 일치하지 않거나 이미 연동된 계정입니다."));
         } finally {
             setIsInternalLoading(false);
         }
@@ -100,7 +100,7 @@ export const AccountTab: React.FC = () => {
         if (!await showConfirm("정말 연동을 해제하시겠습니까?")) return;
         setIsInternalLoading(true);
         try {
-            await serverAction('unlink_account', { myName: currentUser!.name, targetName });
+            await serverAction('unlink_account', { myEmail: currentUser!.email, targetName });
             showModal("연동이 해제되었습니다.");
             fetchStatusRef.current = 'idle';
             await refreshData();
@@ -141,7 +141,7 @@ export const AccountTab: React.FC = () => {
                         <p className="text-center text-gray-400 py-6 text-sm bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">연동된 계정이 없습니다.</p>
                     )}
                     {cachedLinkedUsers.map((acc: any) => (
-                        <div key={acc.name} className="flex items-center justify-between p-4 bg-white dark:bg-[#1E1E1E] border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
+                        <div key={acc.email} className="flex items-center justify-between p-4 bg-white dark:bg-[#1E1E1E] border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-800 overflow-hidden">
                                     {acc.profilePic ? <img src={acc.profilePic} className="w-full h-full object-cover" /> : <span className="flex items-center justify-center h-full font-bold text-gray-400">{acc.name?.[0]}</span>}
@@ -152,7 +152,7 @@ export const AccountTab: React.FC = () => {
                                 </div>
                             </div>
                             <div className="flex gap-2">
-                                <Button onClick={() => handleSwitch(acc.name)} variant="secondary" className="text-[10px] py-1 px-3 rounded-lg">전환</Button>
+                                <Button onClick={() => handleSwitch(acc.email)} variant="secondary" className="text-[10px] py-1 px-3 rounded-lg">전환</Button>
                                 <button onClick={() => handleUnlink(acc.name)} className="text-[10px] text-red-500 font-bold px-2">해제</button>
                             </div>
                         </div>
@@ -163,17 +163,28 @@ export const AccountTab: React.FC = () => {
                 </div>
             </div>
 
-            <div className="pt-6 space-y-4">
-                {(currentUser?.type === 'admin' || currentUser?.subType === 'teacher' || currentUser?.isPresident) && (
-                    <button onClick={async () => { const pin = await showPinModal("관리자 인증", currentUser?.pin!, (currentUser?.pinLength as any)||4); if(pin === currentUser?.pin) setAdminMode(true); }} className="w-full py-2 text-gray-400 text-xs underline text-center">관리자 대시보드 진입</button>
+            <div className="pt-6 space-y-3">
+                {isBOK && (
+                    <button 
+                        onClick={async () => { 
+                            const pin = await showPinModal("관리자 모드 진입 인증", currentUser?.pin!, (currentUser?.pinLength as any)||4); 
+                            if(pin === currentUser?.pin) setAdminMode(true); 
+                        }} 
+                        className="w-full py-2 text-gray-400 text-[11px] font-bold underline text-center hover:text-green-600 transition-colors"
+                    >
+                        한국은행 중앙통제실 진입
+                    </button>
                 )}
-                <button onClick={logout} className="w-full py-4 bg-red-50 dark:bg-red-900/10 text-red-600 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-sm"><LineIcon icon="logout" className="w-5 h-5" /> 로그아웃</button>
+                
+                <button onClick={logout} className="w-full py-4 bg-red-50 dark:bg-red-900/10 text-red-600 rounded-2xl font-bold flex items-center justify-center gap-2 shadow-sm">
+                    <LineIcon icon="logout" className="w-5 h-5" /> 로그아웃
+                </button>
             </div>
 
             <Modal isOpen={isLinkModalOpen} onClose={() => setIsLinkModalOpen(false)} title="계정 연동">
                 <div className="space-y-4">
-                    <p className="text-xs text-gray-500">연동할 계정의 아이디와 비밀번호를 입력하세요. 연동 후에는 PIN 인증만으로 계정을 즉시 전환할 수 있습니다.</p>
-                    <Input placeholder="연동할 아이디" value={linkId} onChange={e => setLinkId(e.target.value)} />
+                    <p className="text-xs text-gray-500">연동할 계정의 아이디(ID 또는 이메일)와 비밀번호를 입력하세요.</p>
+                    <Input placeholder="연동할 계정의 아이디" value={linkId} onChange={e => setLinkId(e.target.value)} />
                     <Input type="password" placeholder="해당 계정 비밀번호" value={linkPw} onChange={e => setLinkPw(e.target.value)} />
                     <Button onClick={handleLinkExisting} className="w-full py-4" disabled={isInternalLoading}>{isInternalLoading ? "확인 중..." : "연동하기"}</Button>
                 </div>

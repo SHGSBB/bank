@@ -22,11 +22,10 @@ export const StandardTableTab: React.FC = () => {
 
     const [stds, setStds] = useState<Standards>(db.settings.standards || defaultStandards);
     
-    // UI Helpers
-    const isAdminOrPresident = currentUser?.type === 'admin' || currentUser?.isPresident;
+    // UI Helpers: 한국은행장도 관리자와 동일하게 즉시 저장 권한 부여
+    const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
+    const isAdminOrPresident = currentUser?.type === 'admin' || currentUser?.isPresident || isBOK;
     const isTaxSeparated = db.settings.taxSeparation;
-    // Specific check for Bank of Korea Governor
-    const isBankGovernor = currentUser?.customJob === '한국은행장' || currentUser?.govtRole === '한국은행장' || currentUser?.type === 'admin';
 
     // Temporary Rule State for Adder
     const [newRuleThreshold, setNewRuleThreshold] = useState('');
@@ -117,9 +116,8 @@ export const StandardTableTab: React.FC = () => {
                                     {renderField(stds.taxRateProperty, v => handleChange('taxRateProperty', v))}
                                     <span>%</span>
                                 </div>
-                                {/* Progressive Rules Display for Property */}
                                 <div className="mt-2 bg-gray-50 dark:bg-gray-900 p-2 rounded text-xs space-y-1">
-                                    <p className="font-bold text-gray-500">누진세 기준 (밑)</p>
+                                    <p className="font-bold text-gray-500">누진세 기준</p>
                                     {stds.progressivePropertyRules?.map((r, i) => (
                                         <div key={i} className="flex justify-between">
                                             <span>{r.threshold.toLocaleString()} 이상: +{r.value}{r.type==='percent'?'%':'원'}</span>
@@ -150,7 +148,7 @@ export const StandardTableTab: React.FC = () => {
                                     <span>%</span>
                                 </div>
                                 <div className="mt-2 bg-gray-50 dark:bg-gray-900 p-2 rounded text-xs space-y-1">
-                                    <p className="font-bold text-gray-500">누진세 기준 (밑)</p>
+                                    <p className="font-bold text-gray-500">누진세 기준</p>
                                     {stds.progressiveIncomeRules?.map((r, i) => (
                                         <div key={i} className="flex justify-between">
                                             <span>{r.threshold.toLocaleString()} 이상: +{r.value}{r.type==='percent'?'%':'원'}</span>
@@ -162,7 +160,7 @@ export const StandardTableTab: React.FC = () => {
                             </div>
 
                             <div>
-                                <label className="font-bold text-sm block mb-1">취득세 (부동산 거래 시)</label>
+                                <label className="font-bold text-sm block mb-1">취득세</label>
                                 <div className="flex items-center gap-2">
                                     {renderField(stds.taxRateAcquisition || 0, v => handleChange('taxRateAcquisition', v))}
                                     <span>%</span>
@@ -197,15 +195,14 @@ export const StandardTableTab: React.FC = () => {
                             </div>
                         ) : (
                             <div className="space-y-4 animate-fade-in">
-                                <p className="text-xs text-red-500 font-bold bg-red-50 p-2 rounded">* 역량별 주급 활성화 시, 자동 주급 지급이 비활성화됩니다 (수동/성과 지급).</p>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                     {['prosecutor', 'legislator', 'speaker', 'judge', 'chiefJustice'].map(role => (
                                         <div key={role}>
                                             <label className="font-bold text-sm block mb-1 capitalize">
-                                                {role === 'prosecutor' ? '검사 (기소 시)' : 
-                                                 role === 'legislator' ? '국회의원 (법 제정 시)' :
-                                                 role === 'speaker' ? '국회의장 (법 제정 시)' :
-                                                 role === 'judge' ? '법원 (재판 시)' : '대법원장 (재판 시)'}
+                                                {role === 'prosecutor' ? '검사' : 
+                                                 role === 'legislator' ? '국회의원' :
+                                                 role === 'speaker' ? '국회의장' :
+                                                 role === 'judge' ? '법원' : '대법원장'}
                                             </label>
                                             {renderField(stds.competencyWages?.[role] || 0, v => handleNestedChange('competencyWages', role, v))}
                                         </div>
@@ -228,55 +225,12 @@ export const StandardTableTab: React.FC = () => {
                             <label className="font-bold text-sm block mb-1">주세 지원금</label>
                             {renderField(stds.welfare?.housingSupport || 0, v => handleNestedChange('welfare', 'housingSupport', v))}
                         </div>
-                        <div>
-                            <label className="font-bold text-sm block mb-1">추가 기준 (텍스트)</label>
-                            {isAdminOrPresident ? (
-                                <textarea 
-                                    className="w-full p-2 border rounded bg-white dark:bg-black text-sm"
-                                    rows={3}
-                                    value={stds.welfare?.additionalRules || ''}
-                                    onChange={e => handleNestedChange('welfare', 'additionalRules', e.target.value)}
-                                    placeholder="예: 다자녀 가구 추가 지원 10%, 장애인 가구 지원 등..."
-                                />
-                            ) : (
-                                <p className="text-sm bg-gray-50 p-2 rounded">{stds.welfare?.additionalRules || "없음"}</p>
-                            )}
-                        </div>
                     </div>
                 </div>
 
-                {/* Rule Adder (Hidden mostly) */}
-                {isAdminOrPresident && (
-                    <div id="ruleAdder" className="p-4 border rounded-xl bg-blue-50 dark:bg-blue-900/10 flex flex-wrap gap-3 items-end">
-                        <div>
-                            <label className="text-xs block font-bold mb-1">누진세 규칙 추가</label>
-                            <select value={newRuleCategory} onChange={e => setNewRuleCategory(e.target.value as any)} className="text-sm p-2 rounded border">
-                                <option value="property">재산/종부세</option>
-                                <option value="income">소득세</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="text-xs block mb-1">기준 금액 (이상)</label>
-                            <Input type="number" value={newRuleThreshold} onChange={e => setNewRuleThreshold(e.target.value)} className="w-32 py-1 text-sm" placeholder="0" />
-                        </div>
-                        <div>
-                            <label className="text-xs block mb-1">방식</label>
-                            <select value={newRuleType} onChange={e => setNewRuleType(e.target.value as any)} className="text-sm p-2 rounded border">
-                                <option value="percent">퍼센트(%) 추가</option>
-                                <option value="fixed">고정금액(+) 추가</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label className="text-xs block mb-1">값</label>
-                            <Input type="number" value={newRuleValue} onChange={e => setNewRuleValue(e.target.value)} className="w-24 py-1 text-sm" placeholder="0" />
-                        </div>
-                        <Button onClick={handleAddRule} className="text-sm py-2">추가</Button>
-                    </div>
-                )}
-
                 {isAdminOrPresident && (
                     <Button className="w-full py-4 text-lg" onClick={handleSave}>
-                        {currentUser?.type === 'admin' ? '저장 및 적용' : '변경 요청 (대통령)'}
+                        저장 및 즉시 적용
                     </Button>
                 )}
             </div>

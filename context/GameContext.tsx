@@ -25,10 +25,11 @@ interface GameContextType {
     db: DB;
     currentUser: User | null;
     isAdminMode: boolean;
+    toasts: ToastNotification[];
     setAdminMode: (val: boolean) => void;
     login: (id: string, pass: string, remember?: boolean) => Promise<boolean>;
     logout: () => Promise<void>;
-    updateUser: (name: string, data: Partial<User>) => Promise<void>;
+    updateUser: (email: string, data: Partial<User>) => Promise<void>;
     registerUser: (userData: Partial<User>, password: string) => Promise<void>;
     isLoading: boolean;
     showPinModal: (message: string, expectedPin?: string, length?: 4 | 6, allowBiometric?: boolean) => Promise<string | null>;
@@ -82,6 +83,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [cachedLinkedUsers, setCachedLinkedUsers] = useState<any[]>([]);
     const [isElementPicking, setElementPicking] = useState(false);
     const [cachedMarts, setCachedMarts] = useState<User[]>([]);
+    const [toasts, setToasts] = useState<ToastNotification[]>([]);
 
     const refreshData = useCallback(async () => {
         try {
@@ -89,6 +91,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setDb(prev => ({ ...prev, ...data }));
         } catch(e) { console.error("Global Data Fetch Error:", e); }
     }, []);
+
+    const isBOKUser = (user: User | null) => {
+        if (!user) return false;
+        return user.name === '한국은행' || user.govtRole === '한국은행장' || user.customJob === '한국은행장';
+    };
 
     useEffect(() => {
         const unsubscribe = subscribeAuth(async (firebaseUser) => {
@@ -99,14 +106,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     return;
                 }
                 const userData = await fetchUserByEmail(firebaseUser.email!);
-                if (userData && userData.approvalStatus === 'approved') {
+                if (userData && (userData.approvalStatus === 'approved' || isBOKUser(userData))) {
                     setCurrentUser(userData);
-                    await update(ref(database, `users/${toSafeId(userData.name)}`), { isOnline: true, lastActive: Date.now() });
+                    if (isBOKUser(userData)) setAdminMode(true);
+                    await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });
                 } else {
                     await logoutFirebase();
                 }
             } else {
                 setCurrentUser(null);
+                setAdminMode(false);
             }
             setIsLoading(false);
         });
@@ -144,12 +153,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
-            console.log(`Starting login resolution for: ${inputId}`);
-
-            // 1. Try to find user in DB to get their actual email (Case-insensitive resolution handled in services/firebase.ts)
             let userData = await fetchUserByLoginId(inputId);
-            
-            // If not found and input looks like email, try fetching by email directly
             if (!userData && inputId.includes('@')) {
                 userData = await fetchUserByEmail(inputId);
             }
@@ -157,25 +161,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             let actualEmail = inputId;
             if (userData && userData.email) {
                 actualEmail = userData.email;
-                console.log(`Resolved email from DB: ${actualEmail}`);
             } else {
-                // Not found locally. Try server-side lookup (which handles index-less filtering and case sensitivity)
                 try {
                     const res = await serverAction('get_user_email', { id: inputId });
                     if (res && res.email) {
                         actualEmail = res.email;
-                        console.log(`Resolved email from server: ${actualEmail}`);
-                        userData = await fetchUserByEmail(actualEmail);
-                    } else {
-                        // Fallback: If it's not an email format and we can't resolve it, it's definitely not a valid user.
-                        if (!inputId.includes('@')) {
-                            setAlertMessage("존재하지 않는 사용자 아이디입니다.");
-                            return false;
-                        }
+                    } else if (!inputId.includes('@')) {
+                        setAlertMessage("존재하지 않는 사용자 아이디입니다.");
+                        return false;
                     }
                 } catch (e) {
-                    console.error("Resolution error:", e);
-                    // Continue with inputId if it looks like an email, otherwise fail
                     if (!inputId.includes('@')) {
                         setAlertMessage("사용자 정보를 확인하는 중 오류가 발생했습니다.");
                         return false;
@@ -183,54 +178,36 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
             }
 
-            // Final check on email format before calling Firebase Auth to avoid generic invalid-credential errors
-            if (!actualEmail.includes('@') || actualEmail.length < 5) {
-                setAlertMessage("가입되지 않은 정보이거나 아이디 형식이 올바르지 않습니다.");
-                return false;
-            }
-
-            // 2. Firebase Auth login with Resolved Email
             try {
                 const fUser = await loginWithEmail(actualEmail.toLowerCase(), pass);
-                
                 if (!fUser.emailVerified) {
-                    setAlertMessage("이메일 인증이 완료되지 않았습니다. 메일함을 확인해주세요.");
+                    setAlertMessage("이메일 인증이 완료되지 않았습니다.");
                     await logoutFirebase();
                     return false;
                 }
 
-                // Refresh userData in case resolution was partial or out of date
+                userData = await fetchUserByEmail(fUser.email!);
                 if (!userData) {
-                    userData = await fetchUserByEmail(fUser.email!);
-                }
-
-                if (!userData) {
-                    setAlertMessage("인증은 성공했으나 사용자 데이터가 없습니다. 관리자에게 문의하세요.");
+                    setAlertMessage("계정 데이터가 존재하지 않습니다.");
                     await logoutFirebase();
                     return false;
                 }
 
-                if (userData.approvalStatus !== 'approved') {
+                if (userData.approvalStatus !== 'approved' && !isBOKUser(userData)) {
                     setAlertMessage("승인 대기 중이거나 비활성화된 계정입니다.");
                     await logoutFirebase();
                     return false;
                 }
 
                 setCurrentUser(userData);
-                if (remember) localStorage.setItem('sh_user_id', userData.name);
-                await update(ref(database, `users/${toSafeId(userData.name)}`), { isOnline: true, lastActive: Date.now() });
+                if (isBOKUser(userData)) setAdminMode(true);
+                
+                if (remember) localStorage.setItem('sh_user_id', userData.email!);
+                await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });
                 
                 return true;
             } catch (authError: any) {
-                console.error("Firebase Auth Error:", authError.code, authError.message);
-                // auth/invalid-credential is the generic code for both wrong password and wrong email in v10+
-                if (authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password' || authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-email') {
-                    setAlertMessage("아이디 또는 비밀번호가 올바르지 않습니다.");
-                } else if (authError.code === 'auth/too-many-requests') {
-                    setAlertMessage("너무 많은 로그인 시도가 감지되었습니다. 잠시 후 다시 시도하세요.");
-                } else {
-                    setAlertMessage(`로그인 실패: ${authError.message}`);
-                }
+                setAlertMessage("아이디 또는 비밀번호가 올바르지 않습니다.");
                 return false;
             }
         } finally {
@@ -238,24 +215,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const requestPasswordReset = async (email: string) => {
-        try {
-            await resetUserPassword(email.trim().toLowerCase());
-            setAlertMessage("비밀번호 재설정 이메일을 보냈습니다.");
-        } catch (e) {
-            setAlertMessage("이메일 전송 실패: 가입된 주소인지 확인해주세요.");
-        }
-    };
-
     const logout = async () => {
         setSimulatedLoading(true);
         if (currentUser) {
             try {
-                await update(ref(database, `users/${toSafeId(currentUser.name)}`), { isOnline: false });
+                await update(ref(database, `users/${toSafeId(currentUser.email!)}`), { isOnline: false });
             } catch(e) {}
         }
         await logoutFirebase();
         setCurrentUser(null);
+        setAdminMode(false);
         setSimulatedLoading(false);
     };
 
@@ -263,13 +232,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSimulatedLoading(true);
         try {
             const fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
-            const userId = userData.id || userData.email!;
-            const safeId = toSafeId(userData.name || userId);
+            const userEmail = fUser.email!.trim().toLowerCase();
+            const safeId = toSafeId(userEmail);
             
             const newUser = { 
                 ...userData, 
-                id: userId.trim(),
-                email: fUser.email!, 
+                id: userData.id || userEmail,
+                email: userEmail, 
                 approvalStatus: userData.approvalStatus || 'pending', 
                 balanceKRW: 0, 
                 balanceUSD: 0, 
@@ -277,7 +246,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             };
             
             await set(ref(database, `users/${safeId}`), newUser);
-            // Alert message is handled by the component
         } catch (e: any) {
             console.error("registerUser Error:", e);
             throw e;
@@ -286,8 +254,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const updateUser = async (name: string, data: Partial<User>) => {
-        await update(ref(database, `users/${toSafeId(name)}`), JSON.parse(JSON.stringify(data)));
+    const updateUser = async (email: string, data: Partial<User>) => {
+        const userEmail = email || currentUser?.email;
+        if (!userEmail) return;
+        await update(ref(database, `users/${toSafeId(userEmail)}`), JSON.parse(JSON.stringify(data)));
         await refreshData();
     };
 
@@ -311,20 +281,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     const notify = async (targetUser: string, message: string, isPersistent = false, action?: any, actionData?: any) => {
         const notifId = `n_${Date.now()}`;
-        const newNotif = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info', timestamp: Date.now(), action, actionData };
+        const newNotif = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info' as const, timestamp: Date.now(), action, actionData };
+        
+        setToasts(prev => [...prev, newNotif]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
+
         if (targetUser === 'ALL') {
             const usersSnap = await get(ref(database, 'users'));
             const users = usersSnap.val() || {};
             const updates: any = {};
-            Object.keys(users).forEach(uname => { updates[`users/${toSafeId(uname)}/notifications/${notifId}`] = newNotif; });
+            Object.keys(users).forEach(ukey => { updates[`users/${ukey}/notifications/${notifId}`] = newNotif; });
             await update(ref(database), updates);
         } else {
-            await update(ref(database, `users/${toSafeId(targetUser)}/notifications/${notifId}`), newNotif);
+            const allUsers = await fetchAllUsers();
+            const targetKey = Object.keys(allUsers).find(k => allUsers[k].name === targetUser || allUsers[k].email === targetUser);
+            if (targetKey) await update(ref(database, `users/${targetKey}/notifications/${notifId}`), newNotif);
         }
     };
 
     const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
-    const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.name)); };
+    const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.email!)); };
 
     const requestNotificationPermission = async () => { if ('Notification' in window) await Notification.requestPermission(); };
     
@@ -339,7 +315,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await chatService.sendMessage(chatId, msg);
     };
 
-    const clearPaidTax = async () => { /* Logic already implemented in TaxTab */ };
     const wait = (type: 'light' | 'heavy') => new Promise<void>(resolve => setTimeout(resolve, type === 'light' ? 500 : 1500));
     
     const requestPolicyChange = async (type: string, data: any, description: string) => {
@@ -359,8 +334,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 else newDb.auction.teams[from].splice(memberIdx, 1);
             }
         }
-        // Remove Notification
-        const userNotifsRef = ref(database, `users/${toSafeId(currentUser.name)}/notifications/${notifId}`);
+        const userNotifsRef = ref(database, `users/${toSafeId(currentUser.email!)}/notifications/${notifId}`);
         await set(userNotifsRef, null);
         await saveDb(newDb);
     };
@@ -370,38 +344,30 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await refreshData(); 
     };
 
-    const markChatRead = async (chatId: string) => {};
     const applyBankruptcy = async () => {
         if (!currentUser) return;
-        if (!await showConfirm("정말 파산을 신청하시겠습니까? 모든 자산(KRW, USD, 주식, 예금, 부동산)이 초기화됩니다.")) return;
-        const pin = await showPinModal("파산 확정을 위해 PIN을 입력하세요.", currentUser.pin!);
+        if (!await showConfirm("정말 파산을 신청하시겠습니까?")) return;
+        const pin = await showPinModal("PIN 입력", currentUser.pin!);
         if (pin !== currentUser.pin) return;
 
         const newDb = { ...db };
-        const user = newDb.users[currentUser.name];
+        const userKey = toSafeId(currentUser.email!);
+        const user = newDb.users[userKey];
         user.balanceKRW = 0;
         user.balanceUSD = 0;
         user.stockHoldings = {};
-        user.transactions = [...(user.transactions || []), { 
-            id: Date.now(), type: 'seize', amount: 0, currency: 'KRW', description: "파산 처리 (자산 초기화)", date: new Date().toISOString() 
-        }];
-        
-        // Clear real estate ownership
-        newDb.realEstate.grid = (newDb.realEstate.grid || []).map(p => {
-            if (p.owner === currentUser.name) return { ...p, owner: null, tenant: null };
-            return p;
-        });
-
         await saveDb(newDb);
         setAlertMessage("파산 처리가 완료되었습니다.");
     };
     
-    const switchAccount = async (targetName: string): Promise<boolean> => {
+    const switchAccount = async (targetEmail: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
-            const userData = await fetchUser(targetName);
-            if (userData && userData.approvalStatus === 'approved') { 
+            const userData = await fetchUserByEmail(targetEmail);
+            if (userData) { 
                 setCurrentUser(userData); 
+                if (isBOKUser(userData)) setAdminMode(true);
+                else setAdminMode(false);
                 return true; 
             }
             return false;
@@ -427,15 +393,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return (
         <GameContext.Provider value={{
-            db, currentUser, isAdminMode, setAdminMode, login, logout, updateUser, registerUser, isLoading,
+            db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
             showPinModal, showConfirm, showModal, notify, saveDb, refreshData, 
             loadAllUsers: async () => { const all = await fetchAllUsers(); setDb(p => ({...p, users: all})); },
             serverAction, pinResolver, setPinResolver, confirmResolver, setConfirmResolver, alertMessage, setAlertMessage,
-            currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, toasts: [], 
+            currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, 
             isElementPicking, setElementPicking,
-            requestNotificationPermission, createChat, sendMessage, clearPaidTax, cachedMarts, setCachedMarts, wait,
-            requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
-            requestPasswordReset
+            requestNotificationPermission, createChat, sendMessage, clearPaidTax: async () => {}, cachedMarts, setCachedMarts, wait,
+            requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead: async () => {}, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
+            requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } }
         }}>
             {children}
             {simulatedLoading && (
