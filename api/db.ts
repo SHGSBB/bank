@@ -2,6 +2,7 @@
 import admin from 'firebase-admin';
 
 let dbInstance: admin.database.Database | null = null;
+let authInstance: admin.auth.Auth | null = null;
 
 try {
     const key = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
@@ -23,6 +24,7 @@ try {
         
         if (admin.apps.length) {
             dbInstance = admin.database();
+            authInstance = admin.auth();
         }
     } else {
         console.warn("FIREBASE_SERVICE_ACCOUNT_KEY is missing. Server actions will fail safely.");
@@ -32,3 +34,4 @@ try {
 }
 
 export const db = dbInstance;
+export const adminAuth = authInstance;

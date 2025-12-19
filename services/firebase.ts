@@ -116,11 +116,27 @@ export const fetchUser = async (userName: string): Promise<User | null> => {
 };
 
 export const fetchUserByEmail = async (email: string): Promise<User | null> => {
-    // Index-independent lookup (fetch all and find)
     const snapshot = await get(ref(database, 'users'));
     if (snapshot.exists()) {
         const users = snapshot.val();
-        const found = Object.values(users).find((u: any) => u.email === email) as User;
+        const searchTerm = email.trim().toLowerCase();
+        
+        // Exact match or Aliased match (e.g. user@gmail.com matches user+1@gmail.com record if it's the base email)
+        const found = Object.values(users).find((u: any) => {
+            if (!u.email) return false;
+            const userEmail = u.email.toLowerCase();
+            if (userEmail === searchTerm) return true;
+            
+            // Check if the provided email is the "base" of an aliased email
+            if (searchTerm.includes('@') && userEmail.includes('+')) {
+                const [inputLocal, inputDomain] = searchTerm.split('@');
+                const [storedLocal, storedDomain] = userEmail.split('@');
+                const baseLocal = storedLocal.split('+')[0];
+                return inputLocal === baseLocal && inputDomain === storedDomain;
+            }
+            return false;
+        }) as User;
+        
         return found ? normalizeUser(found) : null;
     }
     return null;
@@ -128,10 +144,12 @@ export const fetchUserByEmail = async (email: string): Promise<User | null> => {
 
 // [아이디 찾기] 이름과 생년월일로 이메일 조회
 export const findUserIdByInfo = async (name: string, birth: string): Promise<string | null> => {
+    const searchName = name.trim().toLowerCase();
+    const searchBirth = birth.trim();
     const snapshot = await get(ref(database, 'users'));
     if (snapshot.exists()) {
         const users = Object.values(snapshot.val()) as User[];
-        const found = users.find(u => u.name === name && u.birthDate === birth);
+        const found = users.find(u => (u.name || "").toLowerCase() === searchName && u.birthDate === searchBirth);
         return found ? (found.id || found.email || null) : null;
     }
     return null;
@@ -144,17 +162,32 @@ export const fetchAllUsers = async (): Promise<Record<string, User>> => {
 
 // [아이디로 유저 조회] 로그인 아이디(id 필드)로 유저 정보 조회
 export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
-    // Index-independent lookup
+    const input = id.trim().toLowerCase();
     const snapshot = await get(ref(database, 'users'));
     if (snapshot.exists()) {
         const users = snapshot.val();
-        // Check ID field OR Check Name (Key)
-        const found = Object.values(users).find((u: any) => u.id === id || u.name === id) as User;
-        if (found) return normalizeUser(found);
         
-        // Also check transformed ID in keys
-        const safeId = toSafeId(id);
+        // 1. Check direct fields: ID, Name, or Email (Case-insensitive)
+        const found = Object.values(users).find((u: any) => 
+            (u.id || "").toLowerCase() === input || 
+            (u.name || "").toLowerCase() === input || 
+            (u.email || "").toLowerCase() === input
+        ) as User;
+        
+        if (found) return normalizeUser(found);
+
+        // 2. Also check transformed ID in keys
+        const safeId = toSafeId(id.trim()); // Original case for key lookup first
         if (users[safeId]) return normalizeUser(users[safeId]);
+        
+        // Try safeId with lowercase if not found
+        const safeIdLower = toSafeId(input);
+        if (users[safeIdLower]) return normalizeUser(users[safeIdLower]);
+        
+        // 3. If input is email, try aliased match
+        if (input.includes('@')) {
+            return fetchUserByEmail(input);
+        }
     }
     return null;
 };
@@ -176,7 +209,7 @@ export const searchUsersByName = async (name: string): Promise<User[]> => {
         const data = snapshot.val();
         const searchTerm = name.toLowerCase();
         return (Object.values(data) as User[])
-            .filter(u => u.name.toLowerCase().includes(searchTerm))
+            .filter(u => (u.name || "").toLowerCase().includes(searchTerm))
             .map(normalizeUser);
     }
     return [];

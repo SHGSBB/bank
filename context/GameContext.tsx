@@ -144,7 +144,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
-            // 1. Try to find user in DB to get their actual email
+            console.log(`Starting login resolution for: ${inputId}`);
+
+            // 1. Try to find user in DB to get their actual email (Case-insensitive resolution handled in services/firebase.ts)
             let userData = await fetchUserByLoginId(inputId);
             
             // If not found and input looks like email, try fetching by email directly
@@ -155,12 +157,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             let actualEmail = inputId;
             if (userData && userData.email) {
                 actualEmail = userData.email;
+                console.log(`Resolved email from DB: ${actualEmail}`);
             } else {
-                // Not found locally. Try server-side lookup (which handles index-less filtering)
+                // Not found locally. Try server-side lookup (which handles index-less filtering and case sensitivity)
                 try {
                     const res = await serverAction('get_user_email', { id: inputId });
                     if (res && res.email) {
                         actualEmail = res.email;
+                        console.log(`Resolved email from server: ${actualEmail}`);
                         userData = await fetchUserByEmail(actualEmail);
                     } else {
                         // Fallback: If it's not an email format and we can't resolve it, it's definitely not a valid user.
@@ -179,15 +183,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
             }
 
-            // Double check: if after all resolution actualEmail is still not an email, Firebase will throw auth/invalid-credential
-            if (!actualEmail.includes('@')) {
+            // Final check on email format before calling Firebase Auth to avoid generic invalid-credential errors
+            if (!actualEmail.includes('@') || actualEmail.length < 5) {
                 setAlertMessage("가입되지 않은 정보이거나 아이디 형식이 올바르지 않습니다.");
                 return false;
             }
 
             // 2. Firebase Auth login with Resolved Email
             try {
-                const fUser = await loginWithEmail(actualEmail, pass);
+                const fUser = await loginWithEmail(actualEmail.toLowerCase(), pass);
                 
                 if (!fUser.emailVerified) {
                     setAlertMessage("이메일 인증이 완료되지 않았습니다. 메일함을 확인해주세요.");
@@ -195,7 +199,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     return false;
                 }
 
-                // Refresh userData in case resolution was partial
+                // Refresh userData in case resolution was partial or out of date
                 if (!userData) {
                     userData = await fetchUserByEmail(fUser.email!);
                 }
@@ -218,7 +222,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 
                 return true;
             } catch (authError: any) {
-                console.error("Firebase Auth Error:", authError.code);
+                console.error("Firebase Auth Error:", authError.code, authError.message);
                 // auth/invalid-credential is the generic code for both wrong password and wrong email in v10+
                 if (authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password' || authError.code === 'auth/user-not-found' || authError.code === 'auth/invalid-email') {
                     setAlertMessage("아이디 또는 비밀번호가 올바르지 않습니다.");
@@ -236,7 +240,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const requestPasswordReset = async (email: string) => {
         try {
-            await resetUserPassword(email.trim());
+            await resetUserPassword(email.trim().toLowerCase());
             setAlertMessage("비밀번호 재설정 이메일을 보냈습니다.");
         } catch (e) {
             setAlertMessage("이메일 전송 실패: 가입된 주소인지 확인해주세요.");
@@ -258,7 +262,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const registerUser = async (userData: Partial<User>, password: string) => {
         setSimulatedLoading(true);
         try {
-            const fUser = await registerWithAutoRetry(userData.email!.trim(), password);
+            const fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
             const userId = userData.id || userData.email!;
             const safeId = toSafeId(userData.name || userId);
             

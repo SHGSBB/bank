@@ -1,7 +1,7 @@
 
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import bcrypt from 'bcryptjs';
-import { db } from './db.js';
+import { db, adminAuth } from './db.js';
 
 const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -29,31 +29,63 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json(snapshot.val() || {});
         }
 
-        // [핵심] 로그인용 실제 이메일 주소 검색 (Index-less version)
+        // [핵심 기능] 아이디로 이메일 찾기 + 좀비 계정 자동 청소 (Index-less & Auth-Sync)
         if (action === 'get_user_email') {
             const { id } = payload || {};
             if (!id) return res.status(400).json({ error: "ID_REQUIRED" });
             
             const usersRef = db.ref('users');
+            let foundUser = null;
+            let foundKey = null;
+
+            // 1. DB에서 유저 찾기 (ID/Name/Email 통합 검색)
+            const searchId = id.trim().toLowerCase();
             
-            // 1. Try safe ID lookup first (O(1))
-            const safeId = toSafeId(id);
-            const nameSnap = await usersRef.child(safeId).once('value');
-            if (nameSnap.exists()) {
-                const user = nameSnap.val();
-                if (user.email) return res.status(200).json({ email: user.email });
+            // (1) Key로 먼저 시도 (성화 은행은 이름을 Key로 사용함)
+            const safeId = toSafeId(id.trim());
+            const keySnap = await usersRef.child(safeId).once('value');
+            if (keySnap.exists()) {
+                foundUser = keySnap.val();
+                foundKey = safeId;
+            } else {
+                // (2) 필드로 시도 (전체 검색 fallback)
+                const allSnap = await usersRef.once('value');
+                if (allSnap.exists()) {
+                    const users = allSnap.val();
+                    const entry = Object.entries(users).find(([k, u]: [string, any]) => 
+                        (u.id || "").toLowerCase() === searchId || 
+                        (u.name || "").toLowerCase() === searchId ||
+                        (u.email || "").toLowerCase() === searchId
+                    );
+                    if (entry) {
+                        foundKey = entry[0];
+                        foundUser = entry[1];
+                    }
+                }
             }
 
-            // 2. Fetch all and filter (to bypass missing index on 'id' or 'email' field)
-            const allUsersSnap = await usersRef.once('value');
-            if (allUsersSnap.exists()) {
-                const users = allUsersSnap.val();
-                const found = Object.values(users).find((u: any) => 
-                    u.id === id || u.name === id || u.email === id
-                ) as any;
-                
-                if (found && found.email) {
-                    return res.status(200).json({ email: found.email });
+            // 2. [좀비 클리너] DB엔 기록이 있는데 Firebase Auth에 실제 계정이 있는지 교차 검증
+            if (foundUser && foundUser.email && adminAuth) {
+                try {
+                    // Firebase Auth 서버에 해당 이메일 사용자가 있는지 조회
+                    await adminAuth.getUserByEmail(foundUser.email);
+                    
+                    // Auth에 존재하면 정상적으로 이메일 반환
+                    return res.status(200).json({ email: foundUser.email });
+
+                } catch (e: any) {
+                    // 🚨 Auth에 없는 유저인 경우 (계정 삭제 후 DB 잔재 등)
+                    if (e.code === 'auth/user-not-found') {
+                        console.log(`[Zombie Cleaner] DB 잔재 삭제: ${foundKey} (${foundUser.email})`);
+                        
+                        // DB에서 즉시 삭제하여 정합성 유지
+                        await usersRef.child(foundKey!).remove();
+                        
+                        // 클라이언트에는 청소됨을 알림
+                        return res.status(404).json({ error: "USER_NOT_FOUND_CLEANED" });
+                    }
+                    // 기타 Auth 서버 오류 발생 시
+                    throw e;
                 }
             }
             
@@ -65,17 +97,22 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             if (!userId) return res.status(400).json({ error: "MISSING_USER_ID" });
 
             let user = null; let userKey = '';
-            // 우선 Key로 시도 (변환된 버전 포함)
-            const safeId = toSafeId(userId);
+            const inputTrimmed = userId.trim();
+            const safeId = toSafeId(inputTrimmed);
             const keySnap = await db.ref(`users/${safeId}`).once('value');
+            
             if (keySnap.exists()) {
                 userKey = safeId;
                 user = keySnap.val();
             } else {
-                // 필드로 시도 (Index-less fallback)
                 const allSnap = await db.ref('users').once('value');
                 const users = allSnap.val() || {};
-                const foundEntry = Object.entries(users).find(([k, u]: [string, any]) => u.id === userId);
+                const searchId = inputTrimmed.toLowerCase();
+                const foundEntry = Object.entries(users).find(([k, u]: [string, any]) => 
+                    (u.id || "").toLowerCase() === searchId || 
+                    (u.email || "").toLowerCase() === searchId ||
+                    (u.name || "").toLowerCase() === searchId
+                );
                 if (foundEntry) {
                     userKey = foundEntry[0];
                     user = foundEntry[1];
@@ -95,7 +132,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true, user: sanitized });
         }
 
-        // --- 금융/기능 액션 ---
         if (action === 'transfer') {
             const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload || {};
             const senderSafeId = toSafeId(senderId);
