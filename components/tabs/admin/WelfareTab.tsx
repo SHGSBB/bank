@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
@@ -15,19 +16,19 @@ export const WelfareTab: React.FC = () => {
         return krw + usdVal + propVal;
     };
 
-    const handlePayWelfare = async (userName: string, amount: number) => {
+    const handlePayWelfare = async (user: User, amount: number) => {
         const bank = db.users['한국은행'];
-        if (bank.balanceKRW < amount) return showModal('은행 잔고가 부족합니다.');
+        if ((bank?.balanceKRW || 0) < amount) return showModal('은행 잔고가 부족합니다.');
 
-        const confirmed = await showConfirm(`${userName}님에게 복지금 ₩${amount.toLocaleString()}을 지급하시겠습니까?`);
+        const confirmed = await showConfirm(`${user.name}님에게 복지금 ₩${amount.toLocaleString()}을 지급하시겠습니까?`);
         if (!confirmed) return;
 
         try {
             await serverAction('distribute_welfare', {
-                targetUser: userName,
+                targetUser: user.email, // Use Email/ID for safety
                 amount
             });
-            notify(userName, `복지 지원금 ₩${amount.toLocaleString()}를 받았습니다.`, true);
+            notify(user.name, `복지 지원금 ₩${amount.toLocaleString()}를 받았습니다.`, true);
             showModal('지급 완료');
         } catch(e) {
             showModal("지급 실패: 서버 오류");
@@ -62,7 +63,7 @@ export const WelfareTab: React.FC = () => {
                 {tierBuckets.map((bucket, idx) => (
                     <Card key={idx}>
                         <h4 className="font-bold mb-3 border-b pb-2">자산 ₩{bucket.threshold.toLocaleString()} 이하 (지급액: ₩{bucket.amount.toLocaleString()})</h4>
-                        {bucket.citizens.length === 0 ? <p className="text-sm text-gray-500">해당 시민이 없습니다.</p> : <ul className="space-y-2 max-h-40 overflow-y-auto pr-2">{bucket.citizens.map(c => (<li key={c.name} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-800 rounded"><span className="text-sm">{c.name} <span className="text-gray-500 text-xs ml-1">(자산: ₩{calculateTotalAsset(c).toLocaleString()})</span></span><Button className="text-xs py-1 px-3" onClick={() => handlePayWelfare(c.name, bucket.amount)}>지급</Button></li>))}</ul>}
+                        {bucket.citizens.length === 0 ? <p className="text-sm text-gray-500">해당 시민이 없습니다.</p> : <ul className="space-y-2 max-h-40 overflow-y-auto pr-2">{bucket.citizens.map(c => (<li key={c.name} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-800 rounded"><span className="text-sm">{c.name} <span className="text-gray-500 text-xs ml-1">(자산: ₩{calculateTotalAsset(c).toLocaleString()})</span></span><Button className="text-xs py-1 px-3" onClick={() => handlePayWelfare(c, bucket.amount)}>지급</Button></li>))}</ul>}
                     </Card>
                 ))}
             </div>

@@ -20,12 +20,8 @@ export const TaxTab: React.FC = () => {
     const [vatRate, setVatRate] = useState(db.settings.vat?.rate?.toString() || '10');
     const [vatTargetStr, setVatTargetStr] = useState(db.settings.vat?.targetMarts?.join(', ') || 'all');
     
-    const [penaltyAmount, setPenaltyAmount] = useState('');
-    const [selectedUnpaidUser, setSelectedUnpaidUser] = useState<string | null>(null);
-
     const standards = db.settings.standards || { taxRateProperty: 1, taxRateIncome: 10, progressivePropertyRules: [], progressiveIncomeRules: [] };
 
-    // Tax Calculation Logic (Preview)
     const applyProgressive = (baseAmount: number, rules: ProgressiveRule[]) => {
         let tax = 0;
         let breakdown = '';
@@ -59,12 +55,11 @@ export const TaxTab: React.FC = () => {
             rules = standards.progressivePropertyRules || [];
         } else if (type === 'asset') {
             const cash = user.balanceKRW + (user.balanceUSD * (db.settings.exchangeRate.KRW_USD || 1350));
-            taxableAmount = cash; // Simplified for preview
+            taxableAmount = cash; 
             baseRate = standards.taxRateIncome; 
             breakdown = `[재산세(자산)] 총 자산: ₩${taxableAmount.toLocaleString()}\n기본 세율: ${baseRate}%`;
             rules = standards.progressiveIncomeRules || []; 
         } else {
-            // Income Tax based on recent week transactions
             const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
             taxableAmount = (user.transactions || [])
                 .filter(t => t.type === 'income' && new Date(t.date).getTime() > oneWeekAgo)
@@ -101,9 +96,9 @@ export const TaxTab: React.FC = () => {
 
         citizens.forEach(user => {
             const result = calculateTax(user, sessionType);
-            if (result.amount > 0) {
+            if (result.amount > 0 && user.email) {
                 taxesToCollect.push({
-                    userId: user.name,
+                    userId: user.email, // Use Email
                     amount: result.amount,
                     breakdown: result.breakdown,
                     type: sessionType
@@ -128,9 +123,7 @@ export const TaxTab: React.FC = () => {
     const handleSaveVAT = async () => {
         const rate = parseFloat(vatRate);
         if (isNaN(rate)) return showModal("올바른 세율을 입력하세요.");
-        
         const targets = vatTargetStr.split(',').map(s => s.trim()).filter(Boolean);
-        
         const newDb = { ...db };
         newDb.settings.vat = { rate, targetMarts: targets.length > 0 ? targets : ['all'] };
         await saveDb(newDb);

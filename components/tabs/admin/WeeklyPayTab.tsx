@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
@@ -8,20 +9,22 @@ export const WeeklyPayTab: React.FC = () => {
     const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
     const [payAmount, setPayAmount] = useState('');
 
-    const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen');
+    // Ensure we have a unique identifier. Email is preferred for DB keys.
+    const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen' && u.email);
 
     const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.checked) {
-            setSelectedUsers(new Set(citizens.map(c => c.name)));
+            // Use Email as ID
+            setSelectedUsers(new Set(citizens.map(c => c.email!)));
         } else {
             setSelectedUsers(new Set());
         }
     };
 
-    const handleCheck = (name: string) => {
+    const handleCheck = (email: string) => {
         const newSet = new Set(selectedUsers);
-        if (newSet.has(name)) newSet.delete(name);
-        else newSet.add(name);
+        if (newSet.has(email)) newSet.delete(email);
+        else newSet.add(email);
         setSelectedUsers(newSet);
     };
 
@@ -33,7 +36,7 @@ export const WeeklyPayTab: React.FC = () => {
         const totalPayment = amount * selectedUsers.size;
         const bank = db.users['한국은행'];
 
-        if (bank.balanceKRW < totalPayment) return showModal('은행 잔고가 부족합니다.');
+        if ((bank?.balanceKRW || 0) < totalPayment) return showModal('은행 잔고가 부족합니다.');
 
         const confirmed = await showConfirm(`${selectedUsers.size}명의 시민에게 주급 ₩${amount.toLocaleString()}를 지급하시겠습니까? (총액: ₩${totalPayment.toLocaleString()})`);
         if (!confirmed) return;
@@ -41,7 +44,7 @@ export const WeeklyPayTab: React.FC = () => {
         try {
             await serverAction('weekly_pay', {
                 amount: amount,
-                userIds: Array.from(selectedUsers)
+                userIds: Array.from(selectedUsers) // Sending Emails/IDs
             });
             showModal(`${selectedUsers.size}명에게 주급 지급이 완료되었습니다.`);
             setPayAmount('');
@@ -64,15 +67,18 @@ export const WeeklyPayTab: React.FC = () => {
 
             <div className="max-h-80 overflow-y-auto space-y-2 mb-6 pr-2">
                 {citizens.map(c => (
-                    <div key={c.name} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                    <div key={c.email} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                         <div className="flex items-center gap-3">
                             <input 
                                 type="checkbox" 
-                                checked={selectedUsers.has(c.name)} 
-                                onChange={() => handleCheck(c.name)}
+                                checked={selectedUsers.has(c.email!)} 
+                                onChange={() => handleCheck(c.email!)}
                                 className="accent-green-600 w-5 h-5"
                             />
-                            <p className="font-medium">{c.name}</p>
+                            <div>
+                                <p className="font-medium">{c.name}</p>
+                                <p className="text-[10px] text-gray-400">{c.email}</p>
+                            </div>
                         </div>
                         <span className="text-sm text-gray-500">현금: ₩ {c.balanceKRW.toLocaleString()}</span>
                     </div>

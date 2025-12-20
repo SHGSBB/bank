@@ -73,7 +73,7 @@ export const UserManagementTab: React.FC = () => {
                         <div>
                             <div className="flex justify-between items-start">
                                 <p className="font-bold text-lg">{formatName(u.name)}</p>
-                                <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">{u.customJob || u.type}</span>
+                                <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">{u.customJob || u.type === 'citizen' ? '시민' : (u.type === 'mart' ? '마트' : u.type)}</span>
                             </div>
                             <p className="text-xs text-gray-500 mt-1">{u.email}</p>
                             <p className="text-[10px] text-gray-400 mt-2">ID: {u.id}</p>

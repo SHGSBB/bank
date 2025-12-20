@@ -19,7 +19,7 @@ import {
     fetchUserByLoginId
 } from "../services/firebase";
 import { update, ref, set, get } from "firebase/database";
-import { DB, DEFAULT_DB, User, ToastNotification, AssetHistoryPoint, ChatAttachment, ChatMessage, PolicyRequest, Stock, Application } from "../types";
+import { DB, DEFAULT_DB, User, ToastNotification, AssetHistoryPoint, ChatAttachment, ChatMessage, PolicyRequest, Stock, Application, PendingTax } from "../types";
 import { Spinner } from "../components/Shared";
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
@@ -64,6 +64,8 @@ interface GameContextType {
     approvePolicyChange: (id: string) => Promise<void>;
     rejectPolicyChange: (id: string) => Promise<void>;
     requestPasswordReset: (email: string) => Promise<void>;
+    payTax: (tax: PendingTax) => Promise<void>;
+    dismissTax: (taxId: string) => Promise<void>;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -417,6 +419,46 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await refreshData();
     };
 
+    const payTax = async (tax: PendingTax) => {
+        if(!currentUser) return;
+        if(currentUser.balanceKRW < tax.amount) {
+            setAlertMessage("잔액이 부족합니다.");
+            return;
+        }
+        if(!await showConfirm(`₩${tax.amount.toLocaleString()} 세금을 납부하시겠습니까?`)) return;
+        
+        const newDb = {...db};
+        const bank = newDb.users['한국은행'];
+        const me = newDb.users[toSafeId(currentUser.email!)];
+        
+        me.balanceKRW -= tax.amount;
+        bank.balanceKRW += tax.amount;
+        
+        // Mark as paid
+        const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
+        if(myTaxIdx !== -1 && me.pendingTaxes) {
+            me.pendingTaxes[myTaxIdx].status = 'paid';
+        }
+        
+        // Logs
+        const date = new Date().toISOString();
+        me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: `${tax.type} 납부`, date }];
+        bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} ${tax.type} 납부`, date }];
+        
+        await saveDb(newDb);
+        setAlertMessage("세금 납부가 완료되었습니다.");
+    };
+
+    const dismissTax = async (taxId: string) => {
+        if(!currentUser) return;
+        const safeId = toSafeId(currentUser.email!);
+        const currentTaxes = currentUser.pendingTaxes || [];
+        const newTaxes = currentTaxes.filter(t => t.id !== taxId);
+        
+        await update(ref(database, `users/${safeId}`), { pendingTaxes: newTaxes });
+        await refreshData();
+    };
+
     return (
         <GameContext.Provider value={{
             db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
@@ -427,7 +469,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             isElementPicking, setElementPicking,
             requestNotificationPermission, createChat, sendMessage, clearPaidTax: async () => {}, cachedMarts, setCachedMarts, wait,
             requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead: async () => {}, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
-            requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } }
+            requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } },
+            payTax, dismissTax
         }}>
             {children}
             {simulatedLoading && (

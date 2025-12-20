@@ -21,6 +21,7 @@ import { AdminFinanceTab } from '../tabs/admin/AdminFinanceTab';
 import { AdminRequestTab } from '../tabs/admin/AdminRequestTab';
 import { AdminOperationTab } from '../tabs/admin/AdminOperationTab';
 import { ChatSystem } from '../ChatSystem';
+import { BillTab } from '../tabs/BillTab'; // Import BillTab
 import { Announcement, User, TermDeposit, Loan as LoanType, PendingTax, StockHolding } from '../../types';
 
 const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
@@ -77,31 +78,55 @@ const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
 };
 
 export const Dashboard: React.FC = () => {
-    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser } = useGame();
+    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax } = useGame();
     const [activeTab, setActiveTab] = useState<string>('');
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
     
-    // Tax Banner State
-    const [taxBannerIndex, setTaxBannerIndex] = useState(0);
-    const unpaidTaxes = useMemo(() => {
-        return (currentUser?.pendingTaxes || []).filter(t => t.status !== 'paid');
-    }, [currentUser?.pendingTaxes]);
+    // Tax States
+    const [taxDetail, setTaxDetail] = useState<PendingTax | null>(null);
+    const [bannerIndex, setBannerIndex] = useState(0);
 
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
     const isPresident = currentUser?.isPresident;
     const isEasyMode = currentUser?.preferences?.isEasyMode && currentUser?.type === 'citizen';
     
+    // Tax Logic
+    const myTaxes = useMemo(() => currentUser?.pendingTaxes || [], [currentUser?.pendingTaxes]);
+    const now = new Date();
+
+    const actionableTaxes = myTaxes.filter(t => {
+        const isPending = t.status === 'pending';
+        const isPaid = t.status === 'paid';
+        const isOverdue = new Date(t.dueDate).getTime() <= now.getTime();
+        return (isPending && !isOverdue) || isPaid;
+    });
+
+    const overdueTaxes = myTaxes.filter(t => t.status === 'pending' && new Date(t.dueDate).getTime() <= now.getTime());
+
+    // Cycle Banner if multiple
+    useEffect(() => {
+        if (actionableTaxes.length > 1) {
+            const timer = setInterval(() => {
+                setBannerIndex(prev => (prev + 1) % actionableTaxes.length);
+            }, 5000);
+            return () => clearInterval(timer);
+        }
+    }, [actionableTaxes.length]);
+
+    const currentBannerTax = actionableTaxes[bannerIndex] || actionableTaxes[0];
+
+    // Tabs
     const tabs = useMemo(() => {
         if (isBOK) return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
-        if (isEasyMode) return ['이체', '구매', '저금', '대출', '환전'];
+        if (isEasyMode) return ['이체', '구매', '저금', '대출', '고지서', '환전']; // Easy mode citizen
         if (isTeacher) return ['교사', '운영 관리', '이체', '거래 내역'];
         if (isPresident) return ['국정 운영', '정부', '이체', '거래 내역'];
-        if (currentUser?.type === 'government') return ['정부', '이체', '거래 내역'];
-        if (currentUser?.type === 'citizen') return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '거래 내역', '기준표'];
-        if (currentUser?.type === 'mart') return ['물품관리', '가게설정', '이체', '주식', '거래 내역'];
+        if (currentUser?.type === 'government') return ['정부', '이체', '거래 내역', '고지서'];
+        if (currentUser?.type === 'citizen') return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역', '기준표'];
+        if (currentUser?.type === 'mart') return ['물품관리', '가게설정', '이체', '주식', '고지서', '거래 내역'];
         if (currentUser?.type === 'admin') return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
         return ['이체', '거래 내역'];
     }, [currentUser, isTeacher, isPresident, isEasyMode, isBOK]);
@@ -159,32 +184,6 @@ export const Dashboard: React.FC = () => {
         else setActiveTab('이체');
     }, [currentUser?.name, isPresident, isEasyMode, isBOK, currentUser?.type, isTeacher]);
 
-    const handlePayTax = async (tax: PendingTax) => {
-        if(currentUser!.balanceKRW < tax.amount) return showModal("잔액이 부족합니다.");
-        if(!await showConfirm("세금을 납부하시겠습니까?")) return;
-        
-        const newDb = {...db};
-        const bank = newDb.users['한국은행'];
-        const me = newDb.users[currentUser!.name];
-        
-        me.balanceKRW -= tax.amount;
-        bank.balanceKRW += tax.amount;
-        
-        // Mark as paid
-        const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
-        if(myTaxIdx !== -1 && me.pendingTaxes) {
-            me.pendingTaxes[myTaxIdx].status = 'paid';
-        }
-        
-        // Logs
-        const date = new Date().toISOString();
-        me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: '세금 납부', date }];
-        bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} 세금 납부`, date }];
-        
-        await saveDb(newDb);
-        showModal("세금 납부가 완료되었습니다.");
-    };
-
     const getRoleName = () => {
         const t = currentUser?.type;
         if(t === 'citizen') return '시민';
@@ -193,6 +192,11 @@ export const Dashboard: React.FC = () => {
         if(t === 'admin') return '관리자';
         if(t === 'teacher') return '교사';
         return t;
+    };
+
+    const getTaxName = (type: string) => {
+        const map: Record<string, string> = { 'real_estate': '종합부동산세', 'income': '소득세', 'asset': '재산세', 'fine': '과태료', 'acquisition': '취득세' };
+        return map[type] || type;
     };
 
     return (
@@ -208,19 +212,47 @@ export const Dashboard: React.FC = () => {
                 )}
             </div>
             
-            {/* Unpaid Tax Banner */}
-            {unpaidTaxes.length > 0 && (
-                <div className="mb-4 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center justify-between animate-pulse">
-                    <button onClick={() => setTaxBannerIndex((i) => (i - 1 + unpaidTaxes.length) % unpaidTaxes.length)} className="p-2">❮</button>
-                    <div className="flex-1 text-center">
-                        <p className="font-bold text-sm mb-1">🚨 세금 미납 알림 ({taxBannerIndex + 1}/{unpaidTaxes.length})</p>
-                        <p className="text-xs">{unpaidTaxes[taxBannerIndex].breakdown.split('\n')[0]}</p>
-                        <p className="font-black text-lg mt-1">₩ {unpaidTaxes[taxBannerIndex].amount.toLocaleString()}</p>
-                        <button onClick={() => handlePayTax(unpaidTaxes[taxBannerIndex])} className="mt-2 bg-white text-red-600 px-4 py-1 rounded-full text-xs font-bold">지금 납부하기</button>
+            {/* Tax Banner Area (Top Notification) */}
+            <div className="space-y-2 mb-6">
+                {currentBannerTax && (
+                    <div className={`p-4 rounded-xl shadow-lg flex items-center justify-between transition-all duration-500 relative overflow-hidden ${currentBannerTax.status === 'paid' ? 'bg-gray-600 text-gray-200' : 'bg-red-600 text-white animate-pulse'}`}>
+                        {actionableTaxes.length > 1 && (
+                            <button onClick={() => setBannerIndex((i) => (i - 1 + actionableTaxes.length) % actionableTaxes.length)} className="p-2 relative z-10">❮</button>
+                        )}
+                        <div className="flex-1 text-center cursor-pointer" onClick={() => setTaxDetail(currentBannerTax)}>
+                            <p className="font-bold text-sm mb-1 flex items-center justify-center gap-2">
+                                {currentBannerTax.status === 'paid' ? '✅ 납부 완료' : '🚨 세금 납부 알림'} 
+                                <span className="text-[10px] opacity-80 border border-white/30 px-1 rounded">{getTaxName(currentBannerTax.type)}</span>
+                            </p>
+                            <p className="font-black text-xl mt-1">₩ {currentBannerTax.amount.toLocaleString()}</p>
+                            <p className="text-[10px] mt-1 opacity-80 underline">클릭하여 상세 내역 확인</p>
+                        </div>
+                        
+                        <div className="flex items-center gap-2 relative z-10">
+                            {currentBannerTax.status === 'pending' ? (
+                                <button onClick={(e) => { e.stopPropagation(); payTax(currentBannerTax); }} className="bg-white text-red-600 px-4 py-2 rounded-lg text-xs font-bold hover:bg-gray-100 shadow-md">납부</button>
+                            ) : (
+                                <button onClick={(e) => { e.stopPropagation(); dismissTax(currentBannerTax.id); }} className="bg-white/20 hover:bg-white/30 p-2 rounded-full"><LineIcon icon="close" className="w-4 h-4" /></button>
+                            )}
+                        </div>
+
+                        {actionableTaxes.length > 1 && (
+                            <button onClick={() => setBannerIndex((i) => (i + 1) % actionableTaxes.length)} className="p-2 relative z-10">❯</button>
+                        )}
                     </div>
-                    <button onClick={() => setTaxBannerIndex((i) => (i + 1) % unpaidTaxes.length)} className="p-2">❯</button>
-                </div>
-            )}
+                )}
+
+                {/* Overdue Warning */}
+                {overdueTaxes.map(t => (
+                    <div key={t.id} className="bg-orange-100 dark:bg-orange-900/30 border-l-4 border-orange-500 text-orange-800 dark:text-orange-200 p-4 rounded-r shadow-sm flex justify-between items-center">
+                        <div>
+                            <p className="font-bold text-sm">⚠️ {getTaxName(t.type)}를 미납하셨습니다.</p>
+                            <p className="text-xs mt-1">납부기한이 지났습니다. 본인의 재산에서 과태료가 징수될 수 있습니다.</p>
+                        </div>
+                        <Button className="text-xs bg-orange-600 hover:bg-orange-500 border-none" onClick={() => setActiveTab('고지서')}>확인</Button>
+                    </div>
+                ))}
+            </div>
 
             <div className="flex items-center gap-4 mb-8 px-2">
                 <div onClick={() => setIsProfileOpen(true)} className="w-16 h-16 rounded-full bg-green-500 text-white flex items-center justify-center overflow-hidden border-4 border-white shadow-lg cursor-pointer">
@@ -250,6 +282,7 @@ export const Dashboard: React.FC = () => {
                 {activeTab === '저금' && <SavingsTab />}
                 {activeTab === '대출' && <LoanTab />}
                 {activeTab === '부동산' && <RealEstateTab />}
+                {activeTab === '고지서' && <BillTab />}
                 {activeTab === '거래 내역' && <TransactionHistoryTab />}
                 {activeTab === '물품관리' && <MartProductTab />}
                 {activeTab === '가게설정' && <MartSettingsTab />}
@@ -263,6 +296,27 @@ export const Dashboard: React.FC = () => {
             </div>
 
             <Modal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} title="설정" wide><ProfileSettingsTab /></Modal>
+            
+            {/* Tax Detail Modal */}
+            <Modal isOpen={!!taxDetail} onClose={() => setTaxDetail(null)} title="세금 상세 내역">
+                {taxDetail && (
+                    <div className="space-y-4">
+                        <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                            <p className="text-sm text-gray-500">{getTaxName(taxDetail.type)}</p>
+                            <p className="text-3xl font-black mt-2">₩{taxDetail.amount.toLocaleString()}</p>
+                        </div>
+                        <div className="p-4 border rounded-xl">
+                            <h5 className="font-bold mb-2">산출 근거</h5>
+                            <p className="text-sm whitespace-pre-wrap leading-relaxed text-gray-600 dark:text-gray-300">
+                                {taxDetail.breakdown}
+                            </p>
+                        </div>
+                        {taxDetail.status === 'pending' && (
+                            <Button className="w-full py-3" onClick={() => { payTax(taxDetail); setTaxDetail(null); }}>지금 납부하기</Button>
+                        )}
+                    </div>
+                )}
+            </Modal>
             
             <Modal isOpen={isAssetModalOpen} onClose={() => setIsAssetModalOpen(false)} title="자산 분석 및 통계" wide zIndex={5000}>
                  <div className="space-y-8 p-4">
