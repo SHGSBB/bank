@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Modal, Input, formatShortPrice } from '../Shared';
@@ -90,22 +91,33 @@ export const RealEstateTab: React.FC = () => {
     };
 
     const renderGrid = () => {
+        // Admin layout: 6 columns
+        const cols = 6;
         const indices = Array.from({ length: 18 }, (_, i) => i + 1);
         
         return (
-            <div className="grid grid-cols-6 gap-2 mb-6 select-none relative">
+            <div 
+                className="grid gap-2 mb-6 select-none relative" 
+                style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+            >
                 {indices.map((id) => {
+                    // Match Admin logic for cell generation fallback
                     const cell = grid.find(c => c.id === id) || { id, owner: null, tenant: null, price: 10000000 } as RealEstateCell;
                     
+                    const isMall1 = id === 1;
                     const isMall2 = id === 7;
+                    const isMall3 = id === 13;
+
+                    // Admin layout hides cell 7
                     if (isMall2) return null;
 
-                    const isRedZone = id === 1 || id === 13;
+                    const isRedZone = isMall1 || isMall3;
                     const isOwnedByMe = cell.owner === currentUser?.name;
                     const isTenantMe = cell.tenant === currentUser?.name;
+                    const isSelected = selectedId === id;
                     
                     let rowSpan = 'row-span-1';
-                    if (id === 1) rowSpan = 'row-span-2';
+                    if (isMall1) rowSpan = 'row-span-2';
 
                     return (
                         <div 
@@ -113,9 +125,9 @@ export const RealEstateTab: React.FC = () => {
                             onClick={() => setSelectedId(id)}
                             className={`
                                 col-span-1 ${rowSpan}
-                                min-h-[4rem] sm:min-h-[5rem] rounded-xl p-1 flex flex-col items-center justify-center cursor-pointer border-2 transition-all text-[10px] sm:text-xs relative shadow-sm
-                                ${isOwnedByMe ? 'bg-green-100 border-green-500' : (isTenantMe ? 'bg-blue-100 border-blue-500' : 'bg-white dark:bg-[#2D2D2D] border-gray-200 dark:border-gray-700')}
-                                ${selectedId === id ? 'ring-2 ring-yellow-400 z-10 scale-105' : ''}
+                                min-h-[6rem] rounded-xl p-1 flex flex-col items-center justify-center cursor-pointer border-2 transition-all text-[10px] sm:text-xs relative shadow-sm
+                                ${isOwnedByMe ? 'bg-green-100 border-green-500' : (isTenantMe ? 'bg-blue-100 border-blue-500' : (isRedZone ? 'bg-red-50 border-red-200' : 'bg-white dark:bg-[#2D2D2D] border-gray-200 dark:border-gray-700'))}
+                                ${isSelected ? 'ring-2 ring-yellow-400 z-10 scale-105' : ''}
                             `}
                         >
                             <span className="font-bold truncate w-full text-center">

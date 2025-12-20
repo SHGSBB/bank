@@ -21,9 +21,10 @@ import { AdminFinanceTab } from '../tabs/admin/AdminFinanceTab';
 import { AdminRequestTab } from '../tabs/admin/AdminRequestTab';
 import { AdminOperationTab } from '../tabs/admin/AdminOperationTab';
 import { ChatSystem } from '../ChatSystem';
-import { Announcement, User, TermDeposit, Loan, PendingTax, StockHolding } from '../../types';
+import { Announcement, User, TermDeposit, Loan as LoanType, PendingTax, StockHolding } from '../../types';
 
 const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
+    // ... same content as before ...
     const { currentUser, db, triggerHaptic } = useGame();
     const [expandedCard, setExpandedCard] = useState<string | null>(null);
     const fmt = (num: number) => formatSmartMoney(num, currentUser?.preferences?.assetDisplayMode === 'rounded');
@@ -81,6 +82,12 @@ export const Dashboard: React.FC = () => {
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
+    
+    // Tax Banner State
+    const [taxBannerIndex, setTaxBannerIndex] = useState(0);
+    const unpaidTaxes = useMemo(() => {
+        return (currentUser?.pendingTaxes || []).filter(t => t.status !== 'paid');
+    }, [currentUser?.pendingTaxes]);
 
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
@@ -112,11 +119,10 @@ export const Dashboard: React.FC = () => {
             { label: '예금', value: savingsTotal, color: '#3B82F6' },
             { label: '부동산', value: propVal, color: '#F59E0B' }
         ].filter(item => item.value > 0);
-    }, [currentUser, db.realEstate, db.termDeposits, db.stocks]);
+    }, [currentUser, db.realEstate, db.termDeposits, db.stocks, db.settings.exchangeRate.KRW_USD]);
 
     const totalAssets = useMemo(() => assetComposition.reduce((sum, item) => sum + item.value, 0), [assetComposition]);
 
-    // Calculate ranking Percentile
     const myPercentile = useMemo(() => {
         if (!currentUser || !db.users) return 0;
         const usdRate = db.settings.exchangeRate.KRW_USD || 1350;
@@ -130,9 +136,10 @@ export const Dashboard: React.FC = () => {
         };
 
         const sortedTotals = allUsers.map(getUserTotal).sort((a, b) => b - a);
-        const myIdx = sortedTotals.indexOf(getUserTotal(currentUser));
+        const myVal = getUserTotal(currentUser);
+        const myIdx = sortedTotals.indexOf(myVal);
         if (myIdx === -1) return 100;
-        return ((myIdx) / sortedTotals.length) * 100;
+        return ((myIdx) / Math.max(1, sortedTotals.length)) * 100;
     }, [db, currentUser]);
 
     useEffect(() => {
@@ -150,7 +157,43 @@ export const Dashboard: React.FC = () => {
         else if (isTeacher) setActiveTab('교사');
         else if (currentUser?.type === 'admin') setActiveTab('재정 관리'); 
         else setActiveTab('이체');
-    }, [currentUser?.name, isPresident, isEasyMode, isBOK]);
+    }, [currentUser?.name, isPresident, isEasyMode, isBOK, currentUser?.type, isTeacher]);
+
+    const handlePayTax = async (tax: PendingTax) => {
+        if(currentUser!.balanceKRW < tax.amount) return showModal("잔액이 부족합니다.");
+        if(!await showConfirm("세금을 납부하시겠습니까?")) return;
+        
+        const newDb = {...db};
+        const bank = newDb.users['한국은행'];
+        const me = newDb.users[currentUser!.name];
+        
+        me.balanceKRW -= tax.amount;
+        bank.balanceKRW += tax.amount;
+        
+        // Mark as paid
+        const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
+        if(myTaxIdx !== -1 && me.pendingTaxes) {
+            me.pendingTaxes[myTaxIdx].status = 'paid';
+        }
+        
+        // Logs
+        const date = new Date().toISOString();
+        me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: '세금 납부', date }];
+        bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} 세금 납부`, date }];
+        
+        await saveDb(newDb);
+        showModal("세금 납부가 완료되었습니다.");
+    };
+
+    const getRoleName = () => {
+        const t = currentUser?.type;
+        if(t === 'citizen') return '시민';
+        if(t === 'mart') return '마트';
+        if(t === 'government') return '공무원';
+        if(t === 'admin') return '관리자';
+        if(t === 'teacher') return '교사';
+        return t;
+    };
 
     return (
         <div className={`container mx-auto max-w-6xl pb-24 transition-all duration-300 ${isChatOpen ? 'sm:pr-[400px]' : ''}`}>
@@ -165,12 +208,28 @@ export const Dashboard: React.FC = () => {
                 )}
             </div>
             
+            {/* Unpaid Tax Banner */}
+            {unpaidTaxes.length > 0 && (
+                <div className="mb-4 bg-red-600 text-white p-4 rounded-xl shadow-lg flex items-center justify-between animate-pulse">
+                    <button onClick={() => setTaxBannerIndex((i) => (i - 1 + unpaidTaxes.length) % unpaidTaxes.length)} className="p-2">❮</button>
+                    <div className="flex-1 text-center">
+                        <p className="font-bold text-sm mb-1">🚨 세금 미납 알림 ({taxBannerIndex + 1}/{unpaidTaxes.length})</p>
+                        <p className="text-xs">{unpaidTaxes[taxBannerIndex].breakdown.split('\n')[0]}</p>
+                        <p className="font-black text-lg mt-1">₩ {unpaidTaxes[taxBannerIndex].amount.toLocaleString()}</p>
+                        <button onClick={() => handlePayTax(unpaidTaxes[taxBannerIndex])} className="mt-2 bg-white text-red-600 px-4 py-1 rounded-full text-xs font-bold">지금 납부하기</button>
+                    </div>
+                    <button onClick={() => setTaxBannerIndex((i) => (i + 1) % unpaidTaxes.length)} className="p-2">❯</button>
+                </div>
+            )}
+
             <div className="flex items-center gap-4 mb-8 px-2">
-                <div onClick={() => setIsProfileOpen(true)} className="w-16 h-16 rounded-full bg-green-500 text-white flex items-center justify-center overflow-hidden border-4 border-white shadow-lg cursor-pointer">{currentUser?.profilePic ? <img src={currentUser.profilePic} className="w-full h-full object-cover" alt="p"/> : <span className="text-2xl font-bold">{formatName(currentUser?.name)[0]}</span>}</div>
+                <div onClick={() => setIsProfileOpen(true)} className="w-16 h-16 rounded-full bg-green-500 text-white flex items-center justify-center overflow-hidden border-4 border-white shadow-lg cursor-pointer">
+                    {currentUser?.profilePic ? <img src={currentUser.profilePic} className="w-full h-full object-cover" alt="p"/> : <span className="text-2xl font-bold">{formatName(currentUser?.name)[0]}</span>}
+                </div>
                 <div className="flex flex-col">
                     <div className="flex items-center gap-2">
                         <h2 className="text-2xl font-bold" onClick={() => setIsProfileOpen(true)}>{formatName(currentUser?.name, currentUser)}</h2>
-                        <span className="text-[10px] bg-gray-700 text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-tight">{currentUser?.govtRole || currentUser?.customJob || currentUser?.type}</span>
+                        <span className="text-[10px] bg-gray-700 text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-tight">{currentUser?.govtRole || currentUser?.customJob || getRoleName()}</span>
                     </div>
                 </div>
             </div>
@@ -207,10 +266,23 @@ export const Dashboard: React.FC = () => {
             
             <Modal isOpen={isAssetModalOpen} onClose={() => setIsAssetModalOpen(false)} title="자산 분석 및 통계" wide zIndex={5000}>
                  <div className="space-y-8 p-4">
-                     <div className="bg-gray-50 dark:bg-gray-900 p-6 rounded-3xl text-center border border-gray-100 dark:border-gray-800">
+                     <div className="bg-gray-50 dark:bg-gray-900 p-6 rounded-3xl text-center border border-gray-100 dark:border-gray-800 relative overflow-hidden">
                         <p className="text-sm font-bold text-gray-500 mb-1 uppercase">나의 자산 랭킹</p>
-                        <h4 className="text-4xl font-black text-green-600 mb-2">상위 {myPercentile.toFixed(1)}%</h4>
-                        <p className="text-xs text-gray-400">전체 성화국 시민 자산 총액 비교 기준</p>
+                        <h4 className="text-4xl font-black text-green-600 mb-4 relative z-10">상위 {myPercentile.toFixed(1)}%</h4>
+                        
+                        <div className="w-full max-w-md mx-auto h-4 bg-gray-200 dark:bg-gray-800 rounded-full overflow-hidden relative border border-gray-100 dark:border-gray-700">
+                             <div 
+                                className="h-full bg-gradient-to-r from-green-600 to-green-400 transition-all duration-1000 ease-out" 
+                                style={{ width: `${100 - myPercentile}%` }}
+                             />
+                             <div className="absolute top-0 bottom-0 w-1 bg-white shadow-xl z-20" style={{ left: `${100 - myPercentile}%` }} />
+                        </div>
+                        <div className="flex justify-between w-full max-w-md mx-auto mt-1 text-[10px] font-bold text-gray-400 uppercase">
+                            <span>최저</span>
+                            <span>현재 순위</span>
+                            <span>최상위</span>
+                        </div>
+                        <p className="text-xs text-gray-400 mt-4">전체 성화국 시민 자산 총액 비교 기준</p>
                      </div>
 
                      <Card>

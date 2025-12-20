@@ -2,9 +2,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, formatSmartMoney } from '../Shared';
-import { Stock, StockHistory } from '../../types';
-
-// --- Improved Chart Component (Yahoo Finance Style) ---
+import { Stock, StockHistory, StockOrder } from '../../types';
 
 interface ChartProps {
     data: StockHistory[];
@@ -16,13 +14,11 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const [hoverData, setHoverData] = useState<{ price: number, date: string, x: number } | null>(null);
 
-    // Filter Data based on Period
     const chartData = useMemo(() => {
         const now = new Date();
         let startTime = 0;
         switch (period) {
             case '1D': 
-                // Set start time to 00:00 of today
                 const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
                 startTime = startOfDay.getTime();
                 break;
@@ -31,7 +27,6 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
             case '1Y': startTime = Date.now() - 365 * 24 * 60 * 60 * 1000; break;
         }
         const filtered = data.filter(d => new Date(d.date).getTime() >= startTime);
-        // If 1D has no data (e.g. before market open), show the last known point or empty
         return filtered.length > 0 ? filtered : (period === '1D' ? data.slice(-1) : []); 
     }, [data, period]);
 
@@ -45,7 +40,6 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
     const width = 1000; 
     const height = 300; 
 
-    // Generate Path
     const points = chartData.map((d, i) => {
         const x = (i / (chartData.length - 1)) * width;
         const y = height - ((d.price - minPrice) / range) * height;
@@ -111,7 +105,6 @@ const StockChart: React.FC<ChartProps> = ({ data, color, period }) => {
     );
 };
 
-// Mini Chart for Selection Cards
 const MiniStockChart: React.FC<{ data: StockHistory[], color: string }> = ({ data, color }) => {
     if (!data || data.length < 2) return null;
     const recent = data.slice(-20);
@@ -122,7 +115,7 @@ const MiniStockChart: React.FC<{ data: StockHistory[], color: string }> = ({ dat
     
     const points = recent.map((d, i) => {
         const x = (i / (recent.length - 1)) * 100;
-        const y = 100 - ((d.price - min) / range) * 80; // keep it somewhat centered vertically
+        const y = 100 - ((d.price - min) / range) * 80;
         return `${x},${y}`;
     }).join(' ');
 
@@ -133,31 +126,24 @@ const MiniStockChart: React.FC<{ data: StockHistory[], color: string }> = ({ dat
     );
 };
 
-// --- Helper: Clean Number Format ---
 const fmt = (num: number) => Math.floor(num).toLocaleString();
 
 export const StockTab: React.FC = () => {
-    const { db, currentUser, updateUser, updateStock, notify, showModal, showPinModal } = useGame();
+    const { db, currentUser, updateUser, updateStock, notify, showModal, showPinModal, saveDb } = useGame();
     
-    // State
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [period, setPeriod] = useState<'1D' | '1W' | '1M' | '1Y'>('1D');
     
-    // Trading State
     const [tab, setTab] = useState<'buy' | 'sell'>('buy');
     const [mode, setMode] = useState<'market' | 'limit'>('market');
     const [priceInput, setPriceInput] = useState('');
     const [qtyInput, setQtyInput] = useState('');
 
-    // SungSPI View State
     const [isSungSpiView, setIsSungSpiView] = useState(false);
 
-    // Derived Data
     const stocks = Object.values(db.stocks || {}) as Stock[];
-    // Use DIRECT DB Access for User to prevent stale state issues in stock holdings
     const user = db.users[currentUser!.name] || currentUser; 
 
-    // Sort stocks: Owned first, then alphabetical
     const sortedStocks = useMemo(() => {
         return [...stocks].sort((a, b) => {
             const qtyA = user?.stockHoldings?.[a.id]?.quantity || 0;
@@ -192,30 +178,23 @@ export const StockTab: React.FC = () => {
     const myProfit = (currentPrice - myAvg) * myQty;
     const myRate = myAvg > 0 ? ((currentPrice - myAvg) / myAvg) * 100 : 0;
 
-    const marketSettings = db.settings.stockMarket || { isOpen: true, sungSpiBasePoint: 1000 };
-    
-    // Real SungSPI Logic: Calculate Market Cap Weight average price
+    const marketSettings = db.settings.stockMarket || { isOpen: true, sungSpiBasePoint: 1000, mode: 'simple' };
+    const isOriginalMode = marketSettings.mode === 'original';
+
     const sungSpi = useMemo(() => {
         if (stocks.length === 0) return 1000;
         const totalCap = stocks.reduce((sum, s) => sum + (s.currentPrice * s.totalShares), 0);
         return (totalCap / (marketSettings.sungSpiBasePoint || 1000));
     }, [stocks, marketSettings]);
 
-    // SungSPI History: Aggregate all stock histories
     const spiHistory = useMemo(() => {
         if (stocks.length === 0) return [];
-        // Flatten and sort all history points by date
-        const allPoints: StockHistory[] = [];
-        // Just take the history of the first stock as timeline reference, and re-calculate average for those points
-        // NOTE: This is a simplification. Ideally, we snapshot the index daily.
-        // For simulation, we create a synthetic history based on the first stock's dates.
         const refStock = stocks[0];
         if(!refStock.history) return [];
 
         return refStock.history.map((h, i) => {
             let totalCapAtTime = 0;
             stocks.forEach(s => {
-                // Find closest history point
                 const pt = s.history[i] || s.history[s.history.length - 1];
                 if(pt) totalCapAtTime += (pt.price * s.totalShares);
             });
@@ -231,100 +210,229 @@ export const StockTab: React.FC = () => {
         const qty = parseInt(qtyInput);
         if (isNaN(qty) || qty <= 0) return showModal("수량을 입력하세요.");
 
-        let tradePrice = currentPrice;
+        let targetPrice = currentPrice;
         if (mode === 'limit') {
             const limit = parseInt(priceInput);
             if (isNaN(limit) || limit <= 0) return showModal("지정가를 입력하세요.");
-            tradePrice = limit;
-            
-            if (tab === 'buy' && limit < currentPrice) return showModal(`현재가(${fmt(currentPrice)})보다 낮아 매수할 수 없습니다. (대기 미지원)`);
-            if (tab === 'sell' && limit > currentPrice) return showModal(`현재가(${fmt(currentPrice)})보다 높아 매도할 수 없습니다. (대기 미지원)`);
+            targetPrice = limit;
         }
 
-        const totalAmount = tradePrice * qty;
+        const totalAmount = targetPrice * qty;
 
-        if (tab === 'buy') {
-            if (user.balanceKRW < totalAmount) return showModal("예수금이 부족합니다.");
-        } else {
-            if (myQty < qty) return showModal(`보유 수량이 부족합니다. (보유: ${myQty}주)`);
-        }
+        if (tab === 'buy' && user.balanceKRW < totalAmount) return showModal("예수금이 부족합니다.");
+        if (tab === 'sell' && myQty < qty) return showModal(`보유 수량이 부족합니다. (보유: ${myQty}주)`);
 
         const pin = await showPinModal("거래 승인 (PIN)", currentUser?.pin!, (currentUser?.pinLength as 4 | 6) || 4);
         if (pin !== currentUser?.pin) return;
 
-        // Use deep clone or new object for user updates
+        if (isOriginalMode) {
+            await processOriginalOrder(qty, targetPrice);
+        } else {
+            await processSimpleOrder(qty, targetPrice);
+        }
+    };
+
+    const processSimpleOrder = async (qty: number, tradePrice: number) => {
+        if (!stock) return;
+        const totalAmount = tradePrice * qty;
         const userUpdates: any = {};
         
         if (tab === 'buy') {
             userUpdates.balanceKRW = user.balanceKRW - totalAmount;
-            
             const existing = user.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
             const newQty = existing.quantity + qty;
             const newAvg = ((existing.quantity * existing.averagePrice) + totalAmount) / newQty;
-
             userUpdates.stockHoldings = { ...user.stockHoldings, [stock.id]: { quantity: newQty, averagePrice: newAvg } };
-
             userUpdates.transactions = [...(user.transactions || []), {
                 id: Date.now(), type: 'stock_buy', amount: -totalAmount, currency: 'KRW', description: `${stock.name} ${qty}주 매수`, date: new Date().toISOString()
             }];
-            
             const newPrice = Math.floor(tradePrice * (1 + 0.0001 * qty));
-            
-            // Execute Update for User
             await updateUser(currentUser!.name, userUpdates);
-            
-            // Execute Update for Stock
             const history = [...(stock.history || [])];
             history.push({ date: new Date().toISOString(), price: newPrice });
             await updateStock(stock.id, { currentPrice: newPrice, history });
-            
             notify(currentUser!.name, `${stock.name} ${qty}주 매수 체결`);
         } else {
             userUpdates.balanceKRW = user.balanceKRW + totalAmount;
-            
             const existing = user.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
             const newQty = existing.quantity - qty;
-            
             const profit = (tradePrice - existing.averagePrice) * qty;
             userUpdates.realizedStockProfit = (user.realizedStockProfit || 0) + profit;
-
             const newHoldings = { ...user.stockHoldings };
-            if (newQty <= 0) {
-                delete newHoldings[stock.id];
-            } else {
-                newHoldings[stock.id] = { ...existing, quantity: newQty };
-            }
+            if (newQty <= 0) delete newHoldings[stock.id];
+            else newHoldings[stock.id] = { ...existing, quantity: newQty };
             userUpdates.stockHoldings = newHoldings;
-
             userUpdates.transactions = [...(user.transactions || []), {
                 id: Date.now(), type: 'stock_sell', amount: totalAmount, currency: 'KRW', description: `${stock.name} ${qty}주 매도`, date: new Date().toISOString()
             }];
-
             const newPrice = Math.max(1, Math.floor(tradePrice * (1 - 0.0001 * qty)));
-            
-            // Execute Update for User
             await updateUser(currentUser!.name, userUpdates);
-            
-            // Execute Update for Stock
             const history = [...(stock.history || [])];
             history.push({ date: new Date().toISOString(), price: newPrice });
             await updateStock(stock.id, { currentPrice: newPrice, history });
-
             notify(currentUser!.name, `${stock.name} ${qty}주 매도 체결`);
         }
-
         setQtyInput('');
-        showModal('주문이 체결되었습니다.');
+        showModal('주문이 즉시 체결되었습니다.');
+    };
+
+    const processOriginalOrder = async (qty: number, orderPrice: number) => {
+        if (!stock) return;
+        const newDb = { ...db };
+        const targetStock = newDb.stocks![stock.id];
+        const buyerOrSeller = newDb.users[currentUser!.name];
+
+        let remainingQty = qty;
+        let matchedQty = 0;
+        let totalCost = 0;
+
+        if (tab === 'buy') {
+            // Fix: Added explicit type cast to StockOrder[] for sellOrders
+            const sellOrders = (Object.values(targetStock.sellOrders || {}) as StockOrder[])
+                .filter(o => o.price <= orderPrice)
+                .sort((a, b) => a.price - b.price || a.timestamp - b.timestamp);
+
+            for (const order of sellOrders) {
+                if (remainingQty <= 0) break;
+                const matchAmount = Math.min(order.quantity, remainingQty);
+                const orderCost = matchAmount * order.price;
+
+                const seller = newDb.users[order.userName];
+                if (seller) {
+                    seller.balanceKRW += orderCost;
+                    seller.transactions = [...(seller.transactions || []), {
+                        id: Date.now() + Math.random(), type: 'stock_sell', amount: orderCost, currency: 'KRW', description: `${stock.name} ${matchAmount}주 매도 체결`, date: new Date().toISOString()
+                    }];
+                    notify(order.userName, `${stock.name} ${matchAmount}주 매도 체결 (₩${order.price.toLocaleString()})`);
+                }
+
+                order.quantity -= matchAmount;
+                if (order.quantity <= 0) delete targetStock.sellOrders![order.id];
+                
+                remainingQty -= matchAmount;
+                matchedQty += matchAmount;
+                totalCost += orderCost;
+            }
+
+            if (matchedQty > 0) {
+                buyerOrSeller.balanceKRW -= totalCost;
+                const existing = buyerOrSeller.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
+                const newQty = existing.quantity + matchedQty;
+                const newAvg = ((existing.quantity * existing.averagePrice) + totalCost) / newQty;
+                buyerOrSeller.stockHoldings = { ...(buyerOrSeller.stockHoldings || {}), [stock.id]: { quantity: newQty, averagePrice: newAvg } };
+                buyerOrSeller.transactions = [...(buyerOrSeller.transactions || []), {
+                    id: Date.now() + Math.random(), type: 'stock_buy', amount: -totalCost, currency: 'KRW', description: `${stock.name} ${matchedQty}주 매수 체결`, date: new Date().toISOString()
+                }];
+                targetStock.currentPrice = matchedQty > 0 ? totalCost / matchedQty : targetStock.currentPrice;
+                targetStock.history.push({ date: new Date().toISOString(), price: targetStock.currentPrice });
+            }
+
+            if (remainingQty > 0) {
+                const orderId = `buy_${Date.now()}`;
+                if (!targetStock.buyOrders) targetStock.buyOrders = {};
+                targetStock.buyOrders[orderId] = { id: orderId, userName: currentUser!.name, price: orderPrice, quantity: remainingQty, timestamp: Date.now() };
+                buyerOrSeller.balanceKRW -= (remainingQty * orderPrice);
+                showModal(`${matchedQty}주 체결, ${remainingQty}주 매수 대기 등록되었습니다.`);
+            } else {
+                showModal(`${matchedQty}주 매수 체결 완료.`);
+            }
+        } else {
+            // Fix: Added explicit type cast to StockOrder[] for buyOrders
+            const buyOrders = (Object.values(targetStock.buyOrders || {}) as StockOrder[])
+                .filter(o => o.price >= orderPrice)
+                .sort((a, b) => b.price - a.price || a.timestamp - b.timestamp);
+
+            for (const order of buyOrders) {
+                if (remainingQty <= 0) break;
+                const matchAmount = Math.min(order.quantity, remainingQty);
+                const orderGain = matchAmount * order.price;
+
+                const buyer = newDb.users[order.userName];
+                if (buyer) {
+                    const existing = buyer.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
+                    const newQty = existing.quantity + matchAmount;
+                    const newAvg = ((existing.quantity * existing.averagePrice) + orderGain) / newQty;
+                    buyer.stockHoldings = { ...(buyer.stockHoldings || {}), [stock.id]: { quantity: newQty, averagePrice: newAvg } };
+                    buyer.transactions = [...(buyer.transactions || []), {
+                        id: Date.now() + Math.random(), type: 'stock_buy', amount: -orderGain, currency: 'KRW', description: `${stock.name} ${matchAmount}주 매수 체결`, date: new Date().toISOString()
+                    }];
+                    notify(order.userName, `${stock.name} ${matchAmount}주 매수 체결 (₩${order.price.toLocaleString()})`);
+                }
+
+                order.quantity -= matchAmount;
+                if (order.quantity <= 0) delete targetStock.buyOrders![order.id];
+
+                remainingQty -= matchAmount;
+                matchedQty += matchAmount;
+                totalCost += orderGain;
+            }
+
+            if (matchedQty > 0) {
+                buyerOrSeller.balanceKRW += totalCost;
+                const existing = buyerOrSeller.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
+                const newQty = existing.quantity - matchedQty;
+                const newHoldings = { ...buyerOrSeller.stockHoldings };
+                if (newQty <= 0) delete newHoldings[stock.id];
+                else newHoldings[stock.id] = { ...existing, quantity: newQty };
+                buyerOrSeller.stockHoldings = newHoldings;
+                buyerOrSeller.transactions = [...(buyerOrSeller.transactions || []), {
+                    id: Date.now() + Math.random(), type: 'stock_sell', amount: totalCost, currency: 'KRW', description: `${stock.name} ${matchedQty}주 매도 체결`, date: new Date().toISOString()
+                }];
+                targetStock.currentPrice = matchedQty > 0 ? totalCost / matchedQty : targetStock.currentPrice;
+                targetStock.history.push({ date: new Date().toISOString(), price: targetStock.currentPrice });
+            }
+
+            if (remainingQty > 0) {
+                const orderId = `sell_${Date.now()}`;
+                if (!targetStock.sellOrders) targetStock.sellOrders = {};
+                targetStock.sellOrders[orderId] = { id: orderId, userName: currentUser!.name, price: orderPrice, quantity: remainingQty, timestamp: Date.now() };
+                const existing = buyerOrSeller.stockHoldings?.[stock.id] || { quantity: 0, averagePrice: 0 };
+                buyerOrSeller.stockHoldings[stock.id] = { ...existing, quantity: existing.quantity - remainingQty };
+                showModal(`${matchedQty}주 체결, ${remainingQty}주 매도 대기 등록되었습니다.`);
+            } else {
+                showModal(`${matchedQty}주 매도 체결 완료.`);
+            }
+        }
+
+        await saveDb(newDb);
+        setQtyInput('');
     };
 
     const renderOrderBook = () => {
         if (!stock) return null;
+        if (isOriginalMode) {
+             // Fix: Added explicit type cast to StockOrder[] for sellOrders and buyOrders
+             const sellOrders = (Object.values(stock.sellOrders || {}) as StockOrder[]).sort((a,b) => b.price - a.price).slice(-5);
+             const buyOrders = (Object.values(stock.buyOrders || {}) as StockOrder[]).sort((a,b) => b.price - a.price).slice(0, 5);
+
+             return (
+                <div className="text-xs font-mono border dark:border-gray-700 rounded-lg overflow-hidden mb-4">
+                    <div className="bg-gray-100 dark:bg-gray-800 p-1 text-center text-gray-500 font-bold border-b dark:border-gray-700">실시간 호가창</div>
+                    {sellOrders.map((o, i) => (
+                        <div key={i} className="flex justify-between px-2 py-1 bg-blue-50 dark:bg-blue-900/10 text-blue-600 cursor-pointer hover:bg-gray-200" onClick={() => { setMode('limit'); setPriceInput(o.price.toString()); }}>
+                            <span>{fmt(o.price)}</span>
+                            <span className="opacity-50">{o.quantity}주</span>
+                        </div>
+                    ))}
+                    <div className="px-2 py-2 font-bold text-center border-y dark:border-gray-700 text-lg bg-white dark:bg-[#1E1E1E]">
+                        {fmt(currentPrice)}
+                    </div>
+                    {buyOrders.map((o, i) => (
+                        <div key={i} className="flex justify-between px-2 py-1 bg-red-50 dark:bg-red-900/10 text-red-600 cursor-pointer hover:bg-gray-200" onClick={() => { setMode('limit'); setPriceInput(o.price.toString()); }}>
+                            <span>{fmt(o.price)}</span>
+                            <span className="opacity-50">{o.quantity}주</span>
+                        </div>
+                    ))}
+                </div>
+             );
+        }
+
         const sells = [3, 2, 1].map(i => Math.floor(currentPrice * (1 + i * 0.003)));
         const buys = [1, 2, 3].map(i => Math.floor(currentPrice * (1 - i * 0.003)));
 
         return (
             <div className="text-xs font-mono border dark:border-gray-700 rounded-lg overflow-hidden mb-4">
-                <div className="bg-gray-100 dark:bg-gray-800 p-1 text-center text-gray-500 font-bold border-b dark:border-gray-700">호가</div>
+                <div className="bg-gray-100 dark:bg-gray-800 p-1 text-center text-gray-500 font-bold border-b dark:border-gray-700">예상 호가</div>
                 {sells.map(p => (
                     <div key={p} className="flex justify-between px-2 py-1 bg-blue-50 dark:bg-blue-900/10 text-blue-600 cursor-pointer hover:bg-gray-200" onClick={() => { setMode('limit'); setPriceInput(p.toString()); }}>
                         <span>{fmt(p)}</span>
@@ -346,7 +454,6 @@ export const StockTab: React.FC = () => {
 
     return (
         <div className="flex flex-col h-full space-y-4">
-            {/* Stock List Scroll - Added p-4 for clipping prevention */}
             <div className="flex overflow-x-auto gap-3 pb-2 scrollbar-hide select-none p-4 -mx-4">
                 <div 
                     onClick={() => setIsSungSpiView(true)}
@@ -367,11 +474,9 @@ export const StockTab: React.FC = () => {
                             onClick={() => { setSelectedId(s.id); setIsSungSpiView(false); }}
                             className={`relative flex-shrink-0 min-w-[140px] p-3 rounded-xl border cursor-pointer transition-all overflow-hidden ${selectedId === s.id && !isSungSpiView ? 'bg-gray-800 text-white border-gray-600 scale-105 shadow-lg' : 'bg-white dark:bg-[#1E1E1E] border-gray-200 dark:border-gray-700'}`}
                         >
-                            {/* Background Chart */}
                             <div className="absolute inset-0 z-0 pointer-events-none opacity-20 bottom-0 top-auto h-16">
                                 <MiniStockChart data={s.history} color={cardColor} />
                             </div>
-
                             <div className="relative z-10">
                                 {myStockQty > 0 && (
                                     <span className="absolute top-[-6px] right-[-6px] bg-green-100 text-green-800 text-[10px] px-2 py-0.5 rounded-full font-bold z-10 border border-green-200 shadow-sm">
@@ -394,11 +499,7 @@ export const StockTab: React.FC = () => {
                     <h3 className="text-3xl font-bold mb-2">Sung-SPI 종합주가지수</h3>
                     <p className="text-4xl font-bold text-yellow-500 mb-6">{sungSpi.toFixed(2)}</p>
                     <div className="bg-gray-900 rounded-xl p-4 overflow-hidden">
-                        <StockChart 
-                            data={spiHistory} 
-                            color="#eab308" 
-                            period="1D" 
-                        />
+                        <StockChart data={spiHistory} color="#eab308" period="1D" />
                     </div>
                     <p className="text-center text-gray-500 mt-4">종합주가지수는 시장 전체(시가총액)의 흐름을 나타냅니다.</p>
                 </Card>
@@ -507,7 +608,7 @@ export const StockTab: React.FC = () => {
                                 onClick={handleOrder} 
                                 className={`w-full py-4 text-lg mt-4 shadow-lg ${tab === 'buy' ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}
                             >
-                                {tab === 'buy' ? '현금 매수' : '현금 매도'}
+                                {tab === 'buy' ? (isOriginalMode ? '매수 주문 접수' : '현금 매수') : (isOriginalMode ? '매도 주문 접수' : '현금 매도')}
                             </Button>
                         </Card>
                     </div>

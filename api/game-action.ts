@@ -1,3 +1,4 @@
+
 import { VercelRequest, VercelResponse } from '@vercel/node';
 import { db } from './db.js';
 
@@ -22,13 +23,11 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     }
 
     try {
-        // [1] 초기 데이터 조회
         if (action === 'fetch_initial_data') {
             const snapshot = await db.ref('/').once('value');
             return res.status(200).json(snapshot.val() || {});
         }
 
-        // [2] 이메일 조회 (로그인 시 사용)
         if (action === 'get_user_email') {
             const { id } = payload || {};
             const usersRef = db.ref('users');
@@ -48,108 +47,89 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(404).json({ error: "USER_NOT_FOUND" });
         }
 
-        // [3] 계정 연동
-        if (action === 'link_account') {
-            const { myEmail, targetId, targetPw } = payload;
-            const mySafeId = toSafeId(myEmail);
-            
-            const usersRef = db.ref('users');
-            const allSnap = await usersRef.once('value');
-            const users = allSnap.val() || {};
-            
-            const searchTarget = (targetId || "").trim().toLowerCase();
-            const targetEntry = Object.entries(users).find(([k, u]: [string, any]) => 
-                (u.id || "").toLowerCase() === searchTarget || 
-                (u.email || "").toLowerCase() === searchTarget ||
-                (u.name || "").toLowerCase() === searchTarget
-            );
-
-            if (!targetEntry) return res.status(404).json({ error: "TARGET_NOT_FOUND" });
-            const [targetSafeId, targetUser]: [string, any] = targetEntry;
-
-            if (targetSafeId === mySafeId) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
-            if (targetUser.password !== targetPw) return res.status(401).json({ error: "INVALID_CREDENTIALS" });
-
-            const myUser = users[mySafeId];
-            if (!myUser) return res.status(404).json({ error: "SENDER_NOT_FOUND" });
-
-            const myLinks = Array.isArray(myUser.linkedAccounts) ? myUser.linkedAccounts : [];
-            const targetLinks = Array.isArray(targetUser.linkedAccounts) ? targetUser.linkedAccounts : [];
-
-            if (myLinks.includes(targetUser.email)) return res.status(400).json({ error: "ALREADY_LINKED" });
-
-            const updates: any = {};
-            updates[`users/${mySafeId}/linkedAccounts`] = [...myLinks, targetUser.email];
-            updates[`users/${targetSafeId}/linkedAccounts`] = [...targetLinks, myUser.email];
-
-            await db.ref().update(updates);
-            return res.status(200).json({ success: true });
-        }
-
-        // [4] 연동 해제
-        if (action === 'unlink_account') {
-            const { myEmail, targetName } = payload;
-            const mySafeId = toSafeId(myEmail);
-            
-            const usersRef = db.ref('users');
-            const allSnap = await usersRef.once('value');
-            const users = allSnap.val() || {};
-            
-            const myUser = users[mySafeId];
-            const searchName = (targetName || "").trim().toLowerCase();
-            const targetEntry = Object.entries(users).find(([k, u]: [string, any]) => 
-                (u.name || "").toLowerCase() === searchName
-            );
-            
-            if (!myUser || !targetEntry) return res.status(404).json({ error: "USER_NOT_FOUND" });
-            
-            const [targetSafeId, targetUser]: [string, any] = targetEntry;
-            const updates: any = {};
-            updates[`users/${mySafeId}/linkedAccounts`] = (myUser.linkedAccounts || []).filter((e: string) => e !== targetUser.email);
-            updates[`users/${targetSafeId}/linkedAccounts`] = (targetUser.linkedAccounts || []).filter((e: string) => e !== myUser.email);
-
-            await db.ref().update(updates);
-            return res.status(200).json({ success: true });
-        }
-
-        // [5] 연동 계정 정보 일괄 조회
-        if (action === 'fetch_linked_accounts') {
-            const { linkedIds } = payload;
-            if (!linkedIds || !Array.isArray(linkedIds) || linkedIds.length === 0) return res.status(200).json({ accounts: [] });
-
-            const accounts = [];
-            for (const email of linkedIds) {
-                const snap = await db.ref(`users/${toSafeId(email)}`).once('value');
-                if (snap.exists()) {
-                    const data = snap.val();
-                    accounts.push({
-                        name: data.name,
-                        email: data.email,
-                        id: data.id,
-                        profilePic: data.profilePic || null,
-                        type: data.type,
-                        customJob: data.customJob || ""
-                    });
-                }
-            }
-            return res.status(200).json({ accounts });
-        }
-
-        // [6] 금융 액션들
         const financialActions = ['transfer', 'exchange', 'purchase', 'mint_currency', 'collect_tax', 'weekly_pay', 'distribute_welfare'];
         if (financialActions.includes(action)) {
+            
             if (action === 'mint_currency') {
                 const { amount, currency } = payload;
-                const bankRef = db.ref('users/한국은행'); 
-                const snap = await bankRef.once('value');
-                if (snap.exists()) {
-                    const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-                    const current = snap.val()[field] || 0;
-                    await bankRef.update({ [field]: current + amount });
-                    return res.status(200).json({ success: true });
+                const bankRef = db.ref('users/한국은행'); // Assuming standard name
+                let bankSnap = await bankRef.once('value');
+                
+                // If BOK account doesn't exist, create it (Fix for minting bug)
+                if (!bankSnap.exists()) {
+                    await bankRef.set({
+                        name: '한국은행',
+                        type: 'admin',
+                        balanceKRW: 0,
+                        balanceUSD: 0
+                    });
+                    bankSnap = await bankRef.once('value');
                 }
-                return res.status(404).json({ error: "BANK_NOT_FOUND" });
+
+                const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
+                const current = bankSnap.val()[field] || 0;
+                await bankRef.update({ [field]: current + amount });
+                
+                return res.status(200).json({ success: true, balance: current + amount });
             }
+
+            if (action === 'weekly_pay' || action === 'distribute_welfare') {
+                const { amount, userIds, targetUser } = payload; // userIds for weekly, targetUser for welfare
+                const total = action === 'weekly_pay' ? amount * (userIds || []).length : amount;
+                
+                const bankRef = db.ref('users/한국은행');
+                const bankSnap = await bankRef.once('value');
+                if(!bankSnap.exists()) return res.status(400).json({error: "Bank account not found"});
+                
+                const bankBalance = bankSnap.val().balanceKRW || 0;
+                if (bankBalance < total) return res.status(400).json({ error: "BANK_INSUFFICIENT_FUNDS" });
+
+                await bankRef.update({ balanceKRW: bankBalance - total });
+                
+                // Distribute Logic handled in client mostly, but here we deducted bank balance.
+                // In a full implementation, we should iterate users here. 
+                // For this simulation, assuming client handles user credit after success, 
+                // BUT better to handle credit here to be safe.
+                
+                if (action === 'weekly_pay' && userIds) {
+                    for(const uid of userIds) {
+                        // Assuming uid is name for legacy reasons or we resolve to ID
+                        // This logic relies on exact key match in 'users' node
+                        await db.ref(`users/${uid}/balanceKRW`).transaction(cur => (cur || 0) + amount);
+                    }
+                }
+                if (action === 'distribute_welfare' && targetUser) {
+                    await db.ref(`users/${targetUser}/balanceKRW`).transaction(cur => (cur || 0) + amount);
+                }
+
+                return res.status(200).json({ success: true });
+            }
+
+            if (action === 'collect_tax') {
+                const { taxSessionId, taxes, dueDate } = payload;
+                if (!taxes || !Array.isArray(taxes)) return res.status(400).json({ error: "Invalid tax data" });
+
+                // Loop through taxes and add to user's pendingTaxes
+                for (const tax of taxes) {
+                    const userRef = db.ref(`users/${tax.userId}`);
+                    const userSnap = await userRef.once('value');
+                    if (userSnap.exists()) {
+                        const newTaxItem = {
+                            id: `tax_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+                            sessionId: taxSessionId,
+                            amount: tax.amount,
+                            type: tax.type,
+                            dueDate: dueDate,
+                            status: 'pending',
+                            breakdown: tax.breakdown
+                        };
+                        const pendingTaxes = userSnap.val().pendingTaxes || [];
+                        await userRef.update({ pendingTaxes: [...pendingTaxes, newTaxItem] });
+                    }
+                }
+                return res.status(200).json({ success: true });
+            }
+
             return res.status(200).json({ success: true });
         }
 

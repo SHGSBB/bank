@@ -7,7 +7,7 @@ export interface UserPreferences {
     assetDisplayMode?: 'full' | 'rounded';
     biometricEnabled?: boolean;
     saveLoginHistory?: boolean;
-    use2FA?: boolean; // 2단계 인증 사용 여부
+    use2FA?: boolean;
 }
 
 export interface IDCard {
@@ -23,6 +23,39 @@ export interface Transaction {
     currency: 'KRW' | 'USD';
     description: string;
     date: string;
+}
+
+export interface LedgerItem {
+    id: string;
+    date: string; // YYYY-MM-DD
+    type: 'income' | 'expense';
+    category: string;
+    description: string;
+    amount: number;
+    isScheduled: boolean; // 예정 내역 여부
+    isCompleted?: boolean; // 실제 실행 여부
+}
+
+export interface ScheduledTransfer {
+    id: string;
+    type: 'reserved' | 'recurring';
+    fromUser: string;
+    toUser: string;
+    amount: number;
+    description?: string;
+    status: 'active' | 'completed' | 'cancelled';
+    
+    // For Reserved
+    scheduledTime?: string; // ISO String
+    
+    // For Recurring
+    recurringConfig?: {
+        startDate: string;
+        endDate: string;
+        frequencyType: 'daily' | 'weekly' | 'monthly';
+        frequencyValue: number; // e.g., every 3 days, or day of week (0-6), or day of month (1-31)
+        nextRunTime: string;
+    };
 }
 
 export interface PendingTax {
@@ -112,6 +145,8 @@ export interface User {
     idCard?: IDCard;
     preferences?: UserPreferences;
     transactions?: Transaction[];
+    ledger?: Record<string, LedgerItem>; // 가계부
+    autoTransfers?: Record<string, ScheduledTransfer>; // 자동이체
     notifications?: ToastNotification[] | Record<string, ToastNotification>;
     pendingTaxes?: PendingTax[];
     pendingTax?: PendingTax;
@@ -135,7 +170,7 @@ export interface ToastNotification {
     date: string;
     type: 'info' | 'success' | 'warning' | 'error' | 'tax';
     title?: string;
-    action?: any;
+    action?: string | null;
     actionData?: any;
     isPaid?: boolean;
     timestamp: number;
@@ -317,6 +352,7 @@ export interface Application {
     savingsType?: 'regular' | 'term' | 'installment';
     collateral?: string | null;
     collateralStatus?: 'proposed_by_user' | 'proposed_by_admin' | 'accepted';
+    durationWeeks?: number;
 }
 
 export interface ExchangeConfig {
@@ -362,6 +398,14 @@ export interface StockHistory {
     price: number;
 }
 
+export interface StockOrder {
+    id: string;
+    userName: string;
+    price: number;
+    quantity: number;
+    timestamp: number;
+}
+
 export interface Stock {
     id: string;
     name: string;
@@ -369,6 +413,8 @@ export interface Stock {
     openPrice: number;
     totalShares: number;
     history: StockHistory[];
+    buyOrders?: Record<string, StockOrder>;
+    sellOrders?: Record<string, StockOrder>;
 }
 
 export interface SavingsRate {
@@ -394,9 +440,6 @@ export interface Judgement {
     ministerNote?: string;
 }
 
-/**
- * Added missing interfaces for AppInfo and Chat
- */
 export interface AppInfo {
     version: string;
     developer: string;
@@ -407,7 +450,7 @@ export interface AppInfo {
 }
 
 export interface ChatAttachment {
-    type: 'image' | 'file' | 'proposal' | 'application';
+    type: 'image' | 'file' | 'proposal' | 'application' | 'share_user' | 'share_id' | 'transfer_request';
     value: string;
     data?: any;
 }
@@ -418,7 +461,19 @@ export interface ChatMessage {
     text: string;
     timestamp: number;
     attachment?: ChatAttachment;
-    threadId?: string;
+    threadId?: string; // Links to parent message
+    type?: 'system' | 'user' | 'thread_root' | 'conclusion' | 'notice';
+    reactions?: Record<string, string>; // user: emoji
+    isNotice?: boolean;
+    negotiationStatus?: 'pending' | 'accepted' | 'rejected' | 'closed';
+}
+
+export interface ChatNotice {
+    id: string;
+    messageId: string;
+    text: string;
+    author: string;
+    timestamp: number;
 }
 
 export interface Chat {
@@ -429,6 +484,11 @@ export interface Chat {
     lastMessage?: string;
     lastTimestamp?: number;
     messages?: Record<string, ChatMessage>;
+    category?: string;
+    isPinned?: boolean; // Pinned to top of list
+    isMuted?: boolean;
+    coverImage?: string;
+    notices?: ChatNotice[];
 }
 
 export interface DB {
@@ -461,6 +521,7 @@ export interface DB {
             isManualOverride: boolean;
             sungSpiEnabled: boolean;
             sungSpiBasePoint: number;
+            mode?: 'simple' | 'original';
         };
         standards?: Standards;
         welfareTiers?: { threshold: number, amount: number }[];

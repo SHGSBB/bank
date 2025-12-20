@@ -8,12 +8,12 @@ import { SupportFundTab } from './SupportFundTab';
 import { BondIssuanceTab } from './BondIssuanceTab';
 import { AdminStockTab } from './AdminStockTab';
 import { BudgetDistributionTab } from './BudgetDistributionTab';
+import { AdminRealEstateTab } from './AdminRealEstateTab';
 
 export const AdminFinanceTab: React.FC<{ restricted?: boolean }> = ({ restricted }) => {
-    // 기본적으로 발권 탭이 보이도록 함
     const [subTab, setSubTab] = useState('발권');
     
-    const tabs = ['발권', '세금징수', '주급지급', '복지', '지원금 지급', '국채발행', '주식관리']
+    const tabs = ['발권', '세금징수', '주급지급', '복지', '지원금 지급', '국채발행', '주식관리', '부동산관리']
         .filter(t => !restricted || (t !== '발권' && t !== '예산지급'));
 
     return (
@@ -38,6 +38,7 @@ export const AdminFinanceTab: React.FC<{ restricted?: boolean }> = ({ restricted
                 {subTab === '국채발행' && <BondIssuanceTab />}
                 {subTab === '주식관리' && <AdminStockTab />}
                 {subTab === '예산지급' && <BudgetDistributionTab />}
+                {subTab === '부동산관리' && <AdminRealEstateTab />}
             </div>
         </div>
     );

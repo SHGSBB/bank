@@ -1,9 +1,7 @@
 
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
-// Fix: Added LineIcon and Modal to imports
 import { Card, Button, Input, LineIcon, Modal } from '../../Shared';
-// Fix: Added DEFAULT_DB import
 import { DEFAULT_DB } from '../../../types';
 
 const CreditsOverlay: React.FC<{ onClose: () => void, data: any }> = ({ onClose, data }) => {
@@ -15,25 +13,25 @@ const CreditsOverlay: React.FC<{ onClose: () => void, data: any }> = ({ onClose,
             <div className="flex-1 w-full animate-credits py-[100vh]">
                 <div className="flex flex-col items-center gap-20 text-center px-10">
                     <div className="space-y-4">
-                        <h1 className="text-6xl font-black mb-10 tracking-tighter">SUNGHWA BANK</h1>
-                        <p className="text-xl opacity-50">THE DIGITAL BANKING SIMULATION</p>
+                        <h1 className="text-6xl font-black mb-10 tracking-tighter">성화 은행</h1>
+                        <p className="text-xl opacity-50">디지털 뱅킹 시뮬레이션 플랫폼</p>
                     </div>
 
                     <div className="space-y-10">
                         <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">Lead Developer</p>
+                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">총괄 개발자</p>
                             <p className="text-3xl font-bold">{data.developer}</p>
                         </div>
                         <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">Platform Version</p>
+                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">플랫폼 버전</p>
                             <p className="text-3xl font-bold">v{data.version}</p>
                         </div>
                         <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">Architecture</p>
+                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">시스템 아키텍처</p>
                             <p className="text-3xl font-bold">{data.program}</p>
                         </div>
                         <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">Last Infrastructure Update</p>
+                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">최종 인프라 업데이트</p>
                             <p className="text-xl font-bold">{new Date(data.lastUpdate).toLocaleDateString()}</p>
                         </div>
                         
@@ -46,7 +44,7 @@ const CreditsOverlay: React.FC<{ onClose: () => void, data: any }> = ({ onClose,
                     </div>
 
                     <div className="mt-40 space-y-4">
-                        <p className="text-2xl font-bold italic">Special Thanks to All Citizens</p>
+                        <p className="text-2xl font-bold italic">모든 성화국 시민 여러분께 감사의 말씀을 전합니다</p>
                         <p className="opacity-30 text-sm">© 2025 SungHwa Bank Team. All rights reserved.</p>
                     </div>
                 </div>
@@ -70,7 +68,6 @@ export const InfoTab: React.FC = () => {
     const info = db.settings.appInfo || DEFAULT_DB.settings.appInfo!;
     const [showCredits, setShowCredits] = useState(false);
 
-    // Edit State
     const [isEditing, setIsEditing] = useState(false);
     const [editInfo, setEditInfo] = useState(info);
     const [newLabel, setNewLabel] = useState('');
@@ -107,22 +104,22 @@ export const InfoTab: React.FC = () => {
                     <div className="w-20 h-20 bg-green-500 rounded-3xl flex items-center justify-center text-white shadow-lg mb-2">
                         <LineIcon icon="finance" className="w-10 h-10" />
                     </div>
-                    <h4 className="text-2xl font-black tracking-tighter">SUNGHWA BANK</h4>
-                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">Version {info.version}</p>
+                    <h4 className="text-2xl font-black tracking-tighter">성화 은행 (SUNGHWA BANK)</h4>
+                    <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">버전 {info.version}</p>
                 </div>
             </Card>
 
             <div className="space-y-4">
                 <div className="flex justify-between items-center text-sm border-b dark:border-gray-700 pb-2">
-                    <span className="text-gray-500">개발자</span>
+                    <span className="text-gray-500">총괄 개발자</span>
                     <span className="font-bold">{info.developer}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm border-b dark:border-gray-700 pb-2">
-                    <span className="text-gray-500">프로그램</span>
+                    <span className="text-gray-500">프로그램 명</span>
                     <span className="font-bold">{info.program}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm border-b dark:border-gray-700 pb-2">
-                    <span className="text-gray-500">지원</span>
+                    <span className="text-gray-500">기술 지원</span>
                     <span className="font-bold text-blue-500 underline">{info.support}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm border-b dark:border-gray-700 pb-2">

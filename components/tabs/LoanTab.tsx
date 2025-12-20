@@ -15,6 +15,9 @@ export const LoanTab: React.FC = () => {
             .filter(a => a.applicantName === currentUser?.name && a.type === 'loan');
     }, [db.pendingApplications, currentUser]);
 
+    const interestRate = db.settings.loanInterestRate?.rate || 5;
+    const loanPeriod = db.settings.loanInterestRate?.periodWeeks || 4;
+
     const handleApply = async () => {
         const valAmount = parseInt(amount);
         if (isNaN(valAmount) || valAmount <= 0) return showModal('금액을 입력하세요.');
@@ -41,36 +44,79 @@ export const LoanTab: React.FC = () => {
 
     return (
         <div className="space-y-6">
-            <h3 className="text-2xl font-bold">대출 서비스</h3>
+            <h3 className="text-2xl font-bold">대출 상품</h3>
             
-            <Card className="bg-black text-white p-8 rounded-[35px] border-none shadow-xl">
-                <div className="space-y-6">
-                    <div>
-                        <label className="text-[10px] font-black text-gray-500 mb-2 block uppercase tracking-widest">Amount to Borrow</label>
-                        <MoneyInput value={amount} onChange={e => setAmount(e.target.value)} placeholder="₩ 0" className="bg-transparent text-4xl font-black border-none p-0 focus:ring-0 placeholder-gray-800" />
+            <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-xl text-center border border-red-200 dark:border-red-800">
+                <p className="text-sm text-gray-500 font-bold uppercase mb-1">현재 적용 금리</p>
+                <p className="text-2xl font-bold text-red-600 dark:text-red-400">연 {interestRate}% / {loanPeriod}주</p>
+            </div>
+
+            <Card>
+                <div className="flex justify-between items-center mb-4">
+                    <h4 className="font-bold text-xl">대출 신청</h4>
+                </div>
+                <div className="space-y-4">
+                    <MoneyInput 
+                        value={amount} 
+                        onChange={e => setAmount(e.target.value)} 
+                        placeholder="대출 요청 금액 (₩)" 
+                        className="text-right text-xl font-bold p-3"
+                    />
+                    
+                    <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                        <label className="text-sm font-bold block mb-2">담보 설정 (선택)</label>
+                        {selectedProperty ? (
+                            <div className="flex justify-between items-center bg-white dark:bg-[#1E1E1E] p-2 rounded border">
+                                <span className="text-sm font-bold">집 #{selectedProperty.id} (₩{selectedProperty.price.toLocaleString()})</span>
+                                <button onClick={() => setSelectedProperty(null)} className="text-red-500 text-xs">해제</button>
+                            </div>
+                        ) : (
+                            <Button variant="secondary" onClick={() => setShowPropModal(true)} className="w-full text-xs py-2">
+                                보유 부동산 선택하기
+                            </Button>
+                        )}
+                        <p className="text-xs text-gray-400 mt-2">* 담보 설정 시 승인 확률과 한도가 높아집니다.</p>
                     </div>
-                    <Button onClick={handleApply} className="w-full py-5 bg-green-500 text-black text-lg font-black rounded-2xl hover:bg-green-400 active:scale-95 transition-all">신청서 제출</Button>
+
+                    <Button onClick={handleApply} className="w-full py-4 text-lg bg-red-600 hover:bg-red-500">신청서 제출</Button>
+                    <p className="text-center text-xs text-gray-400">신청 시 한국은행 관리자와 1:1 채팅이 시작됩니다.</p>
                 </div>
             </Card>
 
             {myApplications.length > 0 && (
-                <div className="space-y-4">
-                    <h4 className="font-bold text-sm text-gray-400 px-1 uppercase tracking-wider">나의 신청 현황</h4>
-                    {myApplications.map(app => (
-                        <div key={app.id} className="p-5 bg-white dark:bg-[#1E1E1E] rounded-3xl border dark:border-gray-800 flex justify-between items-center shadow-sm">
-                            <div>
-                                <p className="font-black text-lg">₩ {app.amount.toLocaleString()}</p>
-                                <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold">{app.status === 'pending' ? 'Reviewing' : app.status}</p>
-                            </div>
-                            <div className="flex items-center gap-2">
-                                <span className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase ${app.status === 'pending' ? 'bg-yellow-100 text-yellow-700' : (app.status === 'approved' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700')}`}>
-                                    {app.status === 'pending' ? '심사 중' : (app.status === 'approved' ? '승인됨' : '거절됨')}
+                <div className="mt-8">
+                    <h4 className="font-bold text-lg mb-3">나의 신청 현황</h4>
+                    <div className="space-y-3">
+                        {myApplications.map(app => (
+                            <div key={app.id} className="bg-white dark:bg-gray-800 p-4 rounded-2xl border border-gray-100 shadow-sm flex justify-between items-center">
+                                <div>
+                                    <p className="font-bold text-lg">₩ {app.amount.toLocaleString()}</p>
+                                    <p className="text-xs text-gray-500 mt-1 uppercase font-bold">{app.status === 'pending' ? '심사 중' : app.status}</p>
+                                </div>
+                                <span className={`px-3 py-1 rounded-full text-xs font-bold ${app.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'}`}>
+                                    {app.status}
                                 </span>
                             </div>
-                        </div>
-                    ))}
+                        ))}
+                    </div>
                 </div>
             )}
+
+            <Modal isOpen={showPropModal} onClose={() => setShowPropModal(false)} title="담보 부동산 선택">
+                <div className="space-y-2">
+                    {(db.realEstate.grid || []).filter(p => p.owner === currentUser?.name).map(p => (
+                        <div 
+                            key={p.id} 
+                            onClick={() => { setSelectedProperty(p); setShowPropModal(false); }}
+                            className="p-3 border rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 flex justify-between"
+                        >
+                            <span>집 #{p.id}</span>
+                            <span className="font-bold">₩{p.price.toLocaleString()}</span>
+                        </div>
+                    ))}
+                    {(db.realEstate.grid || []).filter(p => p.owner === currentUser?.name).length === 0 && <p className="text-center text-gray-500">보유한 부동산이 없습니다.</p>}
+                </div>
+            </Modal>
         </div>
     );
 };

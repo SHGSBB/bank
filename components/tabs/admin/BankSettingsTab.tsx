@@ -19,7 +19,10 @@ export const BankSettingsTab: React.FC = () => {
     const [krwMintDisabled, setKrwMintDisabled] = useState(db.settings?.mintingRestriction?.krwDisabled || false);
     const [usdMintDisabled, setUsdMintDisabled] = useState(db.settings?.mintingRestriction?.usdDisabled || false);
 
-    // Interest Rates with safety checks (1단계 수정 사항 반영)
+    // Stock Settings
+    const [stockModeOriginal, setStockModeOriginal] = useState(db.settings.stockMarket?.mode === 'original');
+
+    // Interest Rates
     const [loanRate, setLoanRate] = useState(db.settings?.loanInterestRate?.rate?.toString() || '5');
     const [loanWeeks, setLoanWeeks] = useState(db.settings?.loanInterestRate?.periodWeeks?.toString() || '4');
     
@@ -43,6 +46,9 @@ export const BankSettingsTab: React.FC = () => {
         newDb.settings.taxSeparation = taxSeparation;
         newDb.settings.transferLimit = parseInt(transferLimit) || 1000000;
         newDb.settings.mintingRestriction = { krwDisabled: krwMintDisabled, usdDisabled: usdMintDisabled };
+
+        if (!newDb.settings.stockMarket) newDb.settings.stockMarket = { isOpen: true, openTime: "09:00", closeTime: "15:30", isManualOverride: false, sungSpiEnabled: true, sungSpiBasePoint: 1000 };
+        newDb.settings.stockMarket.mode = stockModeOriginal ? 'original' : 'simple';
 
         newDb.settings.loanInterestRate = { rate: parseFloat(loanRate) || 5, periodWeeks: parseInt(loanWeeks) || 4 };
         newDb.settings.savingsInterest = {
@@ -76,9 +82,9 @@ export const BankSettingsTab: React.FC = () => {
                     <div><h4 className="font-bold text-blue-600">PIN 인증 강제 해제</h4><p className="text-[10px] opacity-50">중요 작업 시 PIN 입력 생략</p></div>
                     <Toggle checked={bypassPin} onChange={setBypassPin} />
                 </div>
-                <div className="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-xl border flex justify-between items-center">
-                    <div><h4 className="font-bold text-purple-600">세금 종류 분류</h4><p className="text-[10px] opacity-50">재산세/종부세 분리 징수</p></div>
-                    <Toggle checked={taxSeparation} onChange={setTaxSeparation} />
+                <div className="p-4 bg-gray-100 dark:bg-gray-800 rounded-xl border flex justify-between items-center">
+                    <div><h4 className="font-bold">주식 시장 오리지널 모드</h4><p className="text-[10px] opacity-50">호가창 기반 실시간 매칭 체결</p></div>
+                    <Toggle checked={stockModeOriginal} onChange={setStockModeOriginal} />
                 </div>
             </div>
 
@@ -144,20 +150,6 @@ export const BankSettingsTab: React.FC = () => {
                             </div>
                         </div>
                     </Card>
-                </div>
-            </div>
-
-            <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl border">
-                <h4 className="font-bold mb-4">중앙은행 발권 제한</h4>
-                <div className="flex flex-wrap gap-6">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={krwMintDisabled} onChange={e => setKrwMintDisabled(e.target.checked)} className="w-5 h-5 accent-red-500" />
-                        <span className="font-bold">KRW(원) 직권 발권 금지</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={usdMintDisabled} onChange={e => setUsdMintDisabled(e.target.checked)} className="w-5 h-5 accent-red-500" />
-                        <span className="font-bold">USD(달러) 직권 발권 금지</span>
-                    </label>
                 </div>
             </div>
 

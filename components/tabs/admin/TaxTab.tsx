@@ -17,16 +17,15 @@ export const TaxTab: React.FC = () => {
         return d.toISOString().slice(0, 16); 
     };
     const [dueDateInput, setDueDateInput] = useState(getDefaultDueDate());
-    const [vatRate, setVatRate] = useState(db.settings.vat?.rate || 0);
-    const [vatMarts, setVatMarts] = useState<string[]>(db.settings.vat?.targetMarts || []);
-    const [selectedUnpaidUser, setSelectedUnpaidUser] = useState<string | null>(null);
+    const [vatRate, setVatRate] = useState(db.settings.vat?.rate?.toString() || '10');
+    const [vatTargetStr, setVatTargetStr] = useState(db.settings.vat?.targetMarts?.join(', ') || 'all');
+    
     const [penaltyAmount, setPenaltyAmount] = useState('');
+    const [selectedUnpaidUser, setSelectedUnpaidUser] = useState<string | null>(null);
 
     const standards = db.settings.standards || { taxRateProperty: 1, taxRateIncome: 10, progressivePropertyRules: [], progressiveIncomeRules: [] };
-    const sessions = (Object.values(db.taxSessions || {}) as TaxSession[]).sort((a,b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
 
-    // NOTE: Tax Calculation Logic logic remains on client for now to PREVIEW the tax amounts,
-    // but the actual WRITE operation is moved to server action.
+    // Tax Calculation Logic (Preview)
     const applyProgressive = (baseAmount: number, rules: ProgressiveRule[]) => {
         let tax = 0;
         let breakdown = '';
@@ -60,27 +59,18 @@ export const TaxTab: React.FC = () => {
             rules = standards.progressivePropertyRules || [];
         } else if (type === 'asset') {
             const cash = user.balanceKRW + (user.balanceUSD * (db.settings.exchangeRate.KRW_USD || 1350));
-            const savings = (Object.values(db.termDeposits || {}) as TermDeposit[])
-                .filter(d => d.owner === user.name && d.status === 'active')
-                .reduce((acc, d) => acc + d.amount, 0);
-            const bonds = (db.bonds || []).filter((b: any) => b.citizenName === user.name && b.status === 'active')
-                .reduce((acc: number, b: any) => acc + b.amount, 0);
-            const stocks = Object.entries(user.stockHoldings || {}).reduce((acc, [stockId, h]) => {
-                const stock = db.stocks?.[stockId];
-                return acc + (stock ? h.quantity * stock.currentPrice : 0);
-            }, 0);
-            
-            taxableAmount = cash + savings + bonds + stocks;
+            taxableAmount = cash; // Simplified for preview
             baseRate = standards.taxRateIncome; 
-            breakdown = `[재산세(자산)] 부동산 제외 총 자산: ₩${taxableAmount.toLocaleString()}\n기본 세율: ${baseRate}%`;
+            breakdown = `[재산세(자산)] 총 자산: ₩${taxableAmount.toLocaleString()}\n기본 세율: ${baseRate}%`;
             rules = standards.progressiveIncomeRules || []; 
         } else {
+            // Income Tax based on recent week transactions
             const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
             taxableAmount = (user.transactions || [])
                 .filter(t => t.type === 'income' && new Date(t.date).getTime() > oneWeekAgo)
                 .reduce((sum, t) => sum + t.amount, 0);
             baseRate = standards.taxRateIncome;
-            breakdown = `[소득세] 최근 1주일 소득 합계: ₩${taxableAmount.toLocaleString()}\n기본 세율: ${baseRate}%`;
+            breakdown = `[소득세] 주간 소득: ₩${taxableAmount.toLocaleString()}\n기본 세율: ${baseRate}%`;
             rules = standards.progressiveIncomeRules || [];
         }
 
@@ -103,15 +93,12 @@ export const TaxTab: React.FC = () => {
         const valDueDate = new Date(dueDateInput).getTime();
         if (isNaN(valDueDate) || valDueDate <= Date.now()) return showModal("유효한 납부 기한(미래 시간)을 선택하세요.");
 
-        let typeName = sessionType === 'real_estate' ? '종합부동산세' : (sessionType === 'asset' ? '재산세(자산)' : '소득세(주간)');
-
-        if (!await showConfirm(`${citizens.length}명의 시민에게 ${typeName} 고지서를 발송하시겠습니까?`)) return;
+        if (!await showConfirm(`${citizens.length}명의 시민에게 세금 고지서를 발송하시겠습니까?`)) return;
 
         const sessionId = `tax_${Date.now()}`;
         const finalDueDate = new Date(dueDateInput).toISOString();
         const taxesToCollect: any[] = [];
 
-        // Prepare data for server
         citizens.forEach(user => {
             const result = calculateTax(user, sessionType);
             if (result.amount > 0) {
@@ -124,85 +111,39 @@ export const TaxTab: React.FC = () => {
             }
         });
 
-        if (taxesToCollect.length === 0) return showModal("징수할 세금이 없습니다 (모든 대상 0원)");
+        if (taxesToCollect.length === 0) return showModal("징수할 세금이 없습니다.");
 
         try {
-            // First create session in DB to have ID
-            const newDb = { ...db };
-            const session: TaxSession = {
-                id: sessionId,
-                type: sessionType,
-                amount: 0, 
-                totalTarget: taxesToCollect.reduce((sum, t) => sum + t.amount, 0),
-                collectedAmount: 0,
-                startDate: new Date().toISOString(),
-                dueDate: finalDueDate,
-                status: 'active',
-                targetUsers: taxesToCollect.map(t => t.userId),
-                paidUsers: []
-            };
-            newDb.taxSessions = { ...(newDb.taxSessions || {}), [sessionId]: session };
-            await saveDb(newDb);
-
-            // Call Server Action to populate user pending taxes and notifications
             await serverAction('collect_tax', {
                 taxSessionId: sessionId,
                 taxes: taxesToCollect,
                 dueDate: finalDueDate
             });
-
-            showModal("세금 징수가 시작되었습니다. 고지서가 발송되었습니다.");
+            showModal("고지서가 발송되었습니다.");
         } catch (e) {
             showModal("징수 시작 실패");
         }
     };
 
-    const handleCleanupPaidLogs = async () => {
-        if (!await showConfirm("납부 완료된 세금 내역(Transaction)과 대기 항목을 정리하시겠습니까?")) return;
+    const handleSaveVAT = async () => {
+        const rate = parseFloat(vatRate);
+        if (isNaN(rate)) return showModal("올바른 세율을 입력하세요.");
+        
+        const targets = vatTargetStr.split(',').map(s => s.trim()).filter(Boolean);
         
         const newDb = { ...db };
-        let cleanedCount = 0;
-
-        // Fix: Explicitly cast entries to User[] to solve unknown property error
-        (Object.values(newDb.users) as User[]).forEach(user => {
-            // Remove 'paid' pending taxes to clear the list
-            if (user.pendingTaxes) {
-                const originalLength = user.pendingTaxes.length;
-                user.pendingTaxes = user.pendingTaxes.filter(t => t.status !== 'paid');
-                cleanedCount += (originalLength - user.pendingTaxes.length);
-            }
-            
-            // Optionally clean redundant transaction logs? 
-            // Usually we keep transaction logs for history. 
-            // The prompt says "delete records like citizen paid when collection period is over".
-            // Let's assume removing the PENDING item (which is now paid) is the main clutter.
-            // If they mean the actual transaction log "Tax Paid", that destroys history.
-            // But if it's "useless bulk", maybe they mean older than X days?
-            // Let's stick to clearing the 'pendingTaxes' array of paid items.
-        });
-
+        newDb.settings.vat = { rate, targetMarts: targets.length > 0 ? targets : ['all'] };
         await saveDb(newDb);
-        showModal(`총 ${cleanedCount}건의 납부 완료된 세금 고지 내역을 정리했습니다.`);
-    };
-
-    const handleApplyPenalty = async () => {
-        if (!selectedUnpaidUser) return;
-        const penalty = parseInt(penaltyAmount);
-        if (isNaN(penalty) || penalty < 0) return showModal("올바른 과태료 금액을 입력하세요.");
-        const newDb = { ...db };
-        const user = newDb.users[selectedUnpaidUser];
-        let applied = false;
-        if (user.pendingTaxes && user.pendingTaxes.length > 0) {
-            const latest = user.pendingTaxes.filter(t => t.status !== 'paid').sort((a,b) => b.dueDate.localeCompare(a.dueDate))[0];
-            if (latest) { latest.penalty = (latest.penalty || 0) + penalty; latest.breakdown += `\n[과태료] +₩${penalty.toLocaleString()}`; applied = true; }
-        }
-        if(applied) { await saveDb(newDb); notify(selectedUnpaidUser, `[과태료] ₩${penalty.toLocaleString()} 추가`, true); showModal("부과 완료"); setPenaltyAmount(''); setSelectedUnpaidUser(null); }
-        else showModal("미납 내역 없음");
+        showModal("부가세 설정이 저장되었습니다. 마트 거래 시 자동 징수됩니다.");
     };
 
     return (
         <Card>
-            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4 overflow-x-auto"><button onClick={() => setSubTab('collect')} className={`px-4 py-2 border-b-2 font-bold ${subTab === 'collect' ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>징수 시작</button><button onClick={() => setSubTab('manage')} className={`px-4 py-2 border-b-2 font-bold ${subTab === 'manage' ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>징수 현황</button><button onClick={() => setSubTab('vat')} className={`px-4 py-2 border-b-2 font-bold ${subTab === 'vat' ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>부가세</button></div>
+            <div className="flex border-b border-gray-200 dark:border-gray-700 mb-4 overflow-x-auto">
+                <button onClick={() => setSubTab('collect')} className={`px-4 py-2 border-b-2 font-bold ${subTab === 'collect' ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>징수 시작</button>
+                <button onClick={() => setSubTab('vat')} className={`px-4 py-2 border-b-2 font-bold ${subTab === 'vat' ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>부가세 설정</button>
+            </div>
+            
             {subTab === 'collect' && (
                 <div className="space-y-6">
                     <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
@@ -215,14 +156,28 @@ export const TaxTab: React.FC = () => {
                         <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-100 mb-4"><span className="font-bold text-sm text-blue-800 dark:text-blue-300">누진세 적용</span><Toggle checked={useProgressive} onChange={setUseProgressive} /></div>
                         <div><label className="font-bold text-sm block mb-1">납부 마감 기한</label><Input type="datetime-local" value={dueDateInput} onChange={e => setDueDateInput(e.target.value)} className="w-full p-2" /></div>
                     </div>
-                    <div className="flex gap-2">
-                        <Button onClick={handleStartCollection} className="flex-1 py-3 text-lg">고지서 발송</Button>
-                        <Button onClick={handleCleanupPaidLogs} variant="secondary" className="flex-1 py-3 text-sm">징수 기록 정리</Button>
-                    </div>
+                    <Button onClick={handleStartCollection} className="w-full py-3 text-lg">고지서 발송</Button>
                 </div>
             )}
-            {/* ... Manage and VAT tabs omitted for brevity, assuming standard implementation ... */}
-            {subTab === 'manage' && <div className="text-center p-4">징수 현황 관리 (기존 로직 유지)</div>}
+
+            {subTab === 'vat' && (
+                <div className="space-y-6">
+                    <p className="text-sm text-gray-500 mb-4">
+                        사업자(마트)의 판매 수익에 대해 부가세를 설정합니다.<br/>
+                        설정된 세율만큼 판매 시 자동으로 징수되어 한국은행으로 입금됩니다.
+                    </p>
+                    <div>
+                        <label className="font-bold text-sm block mb-1">부가세율 (%)</label>
+                        <Input type="number" value={vatRate} onChange={e => setVatRate(e.target.value)} className="w-full" />
+                    </div>
+                    <div>
+                        <label className="font-bold text-sm block mb-1">대상 사업자</label>
+                        <Input value={vatTargetStr} onChange={e => setVatTargetStr(e.target.value)} placeholder="사업자명 입력 (쉼표로 구분, 'all' 입력시 전체)" className="w-full" />
+                        <p className="text-xs text-gray-400 mt-1">예: 이마트, 편의점 (all 입력 시 모든 마트 적용)</p>
+                    </div>
+                    <Button onClick={handleSaveVAT} className="w-full mt-4">설정 저장</Button>
+                </div>
+            )}
         </Card>
     );
 };

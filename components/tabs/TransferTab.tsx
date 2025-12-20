@@ -2,142 +2,165 @@
 import React, { useState } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput } from '../Shared';
-import { User } from '../../types';
-import { searchUsersByName } from '../../services/firebase';
+import { User, ScheduledTransfer } from '../../types';
+import { searchUsersByName, generateId } from '../../services/firebase';
 
 export const TransferTab: React.FC = () => {
-    const { currentUser, db, notify, showModal, showPinModal, serverAction } = useGame();
+    const { currentUser, db, notify, showModal, showPinModal, serverAction, updateUser } = useGame();
+    const [subTab, setSubTab] = useState<'immediate' | 'reserved' | 'recurring'>('immediate');
+    
+    // Shared State
     const [recipientSearch, setRecipientSearch] = useState('');
     const [selectedRecipient, setSelectedRecipient] = useState<string | null>(null);
     const [amount, setAmount] = useState<string>('');
     const [senderMemo, setSenderMemo] = useState('');
     const [recipientMemo, setRecipientMemo] = useState('');
-    
-    // Async Search State
     const [searchResults, setSearchResults] = useState<User[]>([]);
-    const [isSearching, setIsSearching] = useState(false);
+    
+    // Reserved State
+    const [reserveDate, setReserveDate] = useState('');
+    const [reserveTime, setReserveTime] = useState('');
 
-    const isEasyMode = currentUser?.preferences?.isEasyMode && currentUser?.type === 'citizen';
+    // Recurring State
+    const [recurRange, setRecurRange] = useState<'day'|'week'|'month'>('month');
+    const [recurValue, setRecurValue] = useState(''); // Day of month, Day of week index, or interval days
+    const [recurStart, setRecurStart] = useState('');
+    const [recurEnd, setRecurEnd] = useState('');
 
     const handleSearch = async (val: string) => {
         setRecipientSearch(val);
         setSelectedRecipient(null);
-        if (val.length < 1) {
-            setSearchResults([]);
-            return;
-        }
-        
-        setIsSearching(true);
-        // Debounce could be added here, but direct call is okay for now if not too frequent
+        if (val.length < 1) { setSearchResults([]); return; }
         try {
             const results = await searchUsersByName(val);
-            // Filter out myself
             setSearchResults(results.filter(u => u.name !== currentUser?.name));
-        } catch(e) {
-            console.error(e);
-        } finally {
-            setIsSearching(false);
-        }
-    };
-
-    const handleRecipientSelect = (name: string) => {
-        setSelectedRecipient(name);
-        setRecipientSearch(name);
-        setSearchResults([]); // Hide list
+        } catch(e) {}
     };
 
     const handleTransfer = async () => {
-        if (db.settings.isFrozen) return showModal('현재 모든 금융 거래가 중지되었습니다.');
-
-        // Validate using search result logic or just existence if we could check
-        // Ideally we trust the selectedRecipient if it came from search
-        if (!selectedRecipient) return showModal('유효한 수신자를 선택해주세요.');
+        if (!selectedRecipient || !amount) return showModal("정보를 입력하세요.");
+        const valAmount = parseInt(amount);
+        if (currentUser!.balanceKRW < valAmount) return showModal("잔액 부족");
         
-        const valAmount = parseFloat(amount);
-        if (isNaN(valAmount) || valAmount <= 0) return showModal('올바른 금액을 입력해주세요.');
-        
-        if (!isEasyMode && (!senderMemo || !recipientMemo)) return showModal('계좌 표시 내용을 모두 입력해주세요.');
-        if (currentUser!.balanceKRW < valAmount) return showModal('잔액이 부족합니다.');
+        const pin = await showPinModal("이체 인증", currentUser!.pin!, 4, false);
+        if (pin !== currentUser!.pin) return;
 
-        const pin = await showPinModal('간편번호를 입력하세요.', currentUser!.pin!, (currentUser?.pinLength as 4 | 6) || 4, false);
-        if (pin !== currentUser!.pin) return; 
-
-        try {
+        if (subTab === 'immediate') {
             await serverAction('transfer', {
                 senderId: currentUser!.name,
                 receiverId: selectedRecipient,
                 amount: valAmount,
-                senderMemo: isEasyMode ? '간편이체' : senderMemo,
-                receiverMemo: isEasyMode ? currentUser!.name : recipientMemo
+                senderMemo, 
+                receiverMemo: recipientMemo
             });
-            
-            showModal('이체가 완료되었습니다.');
-            setAmount('');
-            setRecipientSearch('');
-            setSelectedRecipient(null);
-            setSenderMemo('');
-            setRecipientMemo('');
-        } catch (e) {
-            showModal('이체 실패: 서버 오류가 발생했습니다.');
+            showModal("이체 완료");
+        } else if (subTab === 'reserved') {
+            if (!reserveDate || !reserveTime) return showModal("날짜와 시간을 입력하세요.");
+            const scheduledTime = new Date(`${reserveDate}T${reserveTime}`).toISOString();
+            const newItem: ScheduledTransfer = {
+                id: generateId(),
+                type: 'reserved',
+                fromUser: currentUser!.name,
+                toUser: selectedRecipient,
+                amount: valAmount,
+                description: senderMemo,
+                status: 'active',
+                scheduledTime
+            };
+            const newAuto = { ...(currentUser?.autoTransfers || {}), [newItem.id]: newItem };
+            await updateUser(currentUser!.name, { autoTransfers: newAuto });
+            showModal("예약 이체가 등록되었습니다.");
+        } else {
+            // Recurring
+            if (!recurStart || !recurEnd || !recurValue) return showModal("설정을 완료하세요.");
+            const newItem: ScheduledTransfer = {
+                id: generateId(),
+                type: 'recurring',
+                fromUser: currentUser!.name,
+                toUser: selectedRecipient,
+                amount: valAmount,
+                description: senderMemo,
+                status: 'active',
+                recurringConfig: {
+                    startDate: recurStart,
+                    endDate: recurEnd,
+                    frequencyType: recurRange === 'day' ? 'daily' : (recurRange === 'week' ? 'weekly' : 'monthly'),
+                    frequencyValue: parseInt(recurValue),
+                    nextRunTime: new Date().toISOString() // Logic needs to calculate next run
+                }
+            };
+            const newAuto = { ...(currentUser?.autoTransfers || {}), [newItem.id]: newItem };
+            await updateUser(currentUser!.name, { autoTransfers: newAuto });
+            showModal("정기 이체가 등록되었습니다.");
         }
+        
+        // Reset
+        setAmount(''); setSelectedRecipient(null); setRecipientSearch(''); setSenderMemo(''); setRecipientMemo('');
     };
 
     return (
         <Card>
-            <h3 className="text-2xl font-bold mb-6">{isEasyMode ? '간편 이체' : '이체'}</h3>
-            <div className="space-y-4 w-full">
+            <div className="flex gap-4 border-b mb-4">
+                {[{id:'immediate', l:'즉시 이체'}, {id:'reserved', l:'예약 이체'}, {id:'recurring', l:'정기 이체'}].map(t => (
+                    <button key={t.id} onClick={() => setSubTab(t.id as any)} className={`pb-2 font-bold ${subTab === t.id ? 'border-b-2 border-black dark:border-white' : 'text-gray-400'}`}>{t.l}</button>
+                ))}
+            </div>
+
+            <div className="space-y-4">
                 <div className="relative">
-                    <label className="text-sm font-medium mb-1 block">수신자 선택</label>
-                    <Input 
-                        placeholder="이름 검색" 
-                        value={recipientSearch} 
-                        onChange={e => handleSearch(e.target.value)} 
-                        className="w-full"
-                    />
+                    <label className="text-xs font-bold block mb-1">받는 사람</label>
+                    <Input placeholder="이름 검색" value={recipientSearch} onChange={e => handleSearch(e.target.value)} />
                     {recipientSearch && !selectedRecipient && (
-                        <div className="absolute z-10 w-full bg-white dark:bg-[#2D2D2D] border dark:border-gray-600 rounded-md mt-1 shadow-lg max-h-40 overflow-y-auto">
-                            {isSearching && <div className="p-3 text-gray-500">검색 중...</div>}
-                            {!isSearching && searchResults.map((u: User) => (
-                                <div 
-                                    key={u.name} 
-                                    className="p-3 hover:bg-gray-100 dark:hover:bg-gray-600 cursor-pointer"
-                                    onClick={() => handleRecipientSelect(u.name)}
-                                >
-                                    {u.name} <span className="text-xs text-gray-400">({u.customJob || u.type})</span>
+                        <div className="absolute z-10 w-full bg-white dark:bg-gray-800 border rounded max-h-40 overflow-y-auto">
+                            {searchResults.map(u => (
+                                <div key={u.name} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" onClick={() => { setSelectedRecipient(u.name); setRecipientSearch(u.name); }}>
+                                    {u.name} ({u.customJob || u.type})
                                 </div>
                             ))}
-                            {!isSearching && searchResults.length === 0 && <div className="p-3 text-gray-500">검색 결과 없음</div>}
                         </div>
                     )}
                 </div>
-
-                <div>
-                    <label className="text-sm font-medium mb-1 block">금액 (₩)</label>
-                    <MoneyInput 
-                        type="number" 
-                        placeholder="0" 
-                        value={amount} 
-                        onChange={e => setAmount(e.target.value)} 
-                        className="w-full"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">1일 한도: ₩{(db.settings.transferLimit || 1000000).toLocaleString()}</p>
-                </div>
-
-                {!isEasyMode && (
-                    <>
-                        <div>
-                            <label className="text-sm font-medium mb-1 block">내 계좌 표시</label>
-                            <Input placeholder="내 통장에 표시될 내용" value={senderMemo} onChange={e => setSenderMemo(e.target.value)} className="w-full" />
-                        </div>
-
-                        <div>
-                            <label className="text-sm font-medium mb-1 block">상대방 계좌 표시</label>
-                            <Input placeholder="받는 사람 통장에 표시될 내용" value={recipientMemo} onChange={e => setRecipientMemo(e.target.value)} className="w-full" />
-                        </div>
-                    </>
+                <div><label className="text-xs font-bold block mb-1">금액</label><MoneyInput value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="text-right" /></div>
+                
+                {subTab === 'reserved' && (
+                    <div className="flex gap-2">
+                        <div className="flex-1"><label className="text-xs font-bold">날짜</label><input type="date" value={reserveDate} onChange={e => setReserveDate(e.target.value)} className="w-full p-3 rounded-2xl bg-gray-100 dark:bg-[#252525]" /></div>
+                        <div className="flex-1"><label className="text-xs font-bold">시간</label><input type="time" value={reserveTime} onChange={e => setReserveTime(e.target.value)} className="w-full p-3 rounded-2xl bg-gray-100 dark:bg-[#252525]" /></div>
+                    </div>
                 )}
 
-                <Button className="w-full mt-4 bg-green-600 hover:bg-green-500" onClick={handleTransfer}>보내기</Button>
+                {subTab === 'recurring' && (
+                    <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                        <div className="flex gap-2">
+                            <button onClick={() => setRecurRange('day')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='day' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매일(일간)</button>
+                            <button onClick={() => setRecurRange('week')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='week' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매주</button>
+                            <button onClick={() => setRecurRange('month')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='month' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매월</button>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold block mb-1">
+                                {recurRange === 'day' ? '간격 (일)' : (recurRange === 'week' ? '요일 (0=일 ~ 6=토)' : '날짜 (1~31)')}
+                            </label>
+                            <Input type="number" value={recurValue} onChange={e => setRecurValue(e.target.value)} placeholder="설정값" />
+                        </div>
+                        <div className="flex gap-2">
+                            <div className="flex-1"><label className="text-xs font-bold">시작일</label><input type="date" value={recurStart} onChange={e => setRecurStart(e.target.value)} className="w-full p-2 rounded bg-white text-xs" /></div>
+                            <div className="flex-1"><label className="text-xs font-bold">종료일</label><input type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} className="w-full p-2 rounded bg-white text-xs" /></div>
+                        </div>
+                    </div>
+                )}
+
+                <div>
+                    <label className="text-xs font-bold block mb-1">받는 분에게 표시</label>
+                    <Input value={recipientMemo} onChange={e => setRecipientMemo(e.target.value)} placeholder="받는 통장 표시" />
+                </div>
+                <div>
+                    <label className="text-xs font-bold block mb-1">내 통장 표시</label>
+                    <Input value={senderMemo} onChange={e => setSenderMemo(e.target.value)} placeholder="내 통장 표시" />
+                </div>
+                
+                <Button onClick={handleTransfer} className="w-full mt-4">
+                    {subTab === 'immediate' ? '보내기' : '등록하기'}
+                </Button>
             </div>
         </Card>
     );

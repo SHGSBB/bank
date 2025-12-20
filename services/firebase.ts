@@ -25,7 +25,6 @@ import {
     sendPasswordResetEmail,
     User as FirebaseUser 
 } from "firebase/auth";
-import { getStorage, ref as storageRef, uploadString, getDownloadURL } from "firebase/storage";
 import { DB, ChatMessage, Chat, AssetHistoryPoint, User } from "../types";
 
 const firebaseConfig = {
@@ -42,7 +41,6 @@ const firebaseConfig = {
 const app = firebaseApp.initializeApp(firebaseConfig);
 export const database = getDatabase(app);
 export const auth = getAuth(app);
-export const storage = getStorage(app);
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
@@ -182,21 +180,26 @@ export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
 };
 
 export const uploadImage = async (path: string, base64: string): Promise<string> => {
-    // Standardize path and remove potential dangerous chars
-    const cleanPath = path.trim().replace(/[^a-zA-Z0-9\/._-]/g, '_');
-    const fileRef = storageRef(storage, cleanPath);
-    
-    if (!base64.startsWith('data:')) {
-        throw new Error('Invalid image format: Must be a data_url');
-    }
+    const cloudName = "dopkc8q6l";
+    const uploadPreset = "ml_default";
+
+    const formData = new FormData();
+    formData.append("file", base64);
+    formData.append("upload_preset", uploadPreset);
 
     try {
-        await uploadString(fileRef, base64, 'data_url');
-        const url = await getDownloadURL(fileRef);
-        return url;
+        const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+            method: "POST",
+            body: formData
+        });
+
+        if (!res.ok) throw new Error("이미지 서버 업로드 실패");
+
+        const data = await res.json();
+        return data.secure_url; 
     } catch (e: any) {
-        console.error("Firebase Storage Upload Error:", e);
-        throw new Error(`Upload failed: ${e.message}`);
+        console.error("Cloudinary Upload Error:", e);
+        throw new Error("사진 업로드에 실패했습니다. 다시 시도해주세요.");
     }
 };
 

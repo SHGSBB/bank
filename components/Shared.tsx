@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState } from 'react';
+
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useGame } from '../context/GameContext';
 import { ToastNotification, User } from '../types';
 import { loginBiometrics } from '../services/biometric';
@@ -39,6 +40,12 @@ export const formatName = (name?: string, user?: User | null) => {
     if (user?.nickname) return user.nickname;
     return name.split('_')[0];
 };
+
+export const Spinner: React.FC = () => (
+    <div className="flex justify-center items-center p-4">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
+    </div>
+);
 
 export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'danger' | 'secondary' }> = ({ className = '', variant = 'primary', onClick, ...props }) => {
     const { triggerHaptic } = useGame();
@@ -142,7 +149,8 @@ export const LineIcon: React.FC<{ icon: string, className?: string }> = ({ icon,
         'security': 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
         'menu': 'M4 6h16M4 12h16M4 18h16',
         'arrow-up': 'M5 15l7-7 7 7',
-        'arrow-down': 'M19 9l-7 7-7-7'
+        'arrow-down': 'M19 9l-7 7-7-7',
+        'dots': 'M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z'
     };
     return <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d={paths[icon] || ''} /></svg>;
 };
@@ -153,7 +161,8 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     const [isSuccess, setIsSuccess] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     
-    const handleComplete = (finalPin: string) => {
+    // Stable handler for completion
+    const handleComplete = useCallback((finalPin: string) => {
         if (isProcessing) return;
         setIsProcessing(true);
 
@@ -169,34 +178,21 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
             setIsSuccess(true);
             if (navigator.vibrate) navigator.vibrate(50);
             
-            // Critical: Close modal first, then resolve the promise in the next tick
-            // to prevent React state collision during unmounting.
+            // Fix: Use a slight delay before calling resolve to show success state, 
+            // but ensure component doesn't unmount prematurely
+            const resolveRef = resolver.resolve;
             setTimeout(() => {
-                const res = resolver.resolve;
-                setResolver(null);
-                res(finalPin);
-            }, 500);
+                resolveRef(finalPin);
+                setResolver(null); // Unmount after resolving
+            }, 300);
         }
-    };
+    }, [isProcessing, resolver, setResolver]);
 
     useEffect(() => {
-        if (pin.length === (resolver.pinLength || 4) && !isProcessing && !isError) {
+        if (pin.length === (resolver.pinLength || 4) && !isProcessing && !isError && !isSuccess) {
             handleComplete(pin);
         }
-    }, [pin, isProcessing, isError]);
-
-    useEffect(() => {
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (isProcessing || isSuccess) return;
-            if (e.key >= '0' && e.key <= '9') {
-                if (pin.length < (resolver.pinLength || 4)) setPin(p => p + e.key);
-            } else if (e.key === 'Backspace') {
-                setPin(p => p.slice(0, -1));
-            }
-        };
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [pin, resolver.pinLength, isProcessing, isSuccess]);
+    }, [pin, isProcessing, isError, isSuccess, resolver.pinLength, handleComplete]);
 
     return (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">

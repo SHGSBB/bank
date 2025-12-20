@@ -4,7 +4,7 @@ import { useGame } from '../../../context/GameContext';
 import { Button, Input } from '../../Shared';
 
 export const MintingTab: React.FC = () => {
-    const { currentUser, showModal, serverAction } = useGame();
+    const { currentUser, showModal, serverAction, refreshData } = useGame();
     const [amount, setAmount] = useState('');
     const [currency, setCurrency] = useState<'KRW'|'USD'>('KRW');
 
@@ -20,6 +20,7 @@ export const MintingTab: React.FC = () => {
                 amount: valAmount,
                 currency
             });
+            await refreshData(); // Refresh to show new balance
             showModal(`${valAmount.toLocaleString()} ${currency} 발권이 완료되었습니다.`);
             setAmount('');
         } catch(e) {
