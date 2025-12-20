@@ -73,9 +73,9 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ accounts });
         }
 
-        // [4] 계정 연동하기 (수정된 코드)
+        // [4] 계정 연동하기 (수정된 코드: 비번 검사 삭제 + 안전장치 추가)
         if (action === 'link_account') {
-            const { myEmail, targetId, targetPw } = payload;
+            const { myEmail, targetId } = payload;
             const mySafeId = toSafeId(myEmail);
             
             const usersRef = db.ref('users');
@@ -94,20 +94,14 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
             if (targetSafeId === mySafeId) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
             
-            // 비밀번호 검사 (문자열 변환 필수)
-            const dbPw = targetUser.password || "";
-            if (String(dbPw) !== String(targetPw)) return res.status(401).json({ error: "INVALID_CREDENTIALS" });
-
             // 2. 내 정보 찾기
             const myUser = users[mySafeId];
             if (!myUser) return res.status(404).json({ error: "SENDER_NOT_FOUND" });
 
-            // [핵심 수정] DB에 email 필드가 비어있을 경우를 대비한 안전장치
-            // 이메일이 없으면 -> ID를 사용 -> 그것도 없으면 -> 요청받은 값 사용
+            // 3. [중요] 500 에러 방지 (이메일이 없으면 ID라도 저장)
             const myEmailToSave = myUser.email || myUser.id || myEmail; 
             const targetEmailToSave = targetUser.email || targetUser.id || targetId;
 
-            // 만약 그래도 없으면 에러 처리 (서버 멈춤 방지)
             if (!myEmailToSave || !targetEmailToSave) {
                  return res.status(400).json({ error: "EMAIL_MISSING: 계정 정보를 찾을 수 없습니다." });
             }
@@ -115,11 +109,9 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             const myLinks = Array.isArray(myUser.linkedAccounts) ? myUser.linkedAccounts : [];
             const targetLinks = Array.isArray(targetUser.linkedAccounts) ? targetUser.linkedAccounts : [];
 
-            // 이미 연동된 경우 체크
             if (myLinks.includes(targetEmailToSave)) return res.status(400).json({ error: "ALREADY_LINKED" });
 
             const updates: any = {};
-            // undefined가 절대 들어가지 않도록 ToSave 변수 사용
             updates[`users/${mySafeId}/linkedAccounts`] = [...myLinks, targetEmailToSave];
             updates[`users/${targetSafeId}/linkedAccounts`] = [...targetLinks, myEmailToSave];
 

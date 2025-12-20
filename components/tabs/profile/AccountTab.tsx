@@ -7,7 +7,6 @@ export const AccountTab: React.FC = () => {
     const { currentUser, switchAccount, showPinModal, setAdminMode, showModal, logout, serverAction, cachedLinkedUsers, setCachedLinkedUsers, showConfirm, refreshData } = useGame();
     const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
     const [linkId, setLinkId] = useState('');
-    const [linkPw, setLinkPw] = useState('');
     const [isInternalLoading, setIsInternalLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     
@@ -73,24 +72,23 @@ export const AccountTab: React.FC = () => {
     };
 
     const handleLinkExisting = async () => {
-        if (!linkId || !linkPw) return showModal("정보를 입력하세요.");
+        if (!linkId) return showModal("아이디를 입력하세요.");
         setIsInternalLoading(true);
         try {
             const res = await serverAction('link_account', {
                 myEmail: currentUser!.email,
-                targetId: linkId.trim(),
-                targetPw: linkPw.trim()
+                targetId: linkId.trim()
             });
             
             if (res.error) throw new Error(res.error);
 
             showModal("계정이 성공적으로 연동되었습니다.");
             setIsLinkModalOpen(false);
-            setLinkId(''); setLinkPw('');
+            setLinkId('');
             fetchStatusRef.current = 'idle';
             await refreshData(); // Pull latest linkedAccounts array
         } catch (e: any) {
-            showModal("연동 실패: " + (e.message || "정보가 일치하지 않거나 이미 연동된 계정입니다."));
+            showModal("연동 실패: " + (e.message || "사용자를 찾을 수 없거나 이미 연동되었습니다."));
         } finally {
             setIsInternalLoading(false);
         }
@@ -183,9 +181,8 @@ export const AccountTab: React.FC = () => {
 
             <Modal isOpen={isLinkModalOpen} onClose={() => setIsLinkModalOpen(false)} title="계정 연동">
                 <div className="space-y-4">
-                    <p className="text-xs text-gray-500">연동할 계정의 아이디(ID 또는 이메일)와 비밀번호를 입력하세요.</p>
-                    <Input placeholder="연동할 계정의 아이디" value={linkId} onChange={e => setLinkId(e.target.value)} />
-                    <Input type="password" placeholder="해당 계정 비밀번호" value={linkPw} onChange={e => setLinkPw(e.target.value)} />
+                    <p className="text-xs text-gray-500">연동할 계정의 아이디(ID 또는 이메일)를 입력하세요.</p>
+                    <Input placeholder="상대방 아이디 입력" value={linkId} onChange={e => setLinkId(e.target.value)} />
                     <Button onClick={handleLinkExisting} className="w-full py-4" disabled={isInternalLoading}>{isInternalLoading ? "확인 중..." : "연동하기"}</Button>
                 </div>
             </Modal>

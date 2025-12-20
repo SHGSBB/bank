@@ -187,6 +187,29 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
+            // Save Login History (Local Storage)
+            try {
+                const historyStr = localStorage.getItem('sh_login_history');
+                const history = historyStr ? JSON.parse(historyStr) : [];
+                
+                const newEntry = {
+                    email: userData.email,
+                    name: userData.name,
+                    id: userData.id,
+                    profilePic: userData.profilePic,
+                    pin: userData.pin, // Store PIN for quick verification
+                    password: btoa(pass), // Simple encoding for quick login convenience
+                    timestamp: Date.now()
+                };
+
+                // Remove existing entry for this user and add new one to top
+                const filtered = history.filter((h: any) => h.email !== userData.email);
+                const newHistory = [newEntry, ...filtered].slice(0, 4); // Keep max 4
+                localStorage.setItem('sh_login_history', JSON.stringify(newHistory));
+            } catch (e) {
+                console.error("Failed to save login history", e);
+            }
+
             setCurrentUser(userData);
             if (remember) localStorage.setItem('sh_user_id', userData.email!);
             await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });

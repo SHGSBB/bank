@@ -129,7 +129,7 @@ export const LineIcon: React.FC<{ icon: string, className?: string }> = ({ icon,
         'logout': 'M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1',
         'arrow-left': 'M15 19l-7-7 7-7',
         'arrow-right': 'M9 5l7 7-7 7',
-        'fingerprint': 'M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 2c0-3.31-2.69-6-6-6s-6 2.69-6 6c0 2.22 1.21 4.15 3 5.19l1-1.74c-1.19-.7-2-1.97-2-3.45 0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.48-.81 2.75-2 3.45l1 1.74c1.79-1.04 3-2.97 3-5.19zM12 3C6.48 3 2 7.48 2 13c0 3.7 2.01 6.92 4.99 8.65l1-1.73C5.61 18.53 4 15.96 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.96-1.61 5.53-4 6.92l1 1.73c2.99-1.73 5-4.95 5-8.65 0-5.52-4.48-10-10-10z',
+        'fingerprint': 'M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 2c0-3.31-2.69-6-6-6s-6 2.69-6 6c0 2.22 1.21 4.15 3 5.19l1-1.74c-1.19-.7-2-1.97-2-3.45 0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.48-.81 2.75-2 3.45l1 1.74c1.79-1.04 3-2.97 3-5.19zM12 3C6.48 3 2 7.48 2 13c0 3.7 2.01 6.92 4.99 8.65l1-1.73C5.61 18.53 4 15.96 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.96-1.61 5.53-4 6.92l1 1.74c2.99-1.73 5-4.95 5-8.65 0-5.52-4.48-10-10-10z',
         'chat': 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z',
         'search': 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z',
         'plus': 'M12 4v16m8-8H4',
@@ -160,36 +160,40 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     const [isError, setIsError] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
+    const resolvedRef = useRef(false);
     
     // Stable handler for completion
     const handleComplete = useCallback((finalPin: string) => {
-        if (isProcessing) return;
+        if (isProcessing || resolvedRef.current) return;
         setIsProcessing(true);
+        resolvedRef.current = true;
 
         if (resolver.expectedPin && finalPin !== resolver.expectedPin) {
             setIsError(true);
             if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            
+            // Reset state to allow retry
             setTimeout(() => { 
                 setPin(''); 
                 setIsError(false);
                 setIsProcessing(false);
+                resolvedRef.current = false; // Allow retry
             }, 600);
         } else {
             setIsSuccess(true);
             if (navigator.vibrate) navigator.vibrate(50);
             
-            // Fix: Use a slight delay before calling resolve to show success state, 
-            // but ensure component doesn't unmount prematurely
-            const resolveRef = resolver.resolve;
+            // Delay closing slightly for success animation
             setTimeout(() => {
-                resolveRef(finalPin);
-                setResolver(null); // Unmount after resolving
+                if (resolver.resolve) resolver.resolve(finalPin);
+                setResolver(null); 
             }, 300);
         }
     }, [isProcessing, resolver, setResolver]);
 
     useEffect(() => {
-        if (pin.length === (resolver.pinLength || 4) && !isProcessing && !isError && !isSuccess) {
+        const requiredLen = resolver.pinLength || 4;
+        if (pin.length === requiredLen && !isProcessing && !isError && !isSuccess) {
             handleComplete(pin);
         }
     }, [pin, isProcessing, isError, isSuccess, resolver.pinLength, handleComplete]);
@@ -197,7 +201,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     return (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
             <div className={`bg-white dark:bg-[#1C1C1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake border-red-500' : ''} ${isSuccess ? 'border-green-500' : ''}`}>
-                <button onClick={() => { resolver.resolve(null); setResolver(null); }} className="absolute top-4 right-4 text-gray-400 p-2" disabled={isProcessing}>✕</button>
+                <button onClick={() => { if(!isProcessing) { resolver.resolve(null); setResolver(null); } }} className="absolute top-4 right-4 text-gray-400 p-2" disabled={isProcessing}>✕</button>
                 <h3 className="text-xl font-bold text-center mb-2">간편 비밀번호 입력</h3>
                 <p className={`text-sm text-center mb-8 ${isError ? 'text-red-500 font-bold' : (isSuccess ? 'text-green-500 font-bold' : 'text-gray-500')}`}>
                     {isError ? "비밀번호가 일치하지 않습니다" : (isSuccess ? "확인되었습니다" : (resolver.message || "4자리 번호를 입력하세요"))}
@@ -209,14 +213,14 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                        <button key={num} onClick={() => !isProcessing && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                        <button key={num} onClick={() => !isProcessing && !resolvedRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
                             {num}
                         </button>
                     ))}
                     <div className="flex items-center justify-center">
-                        {resolver.allowBiometric && <button onClick={async () => { if(await loginBiometrics('temp') && resolver.expectedPin) handleComplete(resolver.expectedPin); }} className="p-4 rounded-full text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors" disabled={isProcessing}><LineIcon icon="fingerprint" className="w-8 h-8" /></button>}
+                        {resolver.allowBiometric && <button onClick={async () => { if(!isProcessing && await loginBiometrics('temp') && resolver.expectedPin) handleComplete(resolver.expectedPin); }} className="p-4 rounded-full text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors" disabled={isProcessing}><LineIcon icon="fingerprint" className="w-8 h-8" /></button>}
                     </div>
-                    <button onClick={() => !isProcessing && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
+                    <button onClick={() => !isProcessing && !resolvedRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
                     <button onClick={() => !isProcessing && setPin(p => p.slice(0, -1))} disabled={isProcessing} className="h-16 rounded-[18px] flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
                         <LineIcon icon="arrow-left" className="w-6 h-6" />
                     </button>

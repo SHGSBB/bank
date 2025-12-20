@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Button, Input, LineIcon, Modal } from '../Shared';
+import { Button, Input, LineIcon, Modal, formatName } from '../Shared';
 import { UserSubType, GovtBranch, User } from '../../types';
 import { auth } from '../../services/firebase';
 import { sendEmailVerification } from 'firebase/auth';
@@ -9,7 +9,7 @@ import { sendEmailVerification } from 'firebase/auth';
 type ViewMode = 'login' | 'signup' | 'email_change' | 'find_pw' | 'notif_setup';
 
 export const AuthView: React.FC = () => {
-    const { login, registerUser, showModal, requestPasswordReset, db, requestNotificationPermission } = useGame();
+    const { login, registerUser, showModal, requestPasswordReset, db, requestNotificationPermission, showPinModal } = useGame();
     const [view, setView] = useState<ViewMode>('login');
     const [history, setHistory] = useState<ViewMode[]>([]);
 
@@ -43,6 +43,9 @@ export const AuthView: React.FC = () => {
     
     const [agreedTerms, setAgreedTerms] = useState<Record<string, boolean>>({});
     const [currentTermIndex, setCurrentTermIndex] = useState(0);
+    
+    // Login History State
+    const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
     const consents = useMemo(() => {
         const raw = db.settings.consents || {};
@@ -53,6 +56,10 @@ export const AuthView: React.FC = () => {
     const verificationInterval = useRef<any>(null);
 
     useEffect(() => {
+        try {
+            const hist = JSON.parse(localStorage.getItem('sh_login_history') || '[]');
+            setLoginHistory(hist);
+        } catch (e) {}
         return () => { if (verificationInterval.current) clearInterval(verificationInterval.current); };
     }, []);
 
@@ -61,6 +68,26 @@ export const AuthView: React.FC = () => {
         const success = await login(email, password);
         if (success) {
             setView('notif_setup');
+        }
+    };
+
+    const handleQuickLogin = async (user: any) => {
+        if (!user.pin) {
+            // Fallback if no PIN saved (should not happen with new logic, but safe)
+            setEmail(user.email);
+            return;
+        }
+        
+        const pin = await showPinModal(`${user.name}님 로그인`, user.pin, (user.pin.length as any) || 4);
+        if (pin === user.pin) {
+            // Decode password (simple base64)
+            try {
+                const pass = atob(user.password);
+                const success = await login(user.email, pass);
+                if (success) setView('notif_setup');
+            } catch(e) {
+                showModal("로그인 정보가 만료되었습니다. 다시 로그인해주세요.");
+            }
         }
     };
 
@@ -183,15 +210,42 @@ export const AuthView: React.FC = () => {
                     <div className="w-10"></div>
                 </div>
 
-                <div className="hidden sm:flex flex-col justify-start p-12 pt-24 w-[35%] border-r border-gray-100 dark:border-white/5 bg-gray-50/5 dark:bg-white/5">
+                <div className="hidden sm:flex flex-col justify-start p-12 pt-24 w-[35%] border-r border-gray-100 dark:border-white/5 bg-gray-50/5 dark:bg-white/5 relative">
                     <div className="w-12 h-12 bg-green-600 rounded-[18px] flex items-center justify-center text-white mb-8 shadow-lg">
                         <LineIcon icon="finance" className="w-7 h-7" />
                     </div>
-                    <div className="animate-fade-in">
+                    <div className="animate-fade-in mb-8">
                         {view !== 'login' && <button onClick={goBack} className="text-xs font-bold text-green-600 mb-2 flex items-center gap-1">← 뒤로가기</button>}
                         <h1 className="text-3xl font-black tracking-tighter text-black dark:text-white mb-4 leading-tight whitespace-pre-line">{info.title}</h1>
                         <p className="text-gray-500 dark:text-white/60 text-base font-medium leading-relaxed break-keep whitespace-pre-line">{info.desc}</p>
                     </div>
+
+                    {/* Quick Login List (Only on Login View) */}
+                    {view === 'login' && loginHistory.length > 0 && (
+                        <div className="mt-auto animate-fade-in w-full">
+                            <p className="text-xs font-bold text-gray-400 mb-3 uppercase tracking-wider">최근 접속 계정</p>
+                            <div className="space-y-2">
+                                {loginHistory.map(user => (
+                                    <button 
+                                        key={user.email} 
+                                        onClick={() => handleQuickLogin(user)}
+                                        className="w-full flex items-center gap-3 p-3 bg-white dark:bg-white/5 rounded-2xl hover:bg-gray-50 dark:hover:bg-white/10 transition-colors text-left border border-gray-100 dark:border-white/5 shadow-sm group"
+                                    >
+                                        <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden flex items-center justify-center flex-shrink-0 group-hover:scale-105 transition-transform">
+                                            {user.profilePic ? <img src={user.profilePic} className="w-full h-full object-cover" /> : <span className="font-bold text-gray-500">{formatName(user.name)[0]}</span>}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <p className="font-bold text-sm truncate dark:text-white">{formatName(user.name)}</p>
+                                            <p className="text-[10px] text-gray-400 truncate">{user.id}</p>
+                                        </div>
+                                        <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <LineIcon icon="arrow-right" className="w-4 h-4" />
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
                 <div className="flex-1 p-6 sm:p-16 flex flex-col justify-center items-center relative z-10 overflow-y-auto">
