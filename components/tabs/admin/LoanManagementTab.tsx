@@ -3,6 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input, Modal } from '../../Shared';
 import { User, Loan, Application } from '../../../types';
+import { toSafeId } from '../../../services/firebase';
 
 export const LoanManagementTab: React.FC = () => {
     const { db, saveDb, notify, showConfirm, showModal, wait } = useGame();
@@ -29,8 +30,10 @@ export const LoanManagementTab: React.FC = () => {
         
         await wait('heavy');
         const newDb = { ...db };
-        const user = newDb.users[app.applicantName];
+        const user = newDb.users[toSafeId(app.applicantName)];
         
+        if (!user) return showModal("사용자를 찾을 수 없습니다.");
+
         const newLoan: Loan = {
             id: app.loanId || app.id,
             amount: app.amount,

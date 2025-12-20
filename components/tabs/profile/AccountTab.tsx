@@ -62,7 +62,7 @@ export const AccountTab: React.FC = () => {
     const handleSwitch = async (targetEmail: string | undefined) => {
         if (!targetEmail) return;
         const pin = await showPinModal("계정 전환 인증", currentUser?.pin!, (currentUser?.pinLength as any) || 4);
-        if (pin !== currentUser?.pin) return;
+        if (String(pin) !== String(currentUser?.pin)) return;
 
         const success = await switchAccount(targetEmail);
         if (success) {
@@ -168,7 +168,7 @@ export const AccountTab: React.FC = () => {
                     <button 
                         onClick={async () => { 
                             const pin = await showPinModal("관리자 모드 진입 인증", currentUser?.pin!, (currentUser?.pinLength as any)||4); 
-                            if(pin === currentUser?.pin) setAdminMode(true); 
+                            if(String(pin) === String(currentUser?.pin)) setAdminMode(true); 
                         }} 
                         className="w-full py-2 text-gray-400 text-[11px] font-bold underline text-center hover:text-green-600 transition-colors"
                     >

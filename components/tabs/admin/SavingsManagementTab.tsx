@@ -3,6 +3,7 @@ import React, { useMemo, useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button } from '../../Shared';
 import { TermDeposit, Application } from '../../../types';
+import { toSafeId } from '../../../services/firebase';
 
 export const SavingsManagementTab: React.FC = () => {
     const { db, saveDb, notify, showConfirm, showModal, wait } = useGame();
@@ -25,8 +26,10 @@ export const SavingsManagementTab: React.FC = () => {
 
         await wait('heavy');
         const newDb = { ...db };
-        const user = newDb.users[app.applicantName];
+        const user = newDb.users[toSafeId(app.applicantName)];
         
+        if (!user) return showModal("사용자를 찾을 수 없습니다.");
+
         if (user.balanceKRW < app.amount) {
              showModal("사용자 잔액 부족으로 승인 불가.");
              return;

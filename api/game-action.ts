@@ -73,7 +73,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ accounts });
         }
 
-        // [4] 계정 연동하기
+        // [4] 계정 연동하기 (수정된 코드)
         if (action === 'link_account') {
             const { myEmail, targetId, targetPw } = payload;
             const mySafeId = toSafeId(myEmail);
@@ -82,6 +82,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             const allSnap = await usersRef.once('value');
             const users = allSnap.val() || {};
             
+            // 1. 상대방 찾기
             const searchTarget = (targetId || "").trim().toLowerCase();
             const targetEntry = Object.entries(users).find(([k, u]: [string, any]) => 
                 (u.id || "").toLowerCase() === searchTarget || 
@@ -93,20 +94,34 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
             if (targetSafeId === mySafeId) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
             
+            // 비밀번호 검사 (문자열 변환 필수)
             const dbPw = targetUser.password || "";
             if (String(dbPw) !== String(targetPw)) return res.status(401).json({ error: "INVALID_CREDENTIALS" });
 
+            // 2. 내 정보 찾기
             const myUser = users[mySafeId];
             if (!myUser) return res.status(404).json({ error: "SENDER_NOT_FOUND" });
+
+            // [핵심 수정] DB에 email 필드가 비어있을 경우를 대비한 안전장치
+            // 이메일이 없으면 -> ID를 사용 -> 그것도 없으면 -> 요청받은 값 사용
+            const myEmailToSave = myUser.email || myUser.id || myEmail; 
+            const targetEmailToSave = targetUser.email || targetUser.id || targetId;
+
+            // 만약 그래도 없으면 에러 처리 (서버 멈춤 방지)
+            if (!myEmailToSave || !targetEmailToSave) {
+                 return res.status(400).json({ error: "EMAIL_MISSING: 계정 정보를 찾을 수 없습니다." });
+            }
 
             const myLinks = Array.isArray(myUser.linkedAccounts) ? myUser.linkedAccounts : [];
             const targetLinks = Array.isArray(targetUser.linkedAccounts) ? targetUser.linkedAccounts : [];
 
-            if (myLinks.includes(targetUser.email)) return res.status(400).json({ error: "ALREADY_LINKED" });
+            // 이미 연동된 경우 체크
+            if (myLinks.includes(targetEmailToSave)) return res.status(400).json({ error: "ALREADY_LINKED" });
 
             const updates: any = {};
-            updates[`users/${mySafeId}/linkedAccounts`] = [...myLinks, targetUser.email];
-            updates[`users/${targetSafeId}/linkedAccounts`] = [...targetLinks, myUser.email];
+            // undefined가 절대 들어가지 않도록 ToSave 변수 사용
+            updates[`users/${mySafeId}/linkedAccounts`] = [...myLinks, targetEmailToSave];
+            updates[`users/${targetSafeId}/linkedAccounts`] = [...targetLinks, myEmailToSave];
 
             await db.ref().update(updates);
             return res.status(200).json({ success: true });
