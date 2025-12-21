@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User } from '../../../types';
 
 export const WelfareTab: React.FC = () => {
-    const { db, saveDb, showModal, showConfirm, notify, serverAction } = useGame();
+    const { db, saveDb, showModal, showConfirm, notify, serverAction, loadAllUsers } = useGame();
     const [tiers, setTiers] = useState(db.settings.welfareTiers || []);
+    
+    useEffect(() => {
+        loadAllUsers();
+    }, []);
+
     const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen');
 
     const calculateTotalAsset = (user: User) => {

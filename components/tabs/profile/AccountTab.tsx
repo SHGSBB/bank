@@ -10,6 +10,7 @@ export const AccountTab: React.FC = () => {
     const [isInternalLoading, setIsInternalLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     
+    // Status ref to prevent infinite loops but allow re-fetching
     const fetchStatusRef = useRef<'idle' | 'loading' | 'success' | 'error'>('idle');
 
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
@@ -18,18 +19,11 @@ export const AccountTab: React.FC = () => {
         if (fetchStatusRef.current === 'loading' || !currentUser) return;
 
         const linkedEmails = currentUser.linkedAccounts || [];
-        if (linkedEmails.length === 0) {
-            if (cachedLinkedUsers.length > 0) setCachedLinkedUsers([]);
-            fetchStatusRef.current = 'success';
-            return;
-        }
-
-        // Compare using emails to prevent disappearing due to key mismatch and avoid refetch if data matches
-        const cachedEmails = cachedLinkedUsers.map(u => u.email);
-        const isAlreadyMatched = linkedEmails.length === cachedEmails.length && 
-                               linkedEmails.every(e => cachedEmails.includes(e));
         
-        if (isAlreadyMatched && fetchStatusRef.current === 'success') {
+        // If no linked accounts, clear cache and return
+        if (linkedEmails.length === 0) {
+            setCachedLinkedUsers([]);
+            fetchStatusRef.current = 'success';
             return;
         }
 
@@ -46,6 +40,7 @@ export const AccountTab: React.FC = () => {
                 throw new Error("Invalid response");
             }
         } catch (e) {
+            console.error("Failed to load linked accounts", e);
             setLoadError("계정 정보를 불러오지 못했습니다.");
             fetchStatusRef.current = 'error';
         } finally {
@@ -53,13 +48,18 @@ export const AccountTab: React.FC = () => {
         }
     };
 
+    // Watch for changes in the linkedAccounts list specifically.
+    // If the user links a new account, the length changes, triggering a refetch.
     useEffect(() => {
-        // Only reset to idle if linkedAccounts actually changed structure
+        // Reset status to idle if the list of linked accounts has changed compared to our cache
+        // This handles the case where refreshData updates currentUser, but we haven't fetched details yet.
         const linkedEmails = currentUser?.linkedAccounts || [];
-        const cachedEmails = cachedLinkedUsers.map(u => u.email);
-        const needsUpdate = linkedEmails.length !== cachedEmails.length || !linkedEmails.every(e => cachedEmails.includes(e));
         
-        if (needsUpdate) {
+        // Simple length check is usually enough, but deep check ensures correctness
+        const cachedIds = cachedLinkedUsers.map(u => u.email).concat(cachedLinkedUsers.map(u => u.id));
+        const allCached = linkedEmails.every(email => cachedIds.includes(email));
+        
+        if (!allCached || linkedEmails.length !== cachedLinkedUsers.length) {
             fetchStatusRef.current = 'idle';
             loadLinked();
         }
@@ -93,8 +93,11 @@ export const AccountTab: React.FC = () => {
             showModal("계정이 성공적으로 연동되었습니다.");
             setIsLinkModalOpen(false);
             setLinkId('');
+            
+            // Critical: Force refresh of user data to get updated 'linkedAccounts' array
+            await refreshData(); 
+            // Then reset status to force 'loadLinked' to run via useEffect
             fetchStatusRef.current = 'idle';
-            await refreshData(); // Pull latest linkedAccounts array
         } catch (e: any) {
             showModal("연동 실패: " + (e.message || "사용자를 찾을 수 없거나 이미 연동되었습니다."));
         } finally {
@@ -108,8 +111,8 @@ export const AccountTab: React.FC = () => {
         try {
             await serverAction('unlink_account', { myEmail: currentUser!.email, targetName });
             showModal("연동이 해제되었습니다.");
-            fetchStatusRef.current = 'idle';
             await refreshData();
+            fetchStatusRef.current = 'idle';
         } catch (e) {
             showModal("해제 실패");
         } finally {
@@ -147,7 +150,7 @@ export const AccountTab: React.FC = () => {
                         <p className="text-center text-gray-400 py-6 text-sm bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">연동된 계정이 없습니다.</p>
                     )}
                     {cachedLinkedUsers.map((acc: any) => (
-                        <div key={acc.email} className="flex items-center justify-between p-4 bg-white dark:bg-[#1E1E1E] border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
+                        <div key={acc.email || acc.id} className="flex items-center justify-between p-4 bg-white dark:bg-[#1E1E1E] border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
                             <div className="flex items-center gap-3">
                                 <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-800 overflow-hidden">
                                     {acc.profilePic ? <img src={acc.profilePic} className="w-full h-full object-cover" /> : <span className="flex items-center justify-center h-full font-bold text-gray-400">{acc.name?.[0]}</span>}

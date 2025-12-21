@@ -1,14 +1,19 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User, ToastNotification } from '../../../types';
 import { toSafeId } from '../../../services/firebase';
 
 export const SupportFundTab: React.FC = () => {
-    const { db, saveDb, showModal, showConfirm } = useGame();
+    const { db, saveDb, showModal, showConfirm, loadAllUsers } = useGame();
     const [title, setTitle] = useState('');
     const [amount, setAmount] = useState('');
     const [restriction, setRestriction] = useState('');
+
+    useEffect(() => {
+        loadAllUsers();
+    }, []);
 
     const handleDistribute = async () => {
         const valAmount = parseInt(amount);
@@ -16,7 +21,7 @@ export const SupportFundTab: React.FC = () => {
 
         if (!title) return showModal('지급명을 입력하세요.');
         if (isNaN(valAmount) || valAmount <= 0) return showModal('올바른 지급 금액을 입력하세요.');
-        if (citizens.length === 0) return showModal('지급할 시민이 없습니다.');
+        if (citizens.length === 0) return showModal('지급할 시민이 없습니다. (잠시 후 다시 시도하세요)');
 
         const totalAmount = valAmount * citizens.length;
         const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');

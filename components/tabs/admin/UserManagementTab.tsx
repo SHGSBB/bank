@@ -7,8 +7,9 @@ import { ref, remove } from 'firebase/database';
 import { database, toSafeId } from '../../../services/firebase';
 
 export const UserManagementTab: React.FC = () => {
-    const { db, saveDb, showModal, showConfirm, notify, updateUser, loadAllUsers } = useGame();
+    const { db, saveDb, showModal, showConfirm, notify, updateUser, loadAllUsers, createChat, sendMessage } = useGame();
     
+    // Force load users on mount
     useEffect(() => { 
         loadAllUsers();
     }, []);
@@ -131,10 +132,26 @@ export const UserManagementTab: React.FC = () => {
         await loadAllUsers();
     };
 
+    const handleChatWithUser = async (user: User) => {
+        try {
+            const chatId = await createChat([user.name], 'private');
+            // Open the chat system via global event or state if possible
+            // Currently, ChatSystem is opened via state in Dashboard. 
+            // We can dispatch event to open chat.
+            window.dispatchEvent(new CustomEvent('open-chat'));
+            
+            // Optionally send a greeting
+            // await sendMessage(chatId, "관리자가 대화를 시작했습니다.");
+        } catch (e) {
+            showModal("채팅방 생성 실패");
+        }
+    };
+
     return (
         <div className="space-y-6 w-full">
             <div className="flex justify-between items-center px-1">
                 <h3 className="text-2xl font-bold">사용자 및 승인 관리</h3>
+                <Button onClick={loadAllUsers} className="text-xs py-1" variant="secondary">새로고침</Button>
             </div>
             
             <div className="flex gap-2 border-b border-gray-200 dark:border-gray-700 overflow-x-auto pb-1">
@@ -168,14 +185,17 @@ export const UserManagementTab: React.FC = () => {
                             <p className="text-xs text-gray-500 mt-1">{u.email}</p>
                             <p className="text-[10px] text-gray-400 mt-2">ID: {u.id}</p>
                         </div>
-                        <div className="mt-4 flex gap-2">
+                        <div className="mt-4 flex flex-col gap-2">
                             {activeTab === 'pending' ? (
-                                <>
+                                <div className="flex gap-2">
                                     <Button onClick={() => handleApproval(u, true)} className="flex-1 text-xs py-2">승인</Button>
                                     <Button variant="danger" onClick={() => handleApproval(u, false)} className="flex-1 text-xs py-2">거절</Button>
-                                </>
+                                </div>
                             ) : (
-                                <Button variant="secondary" className="text-xs py-2 px-4 w-full" onClick={() => openEditModal(u)}>관리</Button>
+                                <div className="flex gap-2">
+                                    <Button variant="secondary" className="flex-1 text-xs py-2" onClick={() => openEditModal(u)}>관리</Button>
+                                    <Button className="flex-1 text-xs py-2 bg-blue-600 hover:bg-blue-500" onClick={() => handleChatWithUser(u)}>채팅</Button>
+                                </div>
                             )}
                         </div>
                     </Card>
@@ -214,7 +234,10 @@ export const UserManagementTab: React.FC = () => {
                                 </div>
                             ))}
                         </div>
-                        <Button onClick={handleSaveUser} className="w-full">저장하기</Button>
+                        <div className="flex gap-2">
+                            <Button onClick={handleSaveUser} className="flex-1">저장하기</Button>
+                            <Button onClick={() => { handleChatWithUser(selectedUser); setSelectedUser(null); }} className="flex-1 bg-blue-600 hover:bg-blue-500">채팅하기</Button>
+                        </div>
                     </div>
                 )}
             </Modal>

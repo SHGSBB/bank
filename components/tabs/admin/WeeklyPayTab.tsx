@@ -1,12 +1,18 @@
-import React, { useState } from 'react';
+
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User } from '../../../types';
 
 export const WeeklyPayTab: React.FC = () => {
-    const { db, showModal, showConfirm, serverAction } = useGame();
+    const { db, showModal, showConfirm, serverAction, loadAllUsers } = useGame();
     const [selectedUsers, setSelectedUsers] = useState<Set<string>>(new Set());
     const [payAmount, setPayAmount] = useState('');
+
+    // Ensure we load all users when entering this tab, as lightweight fetch might have missed details
+    useEffect(() => {
+        loadAllUsers();
+    }, []);
 
     // Ensure we have a unique identifier. Email is preferred for DB keys.
     const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen' && u.email);
@@ -65,6 +71,7 @@ export const WeeklyPayTab: React.FC = () => {
             </div>
 
             <div className="max-h-80 overflow-y-auto space-y-2 mb-6 pr-2">
+                {citizens.length === 0 && <p className="text-center text-gray-500 py-4">등록된 시민이 없습니다.</p>}
                 {citizens.map(c => (
                     <div key={c.email} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                         <div className="flex items-center gap-3">

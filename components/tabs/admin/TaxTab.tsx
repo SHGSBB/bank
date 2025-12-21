@@ -1,15 +1,19 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input, Modal, Toggle } from '../../Shared';
 import { User, TaxSession, PendingTax, ProgressiveRule, TermDeposit } from '../../../types';
 
 export const TaxTab: React.FC = () => {
-    const { db, saveDb, notify, showModal, showConfirm, serverAction } = useGame();
+    const { db, saveDb, notify, showModal, showConfirm, serverAction, loadAllUsers } = useGame();
     const [subTab, setSubTab] = useState<'collect' | 'manage' | 'vat'>('collect');
     const [sessionType, setSessionType] = useState<'real_estate'|'income'|'asset'>('real_estate');
     const [useProgressive, setUseProgressive] = useState(true);
     
+    useEffect(() => {
+        loadAllUsers();
+    }, []);
+
     const getDefaultDueDate = () => {
         const d = new Date();
         d.setDate(d.getDate() + 1);

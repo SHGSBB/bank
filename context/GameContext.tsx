@@ -7,7 +7,6 @@ import {
     chatService, 
     assetService, 
     fetchUser, 
-    fetchAllUsers, 
     loginWithEmail, 
     logoutFirebase, 
     registerWithAutoRetry, 
@@ -103,6 +102,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [activeTab, setActiveTab] = useState<string>('이체');
     const [highQualityGraphics, setHighQualityGraphics] = useState(true);
 
+    const serverAction = async (action: string, payload: any) => {
+        setSimulatedLoading(true);
+        try {
+            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action, payload })
+            });
+            const result = await res.json();
+            return result;
+        } catch (e) {
+            console.error(`Server Action Error (${action}):`, e);
+            throw e;
+        } finally { 
+            setSimulatedLoading(false); 
+        }
+    };
+
     const refreshData = useCallback(async () => {
         try {
             const essentials = await fetchEssentials();
@@ -110,10 +127,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             
             if (currentUser) {
                 const uid = currentUser.id || currentUser.email!;
-                const userData = await fetchUser(uid);
-                if (userData) {
+                // Changed: Call lightweight server API instead of client SDK full download
+                const userData = await serverAction('fetch_my_lite_info', { userId: uid });
+                if (userData && userData.id) {
                     setCurrentUser(prev => {
-                        if (JSON.stringify(prev) === JSON.stringify(userData)) return prev;
+                        // Merge with existing to keep history if we already have it from login
+                        if (!prev) return userData;
+                        // Avoid deep merging huge arrays if not changed
                         return { ...prev, ...userData };
                     });
                 }
@@ -168,6 +188,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // Priority: Local Storage "Switch" Mode
             const switchedId = localStorage.getItem('sh_user_id');
             if (switchedId) {
+                // Fetch full info ONCE on hard reload/login, then use lite for refresh
                 const switchedUser = await fetchUserByLoginId(switchedId);
                 if (switchedUser && isMount) {
                     setCurrentUser(switchedUser);
@@ -175,10 +196,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const userKey = toSafeId(switchedUser.id || switchedUser.email!);
                     await update(ref(database, `users/${userKey}`), { isOnline: true, lastActive: Date.now() });
                     setIsLoading(false);
-                    // Do NOT continue to subscribeAuth if we are forcing a switched user
                     return; 
                 } else if (!switchedUser && isMount) {
-                    // ID exists in storage but not DB (deleted?), clear storage and continue to auth listener
                     localStorage.removeItem('sh_user_id');
                 }
             }
@@ -186,7 +205,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const unsubscribe = subscribeAuth(async (firebaseUser) => {
                 if (!isMount) return;
                 
-                // If local storage has an ID, ignore Firebase Auth updates (prevent reverting switch)
                 if (localStorage.getItem('sh_user_id')) return;
 
                 if (firebaseUser) {
@@ -201,7 +219,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         const requireApproval = db.settings.requireSignupApproval !== false;
                         if (userData.approvalStatus === 'approved' || !requireApproval || isBOKUser(userData)) {
                             setCurrentUser(userData);
-                            // Sync local storage on fresh login
                             localStorage.setItem('sh_user_id', userData.id || userData.email!);
                             
                             if (isBOKUser(userData)) setAdminMode(false);
@@ -224,9 +241,16 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return unsubscribe;
         };
 
-        fetchEssentials().then((data) => {
+        // Use server action to fetch initial lightweight data
+        serverAction('fetch_initial_data', {}).then((data) => {
             if(isMount) setDb(prev => ({ ...prev, ...data }));
             initAuth();
+        }).catch(() => {
+            // Fallback: load essentials manually if server fails, but minimize user fetch
+            fetchEssentials().then((data) => {
+                if(isMount) setDb(prev => ({ ...prev, ...data }));
+                initAuth();
+            });
         });
 
         return () => { isMount = false; };
@@ -237,22 +261,21 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return entry ? entry[0] : undefined; 
     };
 
-    const serverAction = async (action: string, payload: any) => {
+    const loadAllUsers = async () => {
+        // Optimized for Data Diet: ONLY use server action
         setSimulatedLoading(true);
         try {
-            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action, payload })
-            });
-            const result = await res.json();
-            await refreshData();
-            return result;
-        } catch (e) {
-            console.error(`Server Action Error (${action}):`, e);
-            throw e;
-        } finally { 
-            setSimulatedLoading(false); 
+            const res = await serverAction('fetch_all_users_light', {});
+            if (res && res.users) {
+                setDb(prev => ({ ...prev, users: res.users }));
+            } else {
+                throw new Error("Server action returned empty user list");
+            }
+        } catch(e) {
+            console.error("Admin user load failed:", e);
+            setAlertMessage("사용자 목록을 불러올 수 없습니다. 잠시 후 다시 시도해주세요.");
+        } finally {
+            setSimulatedLoading(false);
         }
     };
 
@@ -282,8 +305,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             try {
                 const historyStr = localStorage.getItem('sh_login_history');
                 const history = historyStr ? JSON.parse(historyStr) : [];
+                // Only store lightweight profile info locally
                 const newEntry = {
-                    email: userData.email, name: userData.name, id: userData.id, profilePic: userData.profilePic, timestamp: Date.now()
+                    email: userData.email, name: userData.name, id: userData.id, 
+                    profilePic: (userData.profilePic && userData.profilePic.length < 500) ? userData.profilePic : null, 
+                    timestamp: Date.now()
                 };
                 const filtered = history.filter((h: any) => h.id !== userData!.id); 
                 const newHistory = [newEntry, ...filtered].slice(0, 4); 
@@ -323,8 +349,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setCurrentUser(null);
         setAdminMode(false);
         setSimulatedLoading(false);
-        
-        // Force hard reload to clear any lingering listeners or state that might trigger "Removed" errors
         window.location.reload();
     };
 
@@ -383,7 +407,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (!targetKey) return;
         const safeKey = toSafeId(targetKey);
         await update(ref(database, `users/${safeKey}`), sanitize(data));
-        await refreshData();
+        
+        // Refresh ONLY current user via LITE fetch
+        if (currentUser && (targetKey === currentUser.id || targetKey === currentUser.email)) {
+            const userData = await serverAction('fetch_my_lite_info', { userId: targetKey });
+            if(userData && userData.id) setCurrentUser(prev => ({...prev, ...userData}));
+        }
     };
 
     const setupPin = async (pin: string) => {
@@ -417,9 +446,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             let finalKey = toSafeId(targetUser);
             const check = await get(ref(database, `users/${finalKey}`));
             if (!check.exists()) {
-                 const all = await fetchAllUsers();
-                 const found = Object.values(all).find(u => u.name === targetUser || u.id === targetUser);
-                 if (found) finalKey = toSafeId(found.id || found.email!);
+                 const all = await fetchUserByLoginId(targetUser);
+                 if (all) finalKey = toSafeId(all.id || all.email!);
             }
             await update(ref(database, `users/${finalKey}/notifications/${notifId}`), sanitizedNotif);
         }
@@ -427,7 +455,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
     const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.id || currentUser.email!)); };
-    const requestNotificationPermission = async (mode: 'native' | 'browser' = 'browser') => { if (mode === 'native' && 'Notification' in window) await Notification.requestPermission(); };
+    
+    const requestNotificationPermission = async (mode: 'native' | 'browser' = 'browser') => { 
+        if (mode === 'native') {
+            if (!('Notification' in window)) {
+                setAlertMessage("이 브라우저는 알림을 지원하지 않습니다.");
+                return;
+            }
+            
+            try {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    setAlertMessage("알림 권한이 허용되었습니다.");
+                } else {
+                    setAlertMessage("알림 권한이 거부되었습니다. 브라우저 설정에서 확인해주세요.");
+                }
+            } catch(e) {
+                console.error(e);
+            }
+        }
+    };
     
     const openChat = () => {
         window.dispatchEvent(new CustomEvent('open-chat'));
@@ -435,7 +482,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const createChat = async (participants: string[], type: 'private'|'group'|'feedback'|'auction' = 'private', groupName?: string) => {
         const id = await chatService.createChat(participants, type, groupName);
-        await refreshData();
         return id;
     };
 
@@ -552,7 +598,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const currentTaxes = currentUser.pendingTaxes || [];
         const newTaxes = currentTaxes.filter(t => t.id !== taxId);
         await update(ref(database, `users/${userKey}`), { pendingTaxes: newTaxes });
-        await refreshData();
+        
+        // Local update
+        setCurrentUser(prev => prev ? { ...prev, pendingTaxes: newTaxes } : null);
     };
 
     const changeUserEmail = async (newEmail: string) => {
@@ -590,8 +638,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return (
         <GameContext.Provider value={{
             db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
-            showPinModal, showConfirm, showModal, notify, saveDb, refreshData, 
-            loadAllUsers: async () => { const all = await fetchAllUsers(); setDb(p => ({...p, users: all})); },
+            showPinModal, showConfirm, showModal, notify, saveDb, refreshData, loadAllUsers,
             serverAction, pinResolver, setPinResolver, confirmResolver, setConfirmResolver, alertMessage, setAlertMessage,
             currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, 
             isElementPicking, setElementPicking,

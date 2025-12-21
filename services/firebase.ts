@@ -47,7 +47,10 @@ export const auth = getAuth(app);
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
 // Standardized safe ID generator for both client and API
-export const toSafeId = (id: string) => (id || '').trim().toLowerCase().replace(/[@.]/g, '_').replace(/[#$\[\]]/g, '_');
+export const toSafeId = (id: string) => 
+    (id || '').trim().toLowerCase()
+    .replace(/[@.+]/g, '_')
+    .replace(/[#$\[\]]/g, '_');
 
 export const registerWithAutoRetry = async (email: string, pass: string, retryCount = 0): Promise<FirebaseUser> => {
     let tryEmail = email;
@@ -91,16 +94,16 @@ export const logoutFirebase = async () => signOut(auth);
 export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => onAuthStateChanged(auth, callback);
 
 // --- OPTIMIZED FETCHERS ---
-// Replaces the heavy fetchGlobalData
 
 export const fetchEssentials = async (): Promise<Partial<DB>> => {
     try {
-        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap] = await Promise.all([
+        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap, appsSnap] = await Promise.all([
             get(ref(database, 'settings')),
             get(ref(database, 'realEstate')),
             get(ref(database, 'announcements')),
             get(ref(database, 'auction')),
-            get(ref(database, 'stocks'))
+            get(ref(database, 'stocks')),
+            get(ref(database, 'pendingApplications'))
         ]);
 
         return {
@@ -108,7 +111,8 @@ export const fetchEssentials = async (): Promise<Partial<DB>> => {
             realEstate: realEstateSnap.val() || { grid: [] },
             announcements: announceSnap.val() || [],
             auction: auctionSnap.val() || null,
-            stocks: stocksSnap.val() || {}
+            stocks: stocksSnap.val() || {},
+            pendingApplications: appsSnap.val() || {}
         };
     } catch (e) {
         console.error("Fetch Essentials Failed", e);
@@ -130,8 +134,6 @@ export const fetchUser = async (userKey: string): Promise<User | null> => {
 };
 
 export const fetchUserByEmail = async (email: string): Promise<User | null> => {
-    // Only search index or use known key logic
-    // Assuming toSafeId(email) is the key, try that first for speed
     const safeKey = toSafeId(email);
     const snap = await get(ref(database, `users/${safeKey}`));
     if (snap.exists()) return normalizeUser(snap.val());
@@ -148,7 +150,6 @@ export const fetchUserByEmail = async (email: string): Promise<User | null> => {
 };
 
 export const findUserIdByInfo = async (name: string, birth: string): Promise<string | null> => {
-    // Heavy query, but necessary for recovery
     const q = query(ref(database, 'users'), orderByChild('name'), equalTo(name));
     const snapshot = await get(q);
     if (snapshot.exists()) {
@@ -160,7 +161,6 @@ export const findUserIdByInfo = async (name: string, birth: string): Promise<str
 };
 
 export const findUserEmailForRecovery = async (id: string, name: string, birth: string): Promise<string | null> => {
-    // Try direct lookup by ID first (fastest) - sanitize input ID for key
     const safeKey = toSafeId(id);
     const userRef = ref(database, `users/${safeKey}`);
     const snap = await get(userRef);
@@ -173,7 +173,7 @@ export const findUserEmailForRecovery = async (id: string, name: string, birth: 
     return null;
 };
 
-// Admin Only - Heavy Fetch
+// Admin Only - Heavy Fetch (DEPRECATED: Use server action 'fetch_all_users_light')
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
     const snapshot = await get(ref(database, 'users'));
     return snapshot.val() || {};
@@ -187,8 +187,6 @@ export const searchUsersByName = async (name: string): Promise<User[]> => {
 };
 
 export const fetchMartUsers = async (): Promise<User[]> => {
-    // Avoids "Index not defined" error by fetching all users and filtering client-side.
-    // This is safer given we cannot modify database rules directly.
     const snapshot = await get(ref(database, 'users'));
     if (snapshot.exists()) {
         const allUsers = Object.values(snapshot.val()) as User[];
@@ -228,7 +226,7 @@ export const uploadImage = async (path: string, base64: string): Promise<string>
 
 export const saveDb = async (data: DB) => {
     const updates: any = {};
-    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'stocks'];
+    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'stocks', 'pendingApplications'];
     nodes.forEach(node => {
         if ((data as any)[node] !== undefined) updates[node] = (data as any)[node];
     });
@@ -252,15 +250,6 @@ export const chatService = {
         await update(ref(database, `users/${safeKey}/chatPreferences/${chatId}`), sanitize(prefs));
     },
     createChat: async (participants: string[], type: 'private'|'group'|'feedback'|'auction' = 'private', groupName?: string) => {
-        // Reuse existing chat if 1:1 and private
-        if (type === 'private' && participants.length === 2) {
-            // Need a way to query finding chat with these 2 participants efficiently
-            // For now, scan client side list or create new. 
-            // Optimization: Store private chat ID in user profile?
-            // To respect "no heavy load", we might skip full scan and just create new or check recent.
-            // But let's assume client has loaded chatRooms list (lightweight metadata).
-        }
-        
         const chatId = `chat_${Date.now()}_${Math.random().toString(36).substr(2,9)}`;
         await update(ref(database, `chatRooms/${chatId}`), sanitize({ id: chatId, participants, type, groupName: groupName || null, lastTimestamp: Date.now() }));
         return chatId;

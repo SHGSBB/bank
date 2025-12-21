@@ -1,7 +1,7 @@
 
-import React, { useState, Suspense, lazy } from 'react';
+import React, { useState, Suspense, lazy, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Card, Spinner } from '../Shared';
+import { Card, Spinner, LineIcon } from '../Shared';
 import { AuthView } from '../views/Auth';
 
 // Admin Specific Tabs
@@ -15,9 +15,9 @@ const AdminRealEstateTab = lazy(() => import('../tabs/admin/AdminRealEstateTab')
 const BusinessManagementTab = lazy(() => import('../tabs/admin/BusinessManagementTab').then(module => ({ default: module.BusinessManagementTab })));
 const AnnouncementsTab = lazy(() => import('../tabs/admin/AnnouncementsTab').then(module => ({ default: module.AnnouncementsTab })));
 const ConsentsTab = lazy(() => import('../tabs/admin/ConsentsTab').then(module => ({ default: module.ConsentsTab })));
-const DatabaseTab = lazy(() => import('../tabs/admin/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
 const AdminFeedbackTab = lazy(() => import('../tabs/admin/AdminFeedbackTab').then(module => ({ default: module.AdminFeedbackTab })));
 const SystemInfoEditorTab = lazy(() => import('../tabs/admin/SystemInfoEditorTab').then(module => ({ default: module.SystemInfoEditorTab })));
+const ChatSystem = lazy(() => import('../ChatSystem').then(module => ({ default: module.ChatSystem })));
 
 // Standard Tabs (Reused for Admin Super-Mode)
 const TransferTab = lazy(() => import('../tabs/TransferTab').then(module => ({ default: module.TransferTab })));
@@ -34,7 +34,8 @@ const StockTab = lazy(() => import('../tabs/StockTab').then(module => ({ default
 const BillTab = lazy(() => import('../tabs/BillTab').then(module => ({ default: module.BillTab })));
 
 export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesignMode }) => {
-    const { currentUser, db, saveDb } = useGame();
+    const { currentUser, db, saveDb, loadAllUsers } = useGame();
+    const [isChatOpen, setIsChatOpen] = useState(false);
     
     // Level 1 Tabs
     const [mainTab, setMainTab] = useState<'bank' | 'system' | 'citizen' | 'mart' | 'gov' | 'teacher'>('bank');
@@ -44,6 +45,15 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
     
     // Citizen Sub Tabs for Admin
     const [citizenSubTab, setCitizenSubTab] = useState('이체');
+
+    // Force load all users on mount to ensure admin panels are populated
+    useEffect(() => {
+        loadAllUsers();
+        
+        const handleOpenChat = () => setIsChatOpen(true);
+        window.addEventListener('open-chat', handleOpenChat);
+        return () => window.removeEventListener('open-chat', handleOpenChat);
+    }, []);
 
     const handleChannelChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const val = e.target.value as any;
@@ -75,7 +85,7 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
                 {mainTab === 'system' && (
                     <div className="space-y-6 animate-fade-in">
                         <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
-                            {['사용자 관리', '공지사항 관리', '약관 관리', '시스템 정보', '피드백', '데이터베이스'].map(t => (
+                            {['사용자 관리', '공지사항 관리', '약관 관리', '시스템 정보', '피드백'].map(t => (
                                 <button key={t} onClick={() => setSystemSubTab(t)} className={`px-4 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${systemSubTab === t ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>
                                     {t}
                                 </button>
@@ -86,7 +96,6 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
                         {systemSubTab === '약관 관리' && <ConsentsTab />}
                         {systemSubTab === '시스템 정보' && <SystemInfoEditorTab />}
                         {systemSubTab === '피드백' && <AdminFeedbackTab />}
-                        {systemSubTab === '데이터베이스' && <DatabaseTab />}
                     </div>
                 )}
 
@@ -142,58 +151,76 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
     };
 
     return (
-        <div className="w-full">
-            <div className="bg-[#1C1C1E] text-white p-6 rounded-[28px] mb-6 shadow-2xl border border-white/5 flex justify-between items-center relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 via-green-500 to-blue-600"></div>
-                <div className="relative z-10">
-                    <h2 className="text-2xl font-black tracking-tighter flex items-center gap-2">
-                        🏦 통합 관리자 시스템
-                        <span className="text-[10px] bg-red-600 px-2 py-0.5 rounded-full font-bold uppercase">Super Admin</span>
-                    </h2>
-                    <div className="flex items-center gap-3 mt-2">
-                         <div className="flex items-center gap-1.5">
-                            <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-                            <span className="text-xs font-bold text-gray-400">System Online</span>
-                         </div>
-                        <select 
-                            value={db.settings.betaChannel || 'Stable'} 
-                            onChange={handleChannelChange}
-                            className="bg-white/5 text-white text-[10px] border border-white/10 rounded-full px-3 py-0.5 font-bold outline-none"
-                        >
-                            <option value="Developer Beta">Dev Beta</option>
-                            <option value="Public Beta">Public Beta</option>
-                            <option value="Stable">Stable v1.0</option>
-                        </select>
+        <div className="w-full relative min-h-screen">
+            <div 
+                className="transition-all duration-300 ease-in-out"
+                style={{ marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' }}
+            >
+                <div className="bg-[#1C1C1E] text-white p-6 rounded-[28px] mb-6 shadow-2xl border border-white/5 flex justify-between items-center relative overflow-hidden">
+                    <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 via-green-500 to-blue-600"></div>
+                    <div className="relative z-10">
+                        <h2 className="text-2xl font-black tracking-tighter flex items-center gap-2">
+                            🏦 통합 관리자 시스템
+                            <span className="text-[10px] bg-red-600 px-2 py-0.5 rounded-full font-bold uppercase">Super Admin</span>
+                        </h2>
+                        <div className="flex items-center gap-3 mt-2">
+                             <div className="flex items-center gap-1.5">
+                                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                <span className="text-xs font-bold text-gray-400">System Online</span>
+                             </div>
+                            <select 
+                                value={db.settings.betaChannel || 'Stable'} 
+                                onChange={handleChannelChange}
+                                className="bg-white/5 text-white text-[10px] border border-white/10 rounded-full px-3 py-0.5 font-bold outline-none"
+                            >
+                                <option value="Developer Beta">Dev Beta</option>
+                                <option value="Public Beta">Public Beta</option>
+                                <option value="Stable">Stable v1.0</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                        <p className="text-xs font-black text-blue-400">{currentUser?.name}</p>
+                        <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">{currentUser?.govtRole || 'Administrator'}</p>
                     </div>
                 </div>
-                <div className="text-right shrink-0">
-                    <p className="text-xs font-black text-blue-400">{currentUser?.name}</p>
-                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">{currentUser?.govtRole || 'Administrator'}</p>
+
+                <div className="flex overflow-x-auto gap-2 mb-8 scrollbar-hide">
+                    {[
+                        { id: 'bank', label: '중앙은행 (Bank)', icon: 'finance' },
+                        { id: 'system', label: '시스템 (System)', icon: 'security' },
+                        { id: 'citizen', label: '시민 모드 (Citizen)', icon: 'profile' },
+                        { id: 'mart', label: '마트 모드 (Mart)', icon: 'cart' },
+                        { id: 'gov', label: '정부 모드 (Gov)', icon: 'id_card' },
+                        { id: 'teacher', label: '교사/God (Teacher)', icon: 'star' }
+                    ].map((t) => (
+                        <button 
+                            key={t.id} 
+                            onClick={() => setMainTab(t.id as any)}
+                            className={`px-5 py-3 rounded-xl font-bold transition-all shadow-sm whitespace-nowrap border-2 ${mainTab === t.id ? 'bg-white dark:bg-white text-black border-white scale-105 shadow-xl' : 'bg-transparent text-gray-500 border-transparent hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                        >
+                            {t.label}
+                        </button>
+                    ))}
+                </div>
+                
+                <div className="min-h-[600px] animate-fade-in pb-20">
+                    {renderTabContent()}
                 </div>
             </div>
 
-            <div className="flex overflow-x-auto gap-2 mb-8 scrollbar-hide">
-                {[
-                    { id: 'bank', label: '중앙은행 (Bank)', icon: 'finance' },
-                    { id: 'system', label: '시스템 (System)', icon: 'security' },
-                    { id: 'citizen', label: '시민 모드 (Citizen)', icon: 'profile' },
-                    { id: 'mart', label: '마트 모드 (Mart)', icon: 'cart' },
-                    { id: 'gov', label: '정부 모드 (Gov)', icon: 'id_card' },
-                    { id: 'teacher', label: '교사/God (Teacher)', icon: 'star' }
-                ].map((t) => (
-                    <button 
-                        key={t.id} 
-                        onClick={() => setMainTab(t.id as any)}
-                        className={`px-5 py-3 rounded-xl font-bold transition-all shadow-sm whitespace-nowrap border-2 ${mainTab === t.id ? 'bg-white dark:bg-white text-black border-white scale-105 shadow-xl' : 'bg-transparent text-gray-500 border-transparent hover:bg-gray-100 dark:hover:bg-white/5'}`}
-                    >
-                        {t.label}
+            {/* Chat Floating Button & System */}
+            <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 transition-all" style={{ right: isChatOpen && window.innerWidth >= 640 ? '420px' : '1.5rem' }}>
+                {!isChatOpen && (
+                    <button onClick={() => setIsChatOpen(true)} className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-xl flex items-center justify-center hover:scale-110 transition-transform">
+                        <LineIcon icon="chat" className="w-6 h-6" />
                     </button>
-                ))}
+                )}
             </div>
             
-            <div className="min-h-[600px] animate-fade-in">
-                {renderTabContent()}
-            </div>
+            <Suspense fallback={null}>
+                <ChatSystem isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} />
+            </Suspense>
         </div>
     );
 };

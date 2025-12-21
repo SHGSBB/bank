@@ -1,8 +1,8 @@
 
 import React, { useState, useMemo, useEffect, useRef, Suspense, lazy } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Card, Button, Modal, Input, formatSmartMoney, formatName, LineIcon, PieChart, Spinner } from '../Shared';
-import { Announcement, User, TermDeposit, Loan as LoanType, PendingTax, StockHolding } from '../../types';
+import { Button, formatSmartMoney, formatName, LineIcon, PieChart, Spinner, Modal } from '../Shared';
+import { Announcement, User, TermDeposit, StockHolding, PendingTax } from '../../types';
 
 // Lazy Load Tabs
 const TransferTab = lazy(() => import('../tabs/TransferTab').then(module => ({ default: module.TransferTab })));
@@ -28,8 +28,7 @@ const AuctionModal = lazy(() => import('../tabs/AuctionModal').then(module => ({
 const AdminModeDashboard = lazy(() => import('./AdminModeDashboard').then(module => ({ default: module.AdminModeDashboard })));
 const SimplePayTab = lazy(() => import('../tabs/SimplePayTab').then(module => ({ default: module.SimplePayTab })));
 
-const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
-    // ... Wallet Code same as previous ...
+const Wallet: React.FC = () => {
     const { currentUser, db } = useGame();
     const [expandedCard, setExpandedCard] = useState<string | null>(null);
     const fmt = (num: number) => formatSmartMoney(num, currentUser?.preferences?.assetDisplayMode === 'rounded');
@@ -57,13 +56,8 @@ const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
 
     return (
         <div className="mb-8 relative z-0">
-             <div className="flex justify-between items-center mb-4 px-2">
+             <div className="flex justify-between items-center mb-4 px-2 relative z-20">
                 <h3 className="text-2xl font-bold">자산 대시보드</h3>
-                {!currentUser?.preferences?.isEasyMode && (
-                    <button onClick={onOpenStats} className="text-sm bg-white dark:bg-gray-800 text-black dark:text-white px-4 py-2 rounded-full font-bold shadow-md border dark:border-gray-700">
-                        통계
-                    </button>
-                )}
             </div>
             <div className="relative min-h-[8rem] w-full overflow-hidden rounded-[24px]">
                 <div className={`grid ${gridCols} gap-3 w-full`}>
@@ -89,18 +83,14 @@ const Wallet: React.FC<{ onOpenStats: () => void }> = ({ onOpenStats }) => {
 };
 
 export const Dashboard: React.FC = () => {
-    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax, setupPin, activeTab, setActiveTab } = useGame();
+    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax, setupPin, activeTab, setActiveTab, serverAction } = useGame();
     
     const [isProfileOpen, setIsProfileOpen] = useState(false);
-    const [isAssetModalOpen, setIsAssetModalOpen] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
+    const [showAllTabsModal, setShowAllTabsModal] = useState(false);
     
-    // ... [Same States as before] ...
     const [taxDetail, setTaxDetail] = useState<PendingTax | null>(null);
     const [bannerIndex, setBannerIndex] = useState(0);
-    const [showPinSetup, setShowPinSetup] = useState(false);
-    const [setupLength, setSetupLength] = useState<4|6>(4);
-    const [setupInput, setSetupInput] = useState('');
 
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
@@ -135,15 +125,8 @@ export const Dashboard: React.FC = () => {
         return () => window.removeEventListener('open-chat', handleOpenChat);
     }, []);
 
-    // ... [Rank Info, etc.] ...
-    const rankInfo = useMemo(() => { /* ... existing logic ... */ return { rank: 0, total: 0, percentile: 0 }; }, [db, currentUser]);
-
-    // Role Name & Tax Name Helpers
     const getRoleName = () => { const t = currentUser?.type; if(t === 'citizen') return '시민'; if(t === 'mart') return '마트'; if(t === 'government') return '공무원'; if(t === 'admin') return '관리자'; if(t === 'teacher') return '교사'; return t; };
     const getTaxName = (type: string) => { const map: Record<string, string> = { 'real_estate': '종합부동산세', 'income': '소득세', 'asset': '재산세', 'fine': '과태료', 'acquisition': '취득세' }; return map[type] || type; };
-
-    // ... [PIN Handlers] ...
-    const handlePinKey = (n: number) => {}; const handlePinDelete = () => {}; const handleLengthChange = (l: 4|6) => {};
 
     if (isAdminMode) {
         return (
@@ -158,7 +141,6 @@ export const Dashboard: React.FC = () => {
 
     return (
         <div className="flex h-screen overflow-hidden relative bg-[#E9E9EB] dark:bg-[#121212]">
-            {/* Main Content Area - Split Screen Logic */}
             <div 
                 className="flex-1 overflow-y-auto transition-all duration-300 ease-in-out relative z-0"
                 style={{ 
@@ -168,7 +150,7 @@ export const Dashboard: React.FC = () => {
                 <div className="container mx-auto max-w-6xl p-4 sm:p-8 pb-24">
                     <Suspense fallback={null}><AuctionModal /></Suspense>
                     
-                    <div className="fixed bottom-20 md:bottom-6 right-6 z-[60] flex flex-col gap-2 transition-all" style={{ right: isChatOpen && window.innerWidth >= 640 ? '420px' : '1.5rem' }}>
+                    <div className="fixed bottom-24 sm:bottom-6 right-6 z-[60] flex flex-col gap-2 transition-all" style={{ right: isChatOpen && window.innerWidth >= 640 ? '420px' : '1.5rem' }}>
                         {!isChatOpen && (
                             <button onClick={() => setIsChatOpen(true)} className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-xl flex items-center justify-center hover:scale-110 transition-transform">
                                 <LineIcon icon="chat" className="w-6 h-6" />
@@ -176,7 +158,6 @@ export const Dashboard: React.FC = () => {
                         )}
                     </div>
                     
-                    {/* ... Banners (Announce, Tax) ... */}
                     {activeAnnouncements.length > 0 && (
                         <div className="mb-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl p-3 flex flex-col gap-2 animate-slide-down origin-top">
                             {activeAnnouncements.map(a => (
@@ -193,7 +174,6 @@ export const Dashboard: React.FC = () => {
                         </div>
                     )}
 
-                    {/* Tax Banner */}
                     <div className="space-y-2 mb-6">
                         {currentBannerTax && (
                             <div className={`p-4 rounded-xl shadow-lg flex items-center justify-between transition-all duration-500 relative overflow-hidden ${currentBannerTax.status === 'paid' ? 'bg-gray-600 text-gray-200' : 'bg-red-600 text-white animate-pulse'}`}>
@@ -231,7 +211,6 @@ export const Dashboard: React.FC = () => {
                         ))}
                     </div>
 
-                    {/* Profile & Wallet */}
                     <div className="flex items-center gap-4 mb-8 px-2">
                         <div onClick={() => setIsProfileOpen(true)} className="w-16 h-16 rounded-full bg-green-500 text-white flex items-center justify-center overflow-hidden border-4 border-white shadow-lg cursor-pointer">
                             {currentUser?.profilePic ? <img src={currentUser.profilePic} className="w-full h-full object-cover" alt="p"/> : <span className="text-2xl font-bold">{formatName(currentUser?.name)[0]}</span>}
@@ -244,9 +223,8 @@ export const Dashboard: React.FC = () => {
                         </div>
                     </div>
 
-                    <Wallet onOpenStats={() => { loadAssetHistory(); setIsAssetModalOpen(true); }} />
+                    <Wallet />
 
-                    {/* Tabs */}
                     <div className="hidden sm:flex overflow-x-auto gap-8 mb-8 scrollbar-hide border-b border-gray-800 px-2">
                         {tabs.map(t => (
                             <button key={t} onClick={() => setActiveTab(t)} className={`pb-3 text-sm font-black whitespace-nowrap border-b-2 transition-all ${activeTab === t ? 'border-green-500 text-green-500' : 'border-transparent text-gray-500'}`}>{t}</button>
@@ -279,19 +257,54 @@ export const Dashboard: React.FC = () => {
                 </div>
             </div>
 
-            {/* Chat System */}
+            <div className="fixed bottom-0 left-0 right-0 h-20 bg-white/80 dark:bg-[#121212]/80 backdrop-blur-lg border-t border-gray-200 dark:border-gray-800 flex justify-around items-center px-2 pb-4 z-[50] sm:hidden">
+                {[
+                    { id: '이체', icon: 'finance', label: '홈' },
+                    { id: '거래 내역', icon: 'menu', label: '내역' },
+                    { id: '주식', icon: 'chart', label: '주식' }
+                ].map(t => {
+                    const isActive = activeTab === t.id;
+                    return (
+                        <button 
+                            key={t.id}
+                            onClick={() => setActiveTab(t.id)}
+                            className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all active:scale-95 ${isActive ? 'text-green-600 dark:text-green-400' : 'text-gray-400'}`}
+                        >
+                            <LineIcon icon={t.icon === 'chart' ? 'finance' : t.icon} className={`w-6 h-6 ${isActive ? 'stroke-[2.5px]' : 'stroke-2'}`} />
+                            <span className="text-[10px] font-bold">{t.label}</span>
+                        </button>
+                    )
+                })}
+                <button 
+                    onClick={() => setShowAllTabsModal(true)}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl transition-all active:scale-95 text-gray-400`}
+                >
+                    <LineIcon icon="dots" className="w-6 h-6 stroke-2" />
+                    <span className="text-[10px] font-bold">전체</span>
+                </button>
+            </div>
+
+            <Modal isOpen={showAllTabsModal} onClose={() => setShowAllTabsModal(false)} title="전체 메뉴">
+                <div className="grid grid-cols-3 gap-3">
+                    {tabs.map(t => (
+                        <button 
+                            key={t} 
+                            onClick={() => { setActiveTab(t); setShowAllTabsModal(false); }}
+                            className={`p-3 rounded-xl border font-bold text-sm ${activeTab === t ? 'bg-green-600 text-white border-green-600' : 'bg-gray-50 dark:bg-gray-800 dark:text-white border-gray-200 dark:border-gray-700'}`}
+                        >
+                            {t}
+                        </button>
+                    ))}
+                </div>
+            </Modal>
+
             <Suspense fallback={<Spinner />}>
                 <ChatSystem isOpen={isChatOpen} onClose={() => setIsChatOpen(false)} onAttachTab={setActiveTab} />
             </Suspense>
 
-            {/* ... Modals (Profile, PIN, Tax, Asset) ... */}
             <Modal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} title="설정" wide>
                 <Suspense fallback={<Spinner />}><ProfileSettingsTab /></Suspense>
             </Modal>
-            
-            {/* ... other modals code ... */}
-            {/* Omitted for brevity, assume Modal implementations for PIN, Tax, Asset Stats are here as per previous file */}
-            {/* If strictly required, copy them from previous file. The key change is the dashboard container margin */}
         </div>
     );
 };

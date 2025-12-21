@@ -1,16 +1,20 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User } from '../../../types';
 
 export const BondIssuanceTab: React.FC = () => {
-    const { db, saveDb, showModal, notify } = useGame();
+    const { db, saveDb, showModal, notify, loadAllUsers } = useGame();
     const [search, setSearch] = useState('');
     const [selectedUser, setSelectedUser] = useState<string | null>(null);
     const [amount, setAmount] = useState('');
     const [maturity, setMaturity] = useState('4');
     const [interest, setInterest] = useState('3');
+
+    useEffect(() => {
+        loadAllUsers();
+    }, []);
 
     const filteredUsers = (Object.values(db.users) as User[])
         .filter(u => u.type === 'citizen' && u.name.toLowerCase().includes(search.toLowerCase()))

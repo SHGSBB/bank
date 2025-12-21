@@ -204,12 +204,12 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     const [isError, setIsError] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const cleanupRef = useRef(false);
+    const isCheckingRef = useRef(false); // Fix: Add guard ref to prevent double execution
 
     const handleComplete = useCallback((finalPin: string) => {
-        if (isProcessing || cleanupRef.current) return;
+        if (isProcessing || isCheckingRef.current) return;
+        isCheckingRef.current = true;
         setIsProcessing(true);
-        cleanupRef.current = true;
 
         if (resolver.expectedPin && finalPin !== resolver.expectedPin) {
             setIsError(true);
@@ -219,7 +219,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                 setPin(''); 
                 setIsError(false);
                 setIsProcessing(false);
-                cleanupRef.current = false;
+                isCheckingRef.current = false;
             }, 500);
         } else {
             setIsSuccess(true);
@@ -228,6 +228,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
             setTimeout(() => {
                 resolver.resolve(finalPin);
                 setResolver(null); 
+                isCheckingRef.current = false;
             }, 300);
         }
     }, [isProcessing, resolver, setResolver]);
@@ -276,14 +277,14 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                        <button key={num} onClick={() => !isProcessing && !cleanupRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                        <button key={num} onClick={() => !isProcessing && !isCheckingRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
                             {num}
                         </button>
                     ))}
                     <div className="flex items-center justify-center">
                         {resolver.allowBiometric && <button onClick={async () => { if(!isProcessing && await loginBiometrics('temp') && resolver.expectedPin) handleComplete(resolver.expectedPin); }} className="p-4 rounded-full text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors" disabled={isProcessing}><LineIcon icon="fingerprint" className="w-8 h-8" /></button>}
                     </div>
-                    <button onClick={() => !isProcessing && !cleanupRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
+                    <button onClick={() => !isProcessing && !isCheckingRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
                     <button onClick={() => !isProcessing && setPin(p => p.slice(0, -1))} disabled={isProcessing} className="h-16 rounded-[18px] flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active:scale-95">
                         <LineIcon icon="arrow-left" className="w-6 h-6" />
                     </button>
@@ -294,7 +295,6 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
 };
 
 export const PieChart: React.FC<{ data: { value: number; color: string }[]; centerText?: string }> = ({ data, centerText }) => {
-    // ... existing implementation
     const total = data.reduce((acc, item) => acc + item.value, 0);
     let cumulativeAngle = 0;
 
@@ -321,13 +321,14 @@ export const PieChart: React.FC<{ data: { value: number; color: string }[]; cent
 
                     const largeArcFlag = sliceAngle > 180 ? 1 : 0;
 
-                    if (data.length === 1 || sliceAngle >= 360) {
+                    // Handle single 100% slice case
+                    if (data.length === 1 || sliceAngle >= 359.9) {
                         return <circle key={i} cx="50" cy="50" r="50" fill={slice.color} />;
                     }
 
                     const pathData = `M 50 50 L ${x1} ${y1} A 50 50 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
 
-                    return <path key={i} d={pathData} fill={slice.color} />;
+                    return <path key={i} d={pathData} fill={slice.color} stroke="white" strokeWidth="0.5" />;
                 })}
                 <circle cx="50" cy="50" r="35" className="fill-white dark:fill-[#1C1C1E]" />
             </svg>
