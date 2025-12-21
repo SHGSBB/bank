@@ -101,7 +101,17 @@ export const Dashboard: React.FC = () => {
     const now = new Date();
     const actionableTaxes = myTaxes.filter(t => { const isPending = t.status === 'pending'; const isPaid = t.status === 'paid'; const isOverdue = new Date(t.dueDate).getTime() <= now.getTime(); return (isPending && !isOverdue) || isPaid; });
     const overdueTaxes = myTaxes.filter(t => t.status === 'pending' && new Date(t.dueDate).getTime() <= now.getTime());
-    const activeAnnouncements = useMemo(() => { if (!db.announcements) return []; return db.announcements.filter(a => { const createTime = new Date(a.date).getTime(); const expireTime = createTime + (a.displayPeriodDays * 24 * 60 * 60 * 1000); return Date.now() <= expireTime; }); }, [db.announcements]);
+    
+    const activeAnnouncements = useMemo(() => { 
+        if (!db.announcements) return []; 
+        const list = Array.isArray(db.announcements) ? db.announcements : Object.values(db.announcements);
+        return list.filter(a => { 
+            const createTime = new Date(a.date).getTime(); 
+            const expireTime = createTime + (a.displayPeriodDays * 24 * 60 * 60 * 1000); 
+            return Date.now() <= expireTime; 
+        }); 
+    }, [db.announcements]);
+
     const currentBannerTax = actionableTaxes[bannerIndex] || actionableTaxes[0];
 
     useEffect(() => { if (actionableTaxes.length > 1) { const timer = setInterval(() => { setBannerIndex(prev => (prev + 1) % actionableTaxes.length); }, 5000); return () => clearInterval(timer); } }, [actionableTaxes.length]);

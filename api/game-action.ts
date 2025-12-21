@@ -49,11 +49,15 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 db.ref('countries').once('value')
             ]);
 
+            const annVal = announcementsSnap.val() || {};
+            // Ensure announcements is an array
+            const announcements = Array.isArray(annVal) ? annVal : Object.values(annVal);
+
             // Construct minimal response
             const data = {
                 settings: settingsSnap.val() || {},
                 realEstate: { grid: realEstateSnap.val() || [] },
-                announcements: announcementsSnap.val() || {},
+                announcements: announcements,
                 ads: adsSnap.val() || {},
                 stocks: stocksSnap.val() || {},
                 auction: auctionSnap.val() || {},
