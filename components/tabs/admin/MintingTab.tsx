@@ -1,12 +1,20 @@
-
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Button, Input } from '../../Shared';
+import { User } from '../../../types';
 
 export const MintingTab: React.FC = () => {
-    const { currentUser, showModal, serverAction, refreshData } = useGame();
+    const { currentUser, db, showModal, serverAction, refreshData } = useGame();
     const [amount, setAmount] = useState('');
     const [currency, setCurrency] = useState<'KRW'|'USD'>('KRW');
+
+    // Safe Lookup for Bank User
+    const bankUser = useMemo(() => {
+        return (Object.values(db.users) as User[]).find(u => u.name === '한국은행') as User | undefined;
+    }, [db.users]);
+
+    const bankBalanceKRW = bankUser?.balanceKRW || 0;
+    const bankBalanceUSD = bankUser?.balanceUSD || 0;
 
     const handleMint = async () => {
         const valAmount = parseFloat(amount);
@@ -32,6 +40,17 @@ export const MintingTab: React.FC = () => {
         <div className="space-y-6">
             <h3 className="text-xl font-black mb-4">화폐 발권 (한국은행 직권)</h3>
             
+            <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-2xl text-center">
+                    <p className="text-xs text-blue-400 font-bold uppercase mb-1">현재 한국은행 잔고 (KRW)</p>
+                    <p className="text-2xl font-black text-white">₩ {bankBalanceKRW.toLocaleString()}</p>
+                </div>
+                <div className="p-4 bg-green-900/20 border border-green-500/30 rounded-2xl text-center">
+                    <p className="text-xs text-green-400 font-bold uppercase mb-1">현재 한국은행 잔고 (USD)</p>
+                    <p className="text-2xl font-black text-white">$ {bankBalanceUSD.toLocaleString()}</p>
+                </div>
+            </div>
+
             <div className="p-6 bg-[#252525] rounded-2xl border border-blue-500/30">
                 <p className="text-sm text-gray-400 mb-6 leading-relaxed">
                     한국은행의 권한으로 화폐를 신규 발행하여 은행 잔고에 추가합니다.

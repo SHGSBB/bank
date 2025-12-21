@@ -10,6 +10,12 @@ export interface UserPreferences {
     use2FA?: boolean;
 }
 
+export interface ChatPreferences {
+    isPinned?: boolean;
+    isMuted?: boolean;
+    backgroundImage?: string;
+}
+
 export interface IDCard {
     issueDate: string;
     address: string;
@@ -144,6 +150,7 @@ export interface User {
     birthDate?: string;
     idCard?: IDCard;
     preferences?: UserPreferences;
+    chatPreferences?: Record<string, ChatPreferences>; // chatId -> prefs
     transactions?: Transaction[];
     ledger?: Record<string, LedgerItem>; // 가계부
     autoTransfers?: Record<string, ScheduledTransfer>; // 자동이체
@@ -379,7 +386,7 @@ export interface AuctionBid {
 export interface Auction {
     id?: string;
     isActive: boolean;
-    status: 'active' | 'ended' | 'deferred';
+    status: 'active' | 'ended' | 'deferred' | 'unsold' | 'paused';
     startTime: string;
     endTime?: number;
     timerDuration?: number;
@@ -450,7 +457,7 @@ export interface AppInfo {
 }
 
 export interface ChatAttachment {
-    type: 'image' | 'file' | 'proposal' | 'application' | 'share_user' | 'share_id' | 'transfer_request';
+    type: 'image' | 'file' | 'proposal' | 'application' | 'share_user' | 'share_id' | 'transfer_request' | 'auction_info';
     value: string;
     data?: any;
 }
@@ -462,7 +469,8 @@ export interface ChatMessage {
     timestamp: number;
     attachment?: ChatAttachment;
     threadId?: string; // Links to parent message
-    type?: 'system' | 'user' | 'thread_root' | 'conclusion' | 'notice';
+    replyTo?: { sender: string; text: string; id: string }; // For explicit UI quote
+    type?: 'system' | 'user' | 'thread_root' | 'conclusion' | 'notice' | 'auction_bid';
     reactions?: Record<string, string>; // user: emoji
     isNotice?: boolean;
     negotiationStatus?: 'pending' | 'accepted' | 'rejected' | 'closed';
@@ -479,13 +487,14 @@ export interface ChatNotice {
 export interface Chat {
     id: string;
     participants: string[];
-    type: 'private' | 'group' | 'feedback';
+    type: 'private' | 'group' | 'feedback' | 'auction';
     groupName?: string;
     lastMessage?: string;
     lastTimestamp?: number;
     messages?: Record<string, ChatMessage>;
     category?: string;
-    isPinned?: boolean; // Pinned to top of list
+    // These are legacy global props, prefer User.chatPreferences for local state
+    isPinned?: boolean; 
     isMuted?: boolean;
     coverImage?: string;
     notices?: ChatNotice[];
@@ -545,6 +554,8 @@ export interface DB {
     taxSessions?: Record<string, TaxSession>;
     auction?: Auction;
     deferredAuctions?: Auction[];
+    unsoldAuctions?: Auction[];
+    auctionHistory?: Auction[];
     signupSessions?: Record<string, SignupSession>;
     stocks?: Record<string, Stock>;
     judgements?: Record<string, Judgement>;

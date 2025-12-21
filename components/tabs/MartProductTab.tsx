@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Card, Button, Input, FileInput, Toggle, LineIcon } from '../Shared';
+import { Card, Button, Input, FileInput, Toggle, LineIcon, Modal } from '../Shared';
 import { Product, ProductVariant } from '../../types';
 import { uploadImage } from '../../services/firebase';
 
@@ -22,6 +22,9 @@ export const MartProductTab: React.FC = () => {
     const [newVarName, setNewVarName] = useState('');
     const [newVarKRW, setNewVarKRW] = useState('');
     const [newVarUSD, setNewVarUSD] = useState('');
+
+    // Stock Detail Modal
+    const [stockDetailProduct, setStockDetailProduct] = useState<Product | null>(null);
 
     const products = currentUser?.products ? (Object.values(currentUser.products) as Product[]) : [];
 
@@ -76,11 +79,9 @@ export const MartProductTab: React.FC = () => {
         setDiscountPercent(p.eventDiscountPercent?.toString() || '');
         setPriceDisplayMethod(p.priceDisplayMethod || 'min');
         
-        // Migration support for old options or variants
         if (p.variants && p.variants.length > 0) {
             setVariants(p.variants);
         } else {
-            // Migrating old simple price to a default variant
             setVariants([{
                 name: '기본',
                 priceKRW: p.price,
@@ -190,7 +191,7 @@ export const MartProductTab: React.FC = () => {
                         </div>
                     </div>
 
-                    <div><label className="text-xs font-bold block mb-1">재고 수량</label><Input type="number" placeholder="개수" value={stock} onChange={e => setStock(e.target.value)} className="w-full" /></div>
+                    <div><label className="text-xs font-bold block mb-1">통합 재고 수량</label><Input type="number" placeholder="개수" value={stock} onChange={e => setStock(e.target.value)} className="w-full" /></div>
                     <div><label className="text-xs font-bold block mb-1">상세 설명</label><Input placeholder="상품 설명" value={description} onChange={e => setDescription(e.target.value)} className="w-full" /></div>
                     
                     <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700">
@@ -211,7 +212,12 @@ export const MartProductTab: React.FC = () => {
                             {p.image && <img src={p.image} className="w-12 h-12 object-cover rounded" />}
                             <div>
                                 <p className="font-bold">{p.name}</p>
-                                <p className="text-xs text-gray-500">재고: {p.stock} | 항목 {p.variants?.length || 0}개</p>
+                                <div className="flex items-center gap-2 text-xs text-gray-500">
+                                    <button onClick={() => setStockDetailProduct(p)} className="hover:text-green-500 hover:underline font-bold">
+                                        재고: {p.stock}
+                                    </button>
+                                    <span>| 항목 {p.variants?.length || 0}개</span>
+                                </div>
                             </div>
                         </div>
                         <div className="flex gap-2">
@@ -221,6 +227,28 @@ export const MartProductTab: React.FC = () => {
                     </div>
                 ))}
             </div>
+
+            {stockDetailProduct && (
+                <Modal isOpen={true} onClose={() => setStockDetailProduct(null)} title={`${stockDetailProduct.name} 재고 상세`}>
+                    <div className="space-y-4 text-center">
+                        <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                            <p className="text-sm text-gray-500 mb-1">통합 총 재고</p>
+                            <p className="text-3xl font-black">{stockDetailProduct.stock?.toLocaleString()} 개</p>
+                        </div>
+                        <div className="text-left space-y-2">
+                            <p className="font-bold text-sm">항목별 정보</p>
+                            {stockDetailProduct.variants?.map((v, i) => (
+                                <div key={i} className="flex justify-between p-2 bg-gray-100 dark:bg-gray-700 rounded text-sm">
+                                    <span>{v.name}</span>
+                                    <span>{v.priceKRW.toLocaleString()}원 {v.priceUSD > 0 && `+ $${v.priceUSD}`}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <p className="text-xs text-gray-400">현재 시스템은 통합 재고만 관리합니다. 옵션별 재고 관리는 추후 업데이트 예정입니다.</p>
+                        <Button onClick={() => setStockDetailProduct(null)} className="w-full">닫기</Button>
+                    </div>
+                </Modal>
+            )}
         </div>
     );
 };

@@ -1,8 +1,8 @@
-
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User, ToastNotification } from '../../../types';
+import { toSafeId } from '../../../services/firebase';
 
 export const SupportFundTab: React.FC = () => {
     const { db, saveDb, showModal, showConfirm } = useGame();
@@ -19,45 +19,52 @@ export const SupportFundTab: React.FC = () => {
         if (citizens.length === 0) return showModal('지급할 시민이 없습니다.');
 
         const totalAmount = valAmount * citizens.length;
-        const bank = db.users['한국은행'];
+        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
 
+        if (!bank) return showModal("한국은행 계정을 찾을 수 없습니다.");
         if (bank.balanceKRW < totalAmount) return showModal('은행 잔고가 부족합니다.');
 
         const confirmed = await showConfirm(`모든 시민(${citizens.length}명)에게 '${title}' ₩${valAmount.toLocaleString()}을 지급하시겠습니까? (총액: ₩${totalAmount.toLocaleString()})`);
         if (!confirmed) return;
 
         const newDb = { ...db };
-        const newBank = newDb.users['한국은행'];
+        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === '한국은행');
+        if (!newBankEntry) return; 
+        const newBankUser = newBankEntry[1];
 
-        newBank.balanceKRW -= totalAmount;
+        newBankUser.balanceKRW -= totalAmount;
         const description = restriction ? `${title} (${restriction})` : title;
         const date = new Date().toISOString();
 
         citizens.forEach(c => {
-            const user = newDb.users[c.name];
-            user.balanceKRW += valAmount;
-            
-            user.transactions = [...(user.transactions || []), {
-                id: Date.now() + Math.random(), type: 'income', amount: valAmount, currency: 'KRW', description, date
-            }];
-            newBank.transactions = [...(newBank.transactions || []), {
-                id: Date.now() + Math.random(), type: 'expense', amount: -valAmount, currency: 'KRW', description: `${c.name} ${title} 지급`, date
-            }];
+            // Find citizen safely
+            const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === c.name);
+            if (userEntry) {
+                const user = userEntry[1];
+                user.balanceKRW += valAmount;
+                
+                user.transactions = [...(user.transactions || []), {
+                    id: Date.now() + Math.random(), type: 'income', amount: valAmount, currency: 'KRW', description, date
+                }];
+                newBankUser.transactions = [...(newBankUser.transactions || []), {
+                    id: Date.now() + Math.random(), type: 'expense', amount: -valAmount, currency: 'KRW', description: `${c.name} ${title} 지급`, date
+                }];
 
-            const currentNotifs = user.notifications 
-                ? (Array.isArray(user.notifications) ? user.notifications : Object.values(user.notifications))
-                : [];
+                const currentNotifs = user.notifications 
+                    ? (Array.isArray(user.notifications) ? user.notifications : Object.values(user.notifications))
+                    : [];
 
-            const notif: ToastNotification = {
-                id: (Date.now() + Math.random()).toString(),
-                message: `'${title}' 지원금 ₩${valAmount.toLocaleString()}이 지급되었습니다.`,
-                read: false,
-                isPersistent: true,
-                date,
-                type: 'info',
-                timestamp: Date.now()
-            };
-            user.notifications = [notif, ...currentNotifs].slice(0, 20);
+                const notif: ToastNotification = {
+                    id: (Date.now() + Math.random()).toString(),
+                    message: `'${title}' 지원금 ₩${valAmount.toLocaleString()}이 지급되었습니다.`,
+                    read: false,
+                    isPersistent: true,
+                    date,
+                    type: 'info',
+                    timestamp: Date.now()
+                };
+                user.notifications = [notif, ...currentNotifs].slice(0, 20);
+            }
         });
 
         await saveDb(newDb);

@@ -19,13 +19,17 @@ export const AccountTab: React.FC = () => {
 
         const linkedEmails = currentUser.linkedAccounts || [];
         if (linkedEmails.length === 0) {
-            setCachedLinkedUsers([]);
+            if (cachedLinkedUsers.length > 0) setCachedLinkedUsers([]);
             fetchStatusRef.current = 'success';
             return;
         }
 
-        // Cache Check: If length matches and not forced refresh
-        if (cachedLinkedUsers.length === linkedEmails.length && fetchStatusRef.current === 'success') {
+        // Compare using emails to prevent disappearing due to key mismatch and avoid refetch if data matches
+        const cachedEmails = cachedLinkedUsers.map(u => u.email);
+        const isAlreadyMatched = linkedEmails.length === cachedEmails.length && 
+                               linkedEmails.every(e => cachedEmails.includes(e));
+        
+        if (isAlreadyMatched && fetchStatusRef.current === 'success') {
             return;
         }
 
@@ -36,12 +40,7 @@ export const AccountTab: React.FC = () => {
         try {
             const res = await serverAction('fetch_linked_accounts', { linkedIds: linkedEmails });
             if (res && res.accounts) {
-                const sanitizedAccounts = res.accounts.map((acc: any) => ({
-                    ...acc,
-                    name: acc.name || '알 수 없음',
-                    id: acc.id || acc.email
-                }));
-                setCachedLinkedUsers(sanitizedAccounts);
+                setCachedLinkedUsers(res.accounts);
                 fetchStatusRef.current = 'success';
             } else {
                 throw new Error("Invalid response");
@@ -55,11 +54,16 @@ export const AccountTab: React.FC = () => {
     };
 
     useEffect(() => {
-        if (currentUser?.linkedAccounts?.length !== cachedLinkedUsers.length) {
-             fetchStatusRef.current = 'idle';
+        // Only reset to idle if linkedAccounts actually changed structure
+        const linkedEmails = currentUser?.linkedAccounts || [];
+        const cachedEmails = cachedLinkedUsers.map(u => u.email);
+        const needsUpdate = linkedEmails.length !== cachedEmails.length || !linkedEmails.every(e => cachedEmails.includes(e));
+        
+        if (needsUpdate) {
+            fetchStatusRef.current = 'idle';
+            loadLinked();
         }
-        loadLinked();
-    }, [currentUser?.linkedAccounts?.length]); 
+    }, [currentUser?.linkedAccounts]); 
 
     const handleSwitch = async (targetEmail: string | undefined) => {
         if (!targetEmail) return;
@@ -69,10 +73,9 @@ export const AccountTab: React.FC = () => {
         const success = await switchAccount(targetEmail);
         if (success) {
             showModal("계정이 전환되었습니다.");
+            // Force refresh when switching
             fetchStatusRef.current = 'idle';
-            setCachedLinkedUsers([]); 
-        } else {
-            showModal("계정 전환 실패: 정보를 불러올 수 없습니다.");
+            await refreshData();
         }
     };
 
@@ -90,8 +93,8 @@ export const AccountTab: React.FC = () => {
             showModal("계정이 성공적으로 연동되었습니다.");
             setIsLinkModalOpen(false);
             setLinkId('');
-            fetchStatusRef.current = 'idle'; 
-            await refreshData(); 
+            fetchStatusRef.current = 'idle';
+            await refreshData(); // Pull latest linkedAccounts array
         } catch (e: any) {
             showModal("연동 실패: " + (e.message || "사용자를 찾을 수 없거나 이미 연동되었습니다."));
         } finally {
@@ -105,7 +108,7 @@ export const AccountTab: React.FC = () => {
         try {
             await serverAction('unlink_account', { myEmail: currentUser!.email, targetName });
             showModal("연동이 해제되었습니다.");
-            fetchStatusRef.current = 'idle'; 
+            fetchStatusRef.current = 'idle';
             await refreshData();
         } catch (e) {
             showModal("해제 실패");
@@ -171,7 +174,9 @@ export const AccountTab: React.FC = () => {
                     <button 
                         onClick={async () => { 
                             const pin = await showPinModal("관리자 모드 진입 인증", currentUser?.pin!, (currentUser?.pinLength as any)||4); 
-                            if(String(pin) === String(currentUser?.pin)) setAdminMode(true); 
+                            if(String(pin) === String(currentUser?.pin)) {
+                                setAdminMode(true); 
+                            }
                         }} 
                         className="w-full py-2 text-gray-400 text-[11px] font-bold underline text-center hover:text-green-600 transition-colors"
                     >

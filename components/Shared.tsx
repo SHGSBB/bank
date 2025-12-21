@@ -41,6 +41,31 @@ export const formatName = (name?: string, user?: User | null) => {
     return name.split('_')[0];
 };
 
+export const numberToKorean = (number: number) => {
+    if (number === 0) return "0";
+    const inputNumber = number < 0 ? 0 : number;
+    const unitWords = ["", "만", "억", "조", "경"];
+    const splitUnit = 10000;
+    const splitCount = unitWords.length;
+    const resultArray = [];
+    let resultString = "";
+
+    for (let i = 0; i < splitCount; i++) {
+        let unitResult = (inputNumber % Math.pow(splitUnit, i + 1)) / Math.pow(splitUnit, i);
+        unitResult = Math.floor(unitResult);
+        if (unitResult > 0) {
+            resultArray[i] = unitResult;
+        }
+    }
+
+    for (let i = 0; i < resultArray.length; i++) {
+        if (!resultArray[i]) continue;
+        resultString = String(resultArray[i]) + unitWords[i] + " " + resultString;
+    }
+
+    return "금 " + resultString.replace("  ", " ") + "원";
+}
+
 export const Spinner: React.FC = () => (
     <div className="flex justify-center items-center p-4">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600"></div>
@@ -64,13 +89,17 @@ export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { 
 
 export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', type = 'text', ...props }) => {
     const [showPassword, setShowPassword] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
     const isPassword = type === 'password';
     const inputType = isPassword && showPassword ? 'text' : type;
+    
     return (
-        <div className="relative w-full">
+        <div className={`relative w-full transition-all duration-300 ${isFocused ? 'scale-[1.02]' : 'scale-100'}`}>
             <input 
                 type={inputType}
-                className={`w-full p-4 rounded-[18px] bg-gray-100 text-black dark:bg-[#252525] dark:text-white outline-none border border-transparent dark:border-gray-700 focus:ring-2 focus:ring-green-500 transition-all font-medium ${className}`} 
+                className={`w-full p-4 rounded-[18px] bg-gray-100 text-black dark:bg-[#252525] dark:text-white outline-none border border-transparent dark:border-gray-700 focus:ring-2 focus:ring-green-500 transition-all font-medium text-left ${className}`} 
+                onFocus={(e) => { setIsFocused(true); props.onFocus?.(e); }}
+                onBlur={(e) => { setIsFocused(false); props.onBlur?.(e); }}
                 {...props} 
             />
             {isPassword && (
@@ -82,8 +111,18 @@ export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ c
     );
 };
 
-export const MoneyInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', ...props }) => {
-    return <Input className={`font-bold ${className}`} {...props} />;
+export const MoneyInput: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ className = '', value, ...props }) => {
+    const numValue = parseInt(String(value || '0'));
+    return (
+        <div className="w-full">
+            <Input className={`font-bold ${className}`} type="number" value={value} {...props} />
+            {numValue > 0 && (
+                <p className="text-xs text-green-600 dark:text-green-400 font-bold mt-1 ml-1 animate-fade-in text-left">
+                    {numberToKorean(numValue)}
+                </p>
+            )}
+        </div>
+    );
 };
 
 export const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ children, className = '' }) => {
@@ -150,7 +189,12 @@ export const LineIcon: React.FC<{ icon: string, className?: string }> = ({ icon,
         'menu': 'M4 6h16M4 12h16M4 18h16',
         'arrow-up': 'M5 15l7-7 7 7',
         'arrow-down': 'M19 9l-7 7-7-7',
-        'dots': 'M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z'
+        'dots': 'M5 12h.01M12 12h.01M19 12h.01M6 12a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0zm7 0a1 1 0 11-2 0 1 1 0 012 0z',
+        'home': 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6',
+        'cart': 'M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z',
+        'unsend': 'M3 10h10a5 5 0 015 5v3M3 10l6-6m-6 6l6 6',
+        'reply': 'M3 10h10a5 5 0 015 5v3M3 10l6-6m-6 6l6 6',
+        'forward': 'M21 10H11a5 5 0 00-5 5v3M21 10l-6-6m6 6l-6 6'
     };
     return <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d={paths[icon] || ''} /></svg>;
 };
@@ -160,36 +204,51 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     const [isError, setIsError] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const resolvedRef = useRef(false);
-    
-    // Stable handler for completion
+    const cleanupRef = useRef(false);
+
     const handleComplete = useCallback((finalPin: string) => {
-        if (isProcessing || resolvedRef.current) return;
+        if (isProcessing || cleanupRef.current) return;
         setIsProcessing(true);
-        resolvedRef.current = true;
+        cleanupRef.current = true;
 
         if (resolver.expectedPin && finalPin !== resolver.expectedPin) {
             setIsError(true);
             if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
             
-            // Reset state to allow retry
             setTimeout(() => { 
                 setPin(''); 
                 setIsError(false);
                 setIsProcessing(false);
-                resolvedRef.current = false; // Allow retry
-            }, 600);
+                cleanupRef.current = false;
+            }, 500);
         } else {
             setIsSuccess(true);
             if (navigator.vibrate) navigator.vibrate(50);
             
-            // Delay closing slightly for success animation
             setTimeout(() => {
-                if (resolver.resolve) resolver.resolve(finalPin);
+                resolver.resolve(finalPin);
                 setResolver(null); 
             }, 300);
         }
     }, [isProcessing, resolver, setResolver]);
+
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (isProcessing) return;
+            if (/^[0-9]$/.test(e.key)) {
+                if (pin.length < (resolver.pinLength || 4)) {
+                    setPin(p => p + e.key);
+                }
+            } else if (e.key === 'Backspace') {
+                setPin(p => p.slice(0, -1));
+            } else if (e.key === 'Escape') {
+                resolver.resolve(null);
+                setResolver(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [pin, isProcessing, resolver, setResolver]);
 
     useEffect(() => {
         const requiredLen = resolver.pinLength || 4;
@@ -200,28 +259,32 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
 
     return (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
-            <div className={`bg-white dark:bg-[#1C1C1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake border-red-500' : ''} ${isSuccess ? 'border-green-500' : ''}`}>
+            <div className={`bg-white dark:bg-[#1C1C1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake' : ''}`}>
                 <button onClick={() => { if(!isProcessing) { resolver.resolve(null); setResolver(null); } }} className="absolute top-4 right-4 text-gray-400 p-2" disabled={isProcessing}>✕</button>
                 <h3 className="text-xl font-bold text-center mb-2">간편 비밀번호 입력</h3>
                 <p className={`text-sm text-center mb-8 ${isError ? 'text-red-500 font-bold' : (isSuccess ? 'text-green-500 font-bold' : 'text-gray-500')}`}>
-                    {isError ? "비밀번호가 일치하지 않습니다" : (isSuccess ? "확인되었습니다" : (resolver.message || "4자리 번호를 입력하세요"))}
+                    {isError ? "비밀번호가 일치하지 않습니다" : (isSuccess ? "확인되었습니다" : (resolver.message || "비밀번호를 입력하세요"))}
                 </p>
                 <div className="flex justify-center gap-4 mb-8">
                     {Array.from({ length: resolver.pinLength || 4 }).map((_, i) => (
-                        <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${i < pin.length ? (isError ? 'bg-red-500' : 'bg-green-500 scale-125 shadow-[0_0_8px_rgba(34,197,94,0.5)]') : 'bg-gray-200 dark:bg-gray-700'}`}></div>
+                        <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${
+                            isError ? 'bg-red-500' : 
+                            isSuccess ? 'bg-green-500 scale-125' : 
+                            i < pin.length ? 'bg-black dark:bg-white scale-110' : 'bg-gray-200 dark:bg-gray-700'
+                        }`}></div>
                     ))}
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                        <button key={num} onClick={() => !isProcessing && !resolvedRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                        <button key={num} onClick={() => !isProcessing && !cleanupRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
                             {num}
                         </button>
                     ))}
                     <div className="flex items-center justify-center">
                         {resolver.allowBiometric && <button onClick={async () => { if(!isProcessing && await loginBiometrics('temp') && resolver.expectedPin) handleComplete(resolver.expectedPin); }} className="p-4 rounded-full text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors" disabled={isProcessing}><LineIcon icon="fingerprint" className="w-8 h-8" /></button>}
                     </div>
-                    <button onClick={() => !isProcessing && !resolvedRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
-                    <button onClick={() => !isProcessing && setPin(p => p.slice(0, -1))} disabled={isProcessing} className="h-16 rounded-[18px] flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                    <button onClick={() => !isProcessing && !cleanupRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
+                    <button onClick={() => !isProcessing && setPin(p => p.slice(0, -1))} disabled={isProcessing} className="h-16 rounded-[18px] flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active:scale-95">
                         <LineIcon icon="arrow-left" className="w-6 h-6" />
                     </button>
                 </div>
@@ -230,27 +293,64 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     );
 };
 
-export const PieChart: React.FC<{ data: { label: string, value: number, color: string }[], centerText?: string }> = ({ data, centerText }) => {
-    const total = data.reduce((sum, item) => sum + item.value, 0);
-    let cumulativePercent = 0;
-    const getCoordinatesForPercent = (percent: number) => [Math.cos(2 * Math.PI * percent), Math.sin(2 * Math.PI * percent)];
+export const PieChart: React.FC<{ data: { value: number; color: string }[]; centerText?: string }> = ({ data, centerText }) => {
+    // ... existing implementation
+    const total = data.reduce((acc, item) => acc + item.value, 0);
+    let cumulativeAngle = 0;
+
+    if (total === 0) {
+        return (
+            <div className="w-48 h-48 rounded-full bg-gray-200 dark:bg-gray-700 mx-auto flex items-center justify-center">
+                <span className="text-xs text-gray-500">데이터 없음</span>
+            </div>
+        );
+    }
+
     return (
         <div className="relative w-48 h-48 mx-auto">
-            <svg viewBox="-1 -1 2 2" className="w-full h-full -rotate-90">
-                {data.map((item, i) => {
-                    const [startX, startY] = getCoordinatesForPercent(cumulativePercent);
-                    const percent = item.value / (total || 1);
-                    cumulativePercent += percent;
-                    const [endX, endY] = getCoordinatesForPercent(cumulativePercent);
-                    return <path key={i} d={`M ${startX} ${startY} A 1 1 0 ${percent > 0.5 ? 1 : 0} 1 ${endX} ${endY} L 0 0`} fill={item.color} />;
+            <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
+                {data.map((slice, i) => {
+                    const startAngle = cumulativeAngle;
+                    const sliceAngle = (slice.value / total) * 360;
+                    cumulativeAngle += sliceAngle;
+
+                    const x1 = 50 + 50 * Math.cos((Math.PI * startAngle) / 180);
+                    const y1 = 50 + 50 * Math.sin((Math.PI * startAngle) / 180);
+                    const x2 = 50 + 50 * Math.cos((Math.PI * (startAngle + sliceAngle)) / 180);
+                    const y2 = 50 + 50 * Math.sin((Math.PI * (startAngle + sliceAngle)) / 180);
+
+                    const largeArcFlag = sliceAngle > 180 ? 1 : 0;
+
+                    if (data.length === 1 || sliceAngle >= 360) {
+                        return <circle key={i} cx="50" cy="50" r="50" fill={slice.color} />;
+                    }
+
+                    const pathData = `M 50 50 L ${x1} ${y1} A 50 50 0 ${largeArcFlag} 1 ${x2} ${y2} Z`;
+
+                    return <path key={i} d={pathData} fill={slice.color} />;
                 })}
+                <circle cx="50" cy="50" r="35" className="fill-white dark:fill-[#1C1C1E]" />
             </svg>
-            <div className="absolute inset-0 flex items-center justify-center flex-col">
-                <div className="bg-white dark:bg-[#1C1C1E] rounded-full w-24 h-24 flex items-center justify-center flex-col shadow-inner">
-                    <span className="text-[10px] text-gray-500 font-bold">TOTAL</span>
-                    <span className="text-xs font-black truncate px-2">{centerText}</span>
+            {centerText && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <span className="text-xs font-bold text-gray-700 dark:text-gray-200">{centerText}</span>
                 </div>
-            </div>
+            )}
+        </div>
+    );
+};
+
+export const ToastContainer: React.FC = () => {
+    const { toasts } = useGame();
+
+    return (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-[9999] w-full max-w-md px-4 flex flex-col gap-2 pointer-events-none">
+            {toasts.map(toast => (
+                <div key={toast.id} className={`bg-gray-800 text-white px-4 py-3 rounded-xl shadow-lg flex items-center gap-3 animate-slide-down pointer-events-auto backdrop-blur-md bg-opacity-90`}>
+                    <div className={`w-2 h-2 rounded-full ${toast.type === 'error' ? 'bg-red-500' : 'bg-green-500'}`}></div>
+                    <div className="flex-1 text-sm font-medium">{toast.message}</div>
+                </div>
+            ))}
         </div>
     );
 };
@@ -258,33 +358,21 @@ export const PieChart: React.FC<{ data: { label: string, value: number, color: s
 export const FileInput: React.FC<{ onChange: (base64: string | null) => void }> = ({ onChange }) => {
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (!file) return onChange(null);
-        const reader = new FileReader();
-        reader.onload = (event) => onChange(event.target?.result as string);
-        reader.readAsDataURL(file);
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                onChange(reader.result as string);
+            };
+            reader.readAsDataURL(file);
+        } else {
+            onChange(null);
+        }
     };
-    return (
-        <input type="file" accept="image/*" onChange={handleFileChange} className="text-xs text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-xs file:font-semibold file:bg-green-50 file:text-green-700 hover:file:bg-green-100" />
-    );
-};
 
-export const ToastContainer: React.FC = () => {
-    const { toasts } = useGame();
     return (
-        <div className="fixed top-6 right-6 z-[9999] flex flex-col gap-3 pointer-events-none max-w-sm w-full sm:w-auto">
-            {(toasts || []).map((toast: ToastNotification) => (
-                <div key={toast.id} className={`p-4 rounded-2xl shadow-2xl border backdrop-blur-md animate-fade-in pointer-events-auto flex items-center gap-3 ${
-                    toast.type === 'error' ? 'bg-red-500 text-white border-red-400' :
-                    toast.type === 'success' ? 'bg-green-600 text-white border-green-500' :
-                    toast.type === 'warning' ? 'bg-orange-500 text-white border-orange-400' :
-                    'bg-white dark:bg-[#1C1C1E] border-gray-100 dark:border-gray-800 text-black dark:text-white'
-                }`}>
-                    <div className="flex-1">
-                        {toast.title && <p className="font-bold text-[10px] uppercase tracking-wider mb-0.5 opacity-80">{toast.title}</p>}
-                        <p className="text-sm font-bold">{toast.message}</p>
-                    </div>
-                </div>
-            ))}
-        </div>
+        <label className="cursor-pointer bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 p-2 rounded-full transition-colors flex items-center justify-center w-10 h-10">
+            <LineIcon icon="image" className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
+        </label>
     );
 };

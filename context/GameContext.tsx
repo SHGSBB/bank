@@ -1,10 +1,12 @@
+
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { 
-    fetchGlobalData, 
+    fetchEssentials, 
     saveDb as firebaseSaveDb, 
     generateId, 
     chatService, 
     assetService, 
+    fetchUser, 
     fetchAllUsers, 
     loginWithEmail, 
     logoutFirebase, 
@@ -12,11 +14,12 @@ import {
     subscribeAuth, 
     fetchUserByEmail,
     resetUserPassword,
+    updateUserEmail,
     database,
     toSafeId,
     fetchUserByLoginId
 } from "../services/firebase";
-import { update, ref, set, get } from "firebase/database";
+import { update, ref, set, get, remove } from "firebase/database";
 import { DB, DEFAULT_DB, User, ToastNotification, AssetHistoryPoint, ChatAttachment, ChatMessage, PolicyRequest, Stock, Application, PendingTax } from "../types";
 import { Spinner } from "../components/Shared";
 
@@ -30,24 +33,24 @@ interface GameContextType {
     setAdminMode: (val: boolean) => void;
     login: (id: string, pass: string, remember?: boolean) => Promise<boolean>;
     logout: () => Promise<void>;
-    updateUser: (email: string, data: Partial<User>) => Promise<void>;
+    updateUser: (key: string, data: Partial<User>) => Promise<void>;
     registerUser: (userData: Partial<User>, password: string) => Promise<void>;
     isLoading: boolean;
     showPinModal: (message: string, expectedPin?: string, length?: 4 | 6, allowBiometric?: boolean) => Promise<string | null>;
     showConfirm: (message: string) => Promise<boolean>;
-    showModal: (message: string) => void;
+    showModal: (message: React.ReactNode) => void;
     notify: (targetUser: string, message: string, isPersistent?: boolean, action?: string | null, actionData?: any) => Promise<void>;
     saveDb: (data: DB) => Promise<void>;
     refreshData: () => Promise<void>;
     loadAllUsers: () => Promise<void>;
     serverAction: (action: string, payload: any) => Promise<any>;
-    pinResolver: any; setPinResolver: any; confirmResolver: any; setConfirmResolver: any; alertMessage: string | null; setAlertMessage: (msg: string | null) => void;
+    pinResolver: any; setPinResolver: any; confirmResolver: any; setConfirmResolver: any; alertMessage: React.ReactNode | null; setAlertMessage: (msg: React.ReactNode | null) => void;
     currentAssetHistory: AssetHistoryPoint[]; loadAssetHistory: () => Promise<void>;
     cachedLinkedUsers: any[]; setCachedLinkedUsers: (users: any[]) => void;
     triggerHaptic: () => void;
     isElementPicking: boolean; setElementPicking: (val: boolean) => void;
     requestNotificationPermission: (mode?: 'native' | 'browser') => Promise<void>;
-    createChat: (participants: string[], type?: 'private'|'group'|'feedback', groupName?: string) => Promise<string>;
+    createChat: (participants: string[], type?: 'private'|'group'|'feedback'|'auction', groupName?: string) => Promise<string>;
     sendMessage: (chatId: string, text: string, attachment?: ChatAttachment) => Promise<void>;
     clearPaidTax: () => Promise<void>;
     cachedMarts: User[];
@@ -61,11 +64,17 @@ interface GameContextType {
     switchAccount: (targetName: string) => Promise<boolean>;
     approvePolicyChange: (id: string) => Promise<void>;
     rejectPolicyChange: (id: string) => Promise<void>;
-    requestPasswordReset: (email: string) => Promise<void>;
+    requestPasswordReset: (email: string) => Promise<boolean>;
+    changeUserEmail: (newEmail: string) => Promise<void>;
     payTax: (tax: PendingTax) => Promise<void>;
     dismissTax: (taxId: string) => Promise<void>;
-    openChat: (chatId: string) => void;
-    submitApplication: (app: Application) => Promise<void>;
+    setupPin: (pin: string) => Promise<void>;
+    openChat: () => void;
+    findUserKeyByName: (name: string) => string | undefined;
+    activeTab: string;
+    setActiveTab: (tab: string) => void;
+    highQualityGraphics: boolean;
+    setHighQualityGraphics: (val: boolean) => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -84,96 +93,149 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [simulatedLoading, setSimulatedLoading] = useState(false);
     const [pinResolver, setPinResolver] = useState<any>(null);
     const [confirmResolver, setConfirmResolver] = useState<any>(null);
-    const [alertMessage, setAlertMessage] = useState<string | null>(null);
+    const [alertMessage, setAlertMessage] = useState<React.ReactNode | null>(null);
     const [cachedLinkedUsers, setCachedLinkedUsers] = useState<any[]>([]);
     const [isElementPicking, setElementPicking] = useState(false);
     const [cachedMarts, setCachedMarts] = useState<User[]>([]);
     const [toasts, setToasts] = useState<ToastNotification[]>([]);
+    
+    // Global Navigation State for Mobile Tab Bar Sync
+    const [activeTab, setActiveTab] = useState<string>('이체');
+    const [highQualityGraphics, setHighQualityGraphics] = useState(true);
 
     const refreshData = useCallback(async () => {
         try {
-            // Use Email or ID as the key for fetching data. 
-            // Crucial: Use the ID if email is missing (legacy support or ID-based login)
-            const currentId = currentUser?.email || currentUser?.id || undefined;
-            const data = await fetchGlobalData(currentId);
+            const essentials = await fetchEssentials();
+            setDb(prev => ({ ...prev, ...essentials }));
             
-            setDb(prev => ({ 
-                ...prev, 
-                ...data,
-                users: { ...prev.users, ...data.users } 
-            }));
-            
-            if (currentId) {
-                const safeId = toSafeId(currentId);
-                const updatedMe = (data.users && data.users[safeId]) ? data.users[safeId] : null;
-                
-                if (updatedMe) {
+            if (currentUser) {
+                const uid = currentUser.id || currentUser.email!;
+                const userData = await fetchUser(uid);
+                if (userData) {
                     setCurrentUser(prev => {
-                        if (!prev) return updatedMe;
-                        
-                        // [Critical Fix] If the server returned a 'diet' object (missing transactions) because it failed to identify 'me',
-                        // we MUST NOT overwrite the existing detailed data with the diet data.
-                        const isDietObject = (!updatedMe.transactions || updatedMe.transactions.length === 0) && (prev.transactions && prev.transactions.length > 0);
-                        
-                        if (isDietObject) {
-                            // Merge carefully: Keep local heavy data, update light data
-                            return {
-                                ...updatedMe,
-                                transactions: prev.transactions,
-                                notifications: prev.notifications || updatedMe.notifications,
-                                ledger: prev.ledger || updatedMe.ledger,
-                                // Ensure critical fields aren't lost
-                                name: updatedMe.name || prev.name,
-                                type: updatedMe.type || prev.type,
-                                govtRole: updatedMe.govtRole || prev.govtRole,
-                                customJob: updatedMe.customJob || prev.customJob
-                            };
-                        }
-                        
-                        return { ...prev, ...updatedMe };
+                        if (JSON.stringify(prev) === JSON.stringify(userData)) return prev;
+                        return { ...prev, ...userData };
                     });
                 }
             }
-        } catch(e) { console.error("Global Data Fetch Error:", e); }
-    }, [currentUser?.email, currentUser?.id]);
+        } catch(e) { console.error("Data Fetch Error:", e); }
+    }, [currentUser?.id, currentUser?.email]);
+
+    // Auction Chat Trigger
+    useEffect(() => {
+        if (db.auction?.isActive && db.auction?.status === 'active') {
+            window.dispatchEvent(new CustomEvent('open-chat'));
+        }
+    }, [db.auction?.status, db.auction?.id]);
 
     const isBOKUser = (user: User | null) => {
         if (!user) return false;
         return user.name === '한국은행' || user.govtRole === '한국은행장' || user.customJob === '한국은행장';
     };
 
+    // Role Auto-Migration Logic
     useEffect(() => {
-        const unsubscribe = subscribeAuth(async (firebaseUser) => {
-            if (firebaseUser) {
-                if (!firebaseUser.emailVerified) {
-                    setCurrentUser(null);
-                    setIsLoading(false);
-                    return;
+        if (currentUser) {
+            const updates: Partial<User> = {};
+            let needsUpdate = false;
+
+            if (isBOKUser(currentUser) && currentUser.type !== 'admin') {
+                updates.type = 'admin';
+                updates.subType = 'govt'; 
+                needsUpdate = true;
+            }
+
+            if (currentUser.govtRole) {
+                const role = currentUser.govtRole;
+                if (['판사', '검사', '국회의원', '대통령', '법무부장관'].includes(role) && currentUser.type !== 'government' && currentUser.type !== 'admin') {
+                    updates.type = 'government';
+                    needsUpdate = true;
                 }
-                const userData = await fetchUserByEmail(firebaseUser.email!);
-                if (userData) {
-                    const requireApproval = db.settings.requireSignupApproval !== false;
-                    if (userData.approvalStatus === 'approved' || !requireApproval || isBOKUser(userData)) {
-                        setCurrentUser(userData);
-                        if (isBOKUser(userData)) setAdminMode(false);
-                        await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });
+            }
+
+            if (needsUpdate) {
+                updateUser(currentUser.name, updates);
+                setCurrentUser(prev => prev ? { ...prev, ...updates } : null);
+            }
+        }
+    }, [currentUser?.name, currentUser?.govtRole, currentUser?.type]);
+
+    // Main Auth Listener
+    useEffect(() => {
+        let isMount = true;
+        
+        const initAuth = async () => {
+            // Priority: Local Storage "Switch" Mode
+            const switchedId = localStorage.getItem('sh_user_id');
+            if (switchedId) {
+                const switchedUser = await fetchUserByLoginId(switchedId);
+                if (switchedUser && isMount) {
+                    setCurrentUser(switchedUser);
+                    if (isBOKUser(switchedUser)) setAdminMode(false);
+                    const userKey = toSafeId(switchedUser.id || switchedUser.email!);
+                    await update(ref(database, `users/${userKey}`), { isOnline: true, lastActive: Date.now() });
+                    setIsLoading(false);
+                    // Do NOT continue to subscribeAuth if we are forcing a switched user
+                    return; 
+                } else if (!switchedUser && isMount) {
+                    // ID exists in storage but not DB (deleted?), clear storage and continue to auth listener
+                    localStorage.removeItem('sh_user_id');
+                }
+            }
+
+            const unsubscribe = subscribeAuth(async (firebaseUser) => {
+                if (!isMount) return;
+                
+                // If local storage has an ID, ignore Firebase Auth updates (prevent reverting switch)
+                if (localStorage.getItem('sh_user_id')) return;
+
+                if (firebaseUser) {
+                    if (!firebaseUser.emailVerified) {
+                        setCurrentUser(null);
+                        setIsLoading(false);
+                        return;
+                    }
+                    
+                    const userData = await fetchUserByEmail(firebaseUser.email!);
+                    if (userData) {
+                        const requireApproval = db.settings.requireSignupApproval !== false;
+                        if (userData.approvalStatus === 'approved' || !requireApproval || isBOKUser(userData)) {
+                            setCurrentUser(userData);
+                            // Sync local storage on fresh login
+                            localStorage.setItem('sh_user_id', userData.id || userData.email!);
+                            
+                            if (isBOKUser(userData)) setAdminMode(false);
+                            const userKey = toSafeId(userData.id || userData.email!);
+                            await update(ref(database, `users/${userKey}`), { isOnline: true, lastActive: Date.now() });
+                        } else {
+                            await logoutFirebase();
+                            setAlertMessage("가입 승인 대기 중입니다.");
+                        }
                     } else {
                         await logoutFirebase();
-                        setAlertMessage("가입 승인 대기 중입니다.");
                     }
                 } else {
-                    await logoutFirebase();
+                    setCurrentUser(null);
+                    setAdminMode(false);
                 }
-            } else {
-                setCurrentUser(null);
-                setAdminMode(false);
-            }
-            setIsLoading(false);
+                setIsLoading(false);
+            });
+            
+            return unsubscribe;
+        };
+
+        fetchEssentials().then((data) => {
+            if(isMount) setDb(prev => ({ ...prev, ...data }));
+            initAuth();
         });
-        // Initial fetch call moved to after mount to ensure context is ready
-        refreshData();
-        return () => unsubscribe();
-    }, [db.settings.requireSignupApproval]);
+
+        return () => { isMount = false; };
+    }, []);
+
+    const findUserKeyByName = (name: string): string | undefined => {
+        const entry = Object.entries(db.users).find(([k, u]) => (u as User).name === name);
+        return entry ? entry[0] : undefined; 
+    };
 
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
@@ -198,65 +260,43 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSimulatedLoading(true);
         try {
             const inputId = id.trim();
-            // Use optimized fetch
             let userData = await fetchUserByLoginId(inputId);
-            if (!userData && inputId.includes('@')) userData = await fetchUserByEmail(inputId);
-            
-            // Allow login even if fetch failed initially (Firebase Auth will verify)
-            // But we need the email for Firebase Auth
-            let actualEmail = userData?.email || inputId;
-
-            const fUser = await loginWithEmail(actualEmail.toLowerCase(), pass);
-            if (!fUser.emailVerified) {
-                setAlertMessage("이메일 인증이 완료되지 않았습니다.");
-                await logoutFirebase();
-                return false;
-            }
-
-            // Fetch again to be sure we have the latest
-            userData = await fetchUserByEmail(fUser.email!);
             
             if (!userData) {
-                setAlertMessage("계정 데이터가 존재하지 않습니다.");
-                await logoutFirebase();
+                setAlertMessage("존재하지 않는 아이디입니다.");
                 return false;
             }
 
-            const requireApproval = db.settings.requireSignupApproval !== false;
-            if (userData.approvalStatus !== 'approved' && requireApproval && !isBOKUser(userData)) {
-                setAlertMessage("승인 대기 중인 계정입니다.");
-                await logoutFirebase();
+            let actualEmail = userData.email;
+            if (!actualEmail) {
+                setAlertMessage("계정 데이터 오류: 이메일 정보가 없습니다.");
                 return false;
             }
+
+            await loginWithEmail(actualEmail, pass);
+            
+            const userId = userData.id || userData.email!;
+            localStorage.setItem('sh_user_id', userId);
+            setCurrentUser(userData);
 
             try {
                 const historyStr = localStorage.getItem('sh_login_history');
                 const history = historyStr ? JSON.parse(historyStr) : [];
-                
                 const newEntry = {
-                    email: userData.email,
-                    name: userData.name,
-                    id: userData.id,
-                    profilePic: userData.profilePic,
-                    pin: userData.pin, 
-                    password: btoa(pass), 
-                    timestamp: Date.now()
+                    email: userData.email, name: userData.name, id: userData.id, profilePic: userData.profilePic, timestamp: Date.now()
                 };
-
-                const filtered = history.filter((h: any) => h.email !== userData.email);
+                const filtered = history.filter((h: any) => h.id !== userData!.id); 
                 const newHistory = [newEntry, ...filtered].slice(0, 4); 
                 localStorage.setItem('sh_login_history', JSON.stringify(newHistory));
-            } catch (e) { console.error("History Save Error", e); }
+            } catch (e) { }
 
-            setCurrentUser(userData);
-            if (remember) localStorage.setItem('sh_user_id', userData.email!);
-            await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });
-            
-            // Force immediate data refresh
-            await refreshData();
             return true;
         } catch (authError: any) {
-            setAlertMessage("아이디 또는 비밀번호가 올바르지 않습니다.");
+            if (authError.code === 'auth/invalid-credential' || authError.code === 'auth/wrong-password') {
+                setAlertMessage("비밀번호가 일치하지 않습니다.");
+            } else {
+                setAlertMessage("로그인 오류: " + authError.message);
+            }
             return false;
         } finally {
             setSimulatedLoading(false);
@@ -266,33 +306,70 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const logout = async () => {
         setSimulatedLoading(true);
         if (currentUser) {
-            try { await update(ref(database, `users/${toSafeId(currentUser.email!)}`), { isOnline: false }); } catch(e) {}
+            try {
+                const userKey = toSafeId(currentUser.id || currentUser.email!);
+                await update(ref(database, `users/${userKey}`), { isOnline: false });
+            } catch(e) {}
         }
-        await logoutFirebase();
+        
+        localStorage.removeItem('sh_user_id');
+        
+        try {
+            await logoutFirebase();
+        } catch(e) {
+            console.warn("Firebase logout failed, possibly already logged out", e);
+        }
+        
         setCurrentUser(null);
         setAdminMode(false);
         setSimulatedLoading(false);
+        
+        // Force hard reload to clear any lingering listeners or state that might trigger "Removed" errors
+        window.location.reload();
     };
 
     const registerUser = async (userData: Partial<User>, password: string) => {
         setSimulatedLoading(true);
         try {
             const fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
-            const userEmail = fUser.email!.trim().toLowerCase();
-            const safeId = toSafeId(userEmail);
+            const userEmail = fUser.email!.toLowerCase();
+            const dbKey = toSafeId(userData.id!.trim()); 
             
-            const newUser = { 
-                ...userData, 
-                id: userData.id || userEmail,
+            const isKoreaBank = userData.name === '한국은행';
+            const initialBalance = isKoreaBank ? 1000000000000000 : 0;
+            const finalType = isKoreaBank ? 'admin' : (userData.type || 'citizen');
+            
+            const newUser: User = {
+                id: userData.id!.trim(), 
                 email: userEmail,
-                password: password,
-                approvalStatus: userData.approvalStatus || 'pending', 
-                balanceKRW: 0, 
-                balanceUSD: 0, 
-                transactions: [] 
+                name: userData.name || '',
+                password: password, 
+                type: finalType,
+                subType: userData.subType || 'personal',
+                govtRole: userData.govtRole || '',
+                govtBranch: userData.govtBranch || [],
+                approvalStatus: userData.approvalStatus || 'pending',
+                balanceKRW: initialBalance,
+                balanceUSD: 0,
+                birthDate: userData.birthDate || '',
+                phoneNumber: userData.phoneNumber || '',
+                nickname: userData.nickname || '',
+                customJob: userData.customJob || '',
+                statusMessage: userData.statusMessage || '',
+                profilePic: userData.profilePic || null,
+                gender: userData.gender || 'male',
+                idCard: {
+                    issueDate: new Date().toLocaleDateString('ko-KR'),
+                    address: '신규 등록',
+                    residentNumber: userData.birthDate ? `${userData.birthDate}-*******` : undefined
+                },
+                preferences: {
+                    theme: 'system', isEasyMode: false, skipPinForCommonActions: false, vibration: true, assetDisplayMode: 'full', biometricEnabled: false, saveLoginHistory: true, use2FA: false
+                },
+                linkedAccounts: [], transactions: [], notifications: [], pendingTaxes: [], loans: [], stockHoldings: {}, ledger: {}, autoTransfers: {}, isOnline: true, lastActive: Date.now(), failedLoginAttempts: 0
             };
             
-            await set(ref(database, `users/${safeId}`), sanitize(newUser));
+            await set(ref(database, `users/${dbKey}`), sanitize(newUser));
         } catch (e: any) {
             console.error("registerUser Error:", e);
             throw e;
@@ -301,58 +378,35 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
-    const updateUser = async (email: string, data: Partial<User>) => {
-        const userEmail = email || currentUser?.email;
-        if (!userEmail) return;
-        const safeId = toSafeId(userEmail);
-        await update(ref(database, `users/${safeId}`), sanitize(data));
-        
-        if (currentUser && currentUser.email === userEmail) {
-            setCurrentUser(prev => ({ ...prev!, ...data }));
-        }
+    const updateUser = async (key: string, data: Partial<User>) => {
+        const targetKey = key || currentUser?.id || currentUser?.email;
+        if (!targetKey) return;
+        const safeKey = toSafeId(targetKey);
+        await update(ref(database, `users/${safeKey}`), sanitize(data));
+        await refreshData();
+    };
+
+    const setupPin = async (pin: string) => {
+        if (!currentUser) return;
+        await updateUser(currentUser.id || currentUser.email!, { pin, pinLength: pin.length as any });
+        setAlertMessage("PIN이 등록되었습니다. 이제 이 번호로 인증할 수 있습니다.");
     };
 
     const saveDb = async (data: DB) => {
         setSimulatedLoading(true);
-        try { 
-            await firebaseSaveDb(data); 
-            await refreshData(); 
-        } finally { 
-            setSimulatedLoading(false); 
-        }
+        try { await firebaseSaveDb(data); await refreshData(); } finally { setSimulatedLoading(false); }
     };
 
-    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => 
-        new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
-    
-    const showConfirm = (m: string) => 
-        new Promise<boolean>(r => setConfirmResolver({ resolve: r, message: m }));
-    
-    const showModal = (m: string) => setAlertMessage(m);
+    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
+    const showConfirm = (m: string) => new Promise<boolean>(r => setConfirmResolver({ resolve: r, message: m }));
+    const showModal = (m: React.ReactNode) => setAlertMessage(m);
     
     const notify = async (targetUser: string, message: string, isPersistent = false, action: string | null = null, actionData: any = null) => {
         const notifId = `n_${Date.now()}`;
-        const newNotif = { 
-            id: notifId, 
-            message, 
-            read: false, 
-            date: new Date().toISOString(), 
-            isPersistent, 
-            type: 'info' as const, 
-            timestamp: Date.now(), 
-            action: action || null, 
-            actionData: actionData || null 
-        };
-        
-        const nativeEnabled = Notification.permission === 'granted';
-        if (nativeEnabled) new Notification("성화은행 알림", { body: message });
-        else {
-            setToasts(prev => [...prev, newNotif]);
-            setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
-        }
-
+        const newNotif = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info' as const, timestamp: Date.now(), action: action || null, actionData: actionData || null };
+        setToasts(prev => [...prev, newNotif]);
+        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
         const sanitizedNotif = sanitize(newNotif);
-
         if (targetUser === 'ALL') {
             const usersSnap = await get(ref(database, 'users'));
             const users = usersSnap.val() || {};
@@ -360,19 +414,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             Object.keys(users).forEach(ukey => { updates[`users/${ukey}/notifications/${notifId}`] = sanitizedNotif; });
             await update(ref(database), updates);
         } else {
-            const targetKey = Object.keys(db.users).find(k => db.users[k].name === targetUser) || toSafeId(targetUser);
-            if (targetKey) await update(ref(database, `users/${targetKey}/notifications/${notifId}`), sanitizedNotif);
+            let finalKey = toSafeId(targetUser);
+            const check = await get(ref(database, `users/${finalKey}`));
+            if (!check.exists()) {
+                 const all = await fetchAllUsers();
+                 const found = Object.values(all).find(u => u.name === targetUser || u.id === targetUser);
+                 if (found) finalKey = toSafeId(found.id || found.email!);
+            }
+            await update(ref(database, `users/${finalKey}/notifications/${notifId}`), sanitizedNotif);
         }
     };
 
     const triggerHaptic = () => { if (navigator.vibrate) navigator.vibrate(50); };
-    const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.email!)); };
-
-    const requestNotificationPermission = async (mode: 'native' | 'browser' = 'browser') => {
-        if (mode === 'native' && 'Notification' in window) await Notification.requestPermission();
-    };
+    const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.id || currentUser.email!)); };
+    const requestNotificationPermission = async (mode: 'native' | 'browser' = 'browser') => { if (mode === 'native' && 'Notification' in window) await Notification.requestPermission(); };
     
-    const createChat = async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string) => {
+    const openChat = () => {
+        window.dispatchEvent(new CustomEvent('open-chat'));
+    };
+
+    const createChat = async (participants: string[], type: 'private'|'group'|'feedback'|'auction' = 'private', groupName?: string) => {
         const id = await chatService.createChat(participants, type, groupName);
         await refreshData();
         return id;
@@ -382,6 +443,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const myIdentity = (currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장') ? '한국은행' : currentUser!.name;
         const msg: ChatMessage = { id: generateId(), sender: myIdentity, text, timestamp: Date.now(), attachment };
         await chatService.sendMessage(chatId, msg);
+        
+        if (attachment?.type === 'application' || attachment?.type === 'proposal') {
+            openChat();
+        }
     };
 
     const wait = (type: 'light' | 'heavy') => new Promise<void>(resolve => setTimeout(resolve, type === 'light' ? 500 : 1500));
@@ -391,6 +456,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const req: PolicyRequest = { id, type: type as any, requester: currentUser!.name, data, description, status: 'pending', requestedAt: new Date().toISOString() };
         await update(ref(database, `policyRequests/${id}`), sanitize(req));
         await refreshData();
+        const prez = (Object.values(db.users) as User[]).find(u => u.govtRole === '대통령');
+        if (prez) notify(prez.name, `[정책] ${description} 승인 요청이 도착했습니다.`, true);
     };
 
     const respondToAuctionInvite = async (from: string, accept: boolean, notifId: string) => {
@@ -403,28 +470,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 else newDb.auction.teams[from].splice(memberIdx, 1);
             }
         }
-        const userNotifsRef = ref(database, `users/${toSafeId(currentUser.email!)}/notifications/${notifId}`);
+        const userKey = toSafeId(currentUser.id || currentUser.email!);
+        const userNotifsRef = ref(database, `users/${userKey}/notifications/${notifId}`);
         await set(userNotifsRef, null);
         await saveDb(newDb);
     };
 
-    const updateStock = async (stockId: string, data: Partial<Stock>) => { 
-        await update(ref(database, `stocks/${stockId}`), sanitize(data)); 
-        await refreshData(); 
-    };
+    const updateStock = async (stockId: string, data: Partial<Stock>) => { await update(ref(database, `stocks/${stockId}`), sanitize(data)); await refreshData(); };
+    const markChatRead = async (chatId: string) => { /* Impl */ };
 
     const applyBankruptcy = async () => {
         if (!currentUser) return;
         if (!await showConfirm("정말 파산을 신청하시겠습니까?")) return;
         const pin = await showPinModal("PIN 입력", currentUser.pin!);
         if (pin !== currentUser.pin) return;
-
         const newDb = { ...db };
-        const userKey = toSafeId(currentUser.email!);
+        const userKey = toSafeId(currentUser.id || currentUser.email!);
         const user = newDb.users[userKey];
-        user.balanceKRW = 0;
-        user.balanceUSD = 0;
-        user.stockHoldings = {};
+        user.balanceKRW = 0; user.balanceUSD = 0; user.stockHoldings = {};
         await saveDb(newDb);
         setAlertMessage("파산 처리가 완료되었습니다.");
     };
@@ -432,18 +495,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const switchAccount = async (targetEmail: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
-            if (currentUser?.email === targetEmail) return true;
-            
-            // Use optimized fetch to ensure no 87MB download
             const userData = await fetchUserByEmail(targetEmail);
             if (userData) { 
-                setCurrentUser(userData); 
+                setCurrentUser(userData);
+                localStorage.setItem('sh_user_id', userData.id || userData.email!);
                 setAdminMode(false);
                 return true; 
             }
-            return false;
-        } catch (e) {
-            console.error("Switch Account Error:", e);
             return false;
         } finally { 
             setSimulatedLoading(false); 
@@ -458,29 +516,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updates[`policyRequests/${id}/status`] = 'approved';
         await update(ref(database), updates);
         await refreshData();
+        if (req.requester) notify(req.requester, `[정책] ${req.description} 승인되었습니다.`, true);
     };
 
-    const rejectPolicyChange = async (id: string) => {
-        await update(ref(database, `policyRequests/${id}`), { status: 'rejected' });
-        await refreshData();
+    const rejectPolicyChange = async (id: string) => { 
+        await update(ref(database, `policyRequests/${id}`), { status: 'rejected' }); 
+        await refreshData(); 
     };
 
     const payTax = async (tax: PendingTax) => {
         if(!currentUser) return;
-        if(currentUser.balanceKRW < tax.amount) {
-            setAlertMessage("잔액이 부족합니다.");
-            return;
-        }
+        if(currentUser.balanceKRW < tax.amount) { setAlertMessage("잔액이 부족합니다."); return; }
         if(!await showConfirm(`₩${tax.amount.toLocaleString()} 세금을 납부하시겠습니까?`)) return;
-        
         const newDb = {...db};
-        const me = newDb.users[toSafeId(currentUser.email!)];
-        if (me) me.balanceKRW -= tax.amount;
+        const bank = (Object.values(newDb.users) as User[]).find(u => u.name === '한국은행');
+        const userKey = toSafeId(currentUser.id || currentUser.email!);
+        const me = newDb.users[userKey];
         
-        const myTaxIdx = (me?.pendingTaxes || []).findIndex(t => t.id === tax.id);
-        if(myTaxIdx !== -1 && me?.pendingTaxes) {
-            me.pendingTaxes[myTaxIdx].status = 'paid';
-        }
+        if (bank) bank.balanceKRW += tax.amount;
+        me.balanceKRW -= tax.amount;
+        
+        const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
+        if(myTaxIdx !== -1 && me.pendingTaxes) me.pendingTaxes[myTaxIdx].status = 'paid';
+        const date = new Date().toISOString();
+        me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: `${tax.type} 납부`, date }];
+        if (bank) bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} ${tax.type} 납부`, date }];
         
         await saveDb(newDb);
         setAlertMessage("세금 납부가 완료되었습니다.");
@@ -488,24 +548,43 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const dismissTax = async (taxId: string) => {
         if(!currentUser) return;
-        const safeId = toSafeId(currentUser.email!);
+        const userKey = toSafeId(currentUser.id || currentUser.email!);
         const currentTaxes = currentUser.pendingTaxes || [];
         const newTaxes = currentTaxes.filter(t => t.id !== taxId);
-        
-        await update(ref(database, `users/${safeId}`), { pendingTaxes: newTaxes });
+        await update(ref(database, `users/${userKey}`), { pendingTaxes: newTaxes });
         await refreshData();
     };
 
-    const openChat = (chatId: string) => {
-        window.dispatchEvent(new CustomEvent('open-chat', { detail: { chatId } }));
-    };
-
-    const submitApplication = async (app: Application) => {
-        setDb(prev => ({
-            ...prev,
-            pendingApplications: { ...prev.pendingApplications, [app.id]: app }
-        }));
-        await update(ref(database, `pendingApplications/${app.id}`), sanitize(app));
+    const changeUserEmail = async (newEmail: string) => {
+        if (!currentUser || !currentUser.email) return;
+        setSimulatedLoading(true);
+        try {
+            await updateUserEmail(newEmail);
+            
+            const oldKey = toSafeId(currentUser.email);
+            const newKey = toSafeId(newEmail);
+            
+            if (oldKey !== newKey) {
+                const oldDataSnap = await get(ref(database, `users/${oldKey}`));
+                if (oldDataSnap.exists()) {
+                    const userData = oldDataSnap.val();
+                    userData.email = newEmail; 
+                    
+                    await set(ref(database, `users/${newKey}`), userData);
+                    await remove(ref(database, `users/${oldKey}`));
+                    
+                    setCurrentUser({ ...currentUser, email: newEmail });
+                    localStorage.setItem('sh_user_id', currentUser.id || newEmail); 
+                }
+            }
+            
+            setAlertMessage("이메일 변경 인증 메일을 보냈습니다. 인증 후 변경이 완료됩니다.");
+        } catch (e: any) {
+            console.error(e);
+            setAlertMessage("이메일 변경 실패: " + e.message);
+        } finally {
+            setSimulatedLoading(false);
+        }
     };
 
     return (
@@ -517,9 +596,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, 
             isElementPicking, setElementPicking,
             requestNotificationPermission, createChat, sendMessage, clearPaidTax: async () => {}, cachedMarts, setCachedMarts, wait,
-            requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead: async () => {}, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
+            requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
             requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } },
-            payTax, dismissTax, openChat, submitApplication
+            changeUserEmail,
+            payTax, dismissTax, setupPin, openChat, findUserKeyByName,
+            activeTab, setActiveTab, highQualityGraphics, setHighQualityGraphics
         }}>
             {children}
             {simulatedLoading && (

@@ -1,8 +1,7 @@
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { useGame } from '../../../../context/GameContext';
-import { Card } from '../../../Shared';
-import { User } from '../../../../types';
+import { Card, Spinner } from '../../../Shared';
 
 // Simple Stats Chart
 const SimpleBarChart: React.FC<{ data: number[] }> = ({ data }) => {
@@ -21,37 +20,46 @@ const SimpleBarChart: React.FC<{ data: number[] }> = ({ data }) => {
 };
 
 export const WealthStatsTab: React.FC = () => {
-    const { db } = useGame();
-    const citizens = (Object.values(db.users) as User[]).filter(u => u.type === 'citizen');
+    const { serverAction } = useGame();
+    const [statsData, setStatsData] = useState<number[]>([0,0,0,0,0]);
+    const [totalCount, setTotalCount] = useState(0);
+    const [isLoading, setIsLoading] = useState(true);
+    
+    // Optimized: Fetch only statistics numbers from server instead of all user data
+    useEffect(() => {
+        const fetchStats = async () => {
+            try {
+                const res = await serverAction('fetch_wealth_stats', {});
+                if (res && res.buckets) {
+                    setStatsData(res.buckets);
+                    setTotalCount(res.totalCount || 0);
+                }
+            } catch (e) {
+                console.error("Failed to fetch stats", e);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        fetchStats();
+    }, []);
 
-    const wealthDistribution = useMemo(() => {
-        const assets = citizens.map(c => c.balanceKRW + (c.balanceUSD * 1350) + ((db.realEstate.grid||[]).filter(p=>p.owner===c.name).reduce((s,p)=>s+p.price,0)));
-        assets.sort((a,b) => a-b);
-        const buckets = [0,0,0,0,0];
-        if (assets.length === 0) return buckets;
-        const maxVal = Math.max(...assets) || 1;
-        assets.forEach(val => {
-            const idx = Math.min(4, Math.floor((val / (maxVal * 1.01)) * 5));
-            buckets[idx]++;
-        });
-        return buckets;
-    }, [citizens, db.realEstate]);
+    if (isLoading) return <Spinner />;
 
     return (
         <Card className="border-l-4 border-green-500">
             <h4 className="text-xl font-bold mb-4 text-green-700">📊 국민 재산 실태 (통계)</h4>
             <div className="p-4 bg-white dark:bg-gray-800 rounded-lg">
                 <p className="text-sm text-gray-500 mb-4 font-bold">전체 시민 자산 분포 (5구간)</p>
-                <SimpleBarChart data={wealthDistribution} />
+                <SimpleBarChart data={statsData} />
                 <div className="flex justify-between text-xs text-gray-400 mt-2">
                     <span>저소득층</span>
                     <span>고소득층</span>
                 </div>
                 <div className="mt-4 p-3 bg-gray-100 dark:bg-gray-900 rounded text-sm">
-                    <p>총 시민 수: {citizens.length}명</p>
+                    <p>총 시민 수: {totalCount}명</p>
                     <p className="mt-2 text-xs text-gray-500">
                         이 데이터는 금융법 제정을 위한 익명 통계 자료입니다.<br/>
-                        개별 시민의 자산 정보는 조회할 수 없습니다.
+                        데이터는 서버에서 안전하게 집계되어 전송되었습니다.
                     </p>
                 </div>
             </div>

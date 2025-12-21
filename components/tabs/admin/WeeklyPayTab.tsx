@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
@@ -34,7 +33,7 @@ export const WeeklyPayTab: React.FC = () => {
         if (selectedUsers.size === 0) return showModal('지급할 시민을 선택하세요.');
 
         const totalPayment = amount * selectedUsers.size;
-        const bank = db.users['한국은행'];
+        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
 
         if ((bank?.balanceKRW || 0) < totalPayment) return showModal('은행 잔고가 부족합니다.');
 

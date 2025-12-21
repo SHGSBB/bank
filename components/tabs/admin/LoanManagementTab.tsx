@@ -30,9 +30,18 @@ export const LoanManagementTab: React.FC = () => {
         
         await wait('heavy');
         const newDb = { ...db };
-        const user = newDb.users[toSafeId(app.applicantName)];
         
-        if (!user) return showModal("사용자를 찾을 수 없습니다.");
+        // Find applicant
+        const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === app.applicantName);
+        if (!userEntry) return showModal("사용자를 찾을 수 없습니다.");
+        const [userKey, user] = userEntry;
+
+        // Find Bank - Robust Lookup
+        const bankUser = (Object.values(newDb.users) as User[]).find(u => 
+            u.name === '한국은행' || u.id === 'bok' || u.govtRole === '한국은행장'
+        );
+        
+        if (!bankUser) return showModal("한국은행 계정을 찾을 수 없습니다. (관리자에게 문의)");
 
         const newLoan: Loan = {
             id: app.loanId || app.id,
@@ -58,7 +67,9 @@ export const LoanManagementTab: React.FC = () => {
         (user.loans as Record<string, Loan>)[newLoan.id] = newLoan;
 
         if (newDb.pendingApplications) delete newDb.pendingApplications[app.id];
-        newDb.users['한국은행'].balanceKRW -= app.amount;
+        
+        // Deduct from Bank
+        bankUser.balanceKRW -= app.amount;
 
         await saveDb(newDb);
         notify(app.applicantName, `대출 신청(₩${app.amount.toLocaleString()})이 승인되었습니다.`, true);

@@ -1,16 +1,26 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { LoanManagementTab } from './LoanManagementTab';
 import { SavingsManagementTab } from './SavingsManagementTab';
 import { useGame } from '../../../context/GameContext';
 import { Card } from '../../Shared';
 
 export const AdminRequestTab: React.FC = () => {
-    const { currentUser } = useGame();
+    const { currentUser, refreshData } = useGame();
     const [subTab, setSubTab] = useState('대출관리');
     
-    // 한국은행장 직책 또는 관리자 계정만 접근 가능
-    const hasBankAuthority = currentUser?.type === 'admin' || currentUser?.govtRole === '한국은행장' || currentUser?.type === 'root';
+    // Force refresh to ensure pending applications are up to date
+    useEffect(() => {
+        refreshData();
+    }, []);
+
+    // 한국은행장 직책, 관리자 계정, 또는 이름이 '한국은행'인 경우 접근 가능
+    const hasBankAuthority = 
+        currentUser?.type === 'admin' || 
+        currentUser?.govtRole === '한국은행장' || 
+        currentUser?.name === '한국은행' || 
+        currentUser?.id === 'bok' ||
+        currentUser?.type === 'root';
 
     if (!hasBankAuthority) {
         return <Card className="p-10 text-center text-gray-400 font-bold border-none bg-gray-50">금융 관리 권한이 없습니다.</Card>;

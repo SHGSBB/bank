@@ -5,24 +5,22 @@ import { Button, Input, FileInput, formatName, Modal, Card, LineIcon } from '../
 import { uploadImage, toSafeId } from '../../../services/firebase';
 
 export const ProfileInfoTab: React.FC = () => {
-    const { currentUser, updateUser, showModal, applyBankruptcy, db } = useGame();
-    
-    // Sync local state with currentUser whenever it updates
-    const [nickname, setNickname] = useState('');
-    const [customJob, setCustomJob] = useState('');
-    const [idPhoto, setIdPhoto] = useState<string | null>(null);
-
-    useEffect(() => {
-        if (currentUser) {
-            setNickname(currentUser.nickname || '');
-            setCustomJob(currentUser.customJob || '');
-            setIdPhoto(currentUser.profilePic || null);
-        }
-    }, [currentUser?.nickname, currentUser?.customJob, currentUser?.profilePic]);
-
+    const { currentUser, updateUser, showModal, applyBankruptcy, db, showPinModal } = useGame();
+    const [nickname, setNickname] = useState(currentUser?.nickname || '');
+    const [customJob, setCustomJob] = useState(currentUser?.customJob || '');
     const [showIdCard, setShowIdCard] = useState(false);
+    
+    // Use local state for immediate feedback, initialized by currentUser
+    const [idPhoto, setIdPhoto] = useState<string | null>(currentUser?.profilePic || null);
     const [genderSelect, setGenderSelect] = useState<'male' | 'female'>('male');
     const [isReissuing, setIsReissuing] = useState(false);
+
+    // Keep local photo in sync if user changes from outside
+    useEffect(() => {
+        if (currentUser?.profilePic !== undefined) {
+            setIdPhoto(currentUser?.profilePic || null);
+        }
+    }, [currentUser?.profilePic]);
 
     const handleUpdateProfile = async () => {
         if (!currentUser?.email) return;
@@ -47,7 +45,6 @@ export const ProfileInfoTab: React.FC = () => {
             const safeEmail = toSafeId(currentUser.email);
             const path = `profiles/${safeEmail}_${Date.now()}.png`;
             const url = await uploadImage(path, base64);
-            
             await updateUser(currentUser.email, { profilePic: url });
             setIdPhoto(url);
             showModal('프로필 사진이 업데이트되었습니다.');
@@ -84,6 +81,13 @@ export const ProfileInfoTab: React.FC = () => {
     const handlePresentID = () => {
         setShowIdCard(false);
         window.dispatchEvent(new CustomEvent('open-chat'));
+    };
+
+    const handleShowID = async () => {
+        const pin = await showPinModal("신분증 확인 인증", currentUser?.pin!, (currentUser?.pinLength as any) || 4);
+        if (pin === currentUser?.pin) {
+            setShowIdCard(true);
+        }
     };
 
     const residentNumber = currentUser?.idCard?.residentNumber || (currentUser?.birthDate ? `${currentUser.birthDate}-*******` : '******-*******');
@@ -136,7 +140,7 @@ export const ProfileInfoTab: React.FC = () => {
                 </div>
                 <Button onClick={handleUpdateProfile} className="w-full">저장</Button>
                 <div className="grid grid-cols-2 gap-4">
-                    <Button onClick={() => setShowIdCard(true)} variant="secondary" className="text-sm">신분증 보기</Button>
+                    <Button onClick={handleShowID} variant="secondary" className="text-sm">신분증 보기</Button>
                     <Button onClick={applyBankruptcy} variant="danger" className="text-sm">파산 신청</Button>
                 </div>
             </div>
@@ -176,7 +180,7 @@ export const ProfileInfoTab: React.FC = () => {
                                 }
                             }} />
                         </label>
-                        <Button onClick={handlePresentID} className="flex-1">제시하기</Button>
+                        <Button onClick={handlePresentID} className="flex-1">제시하기 (채팅)</Button>
                     </div>
                     {needsReissue && (
                         <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-xl border border-yellow-200">

@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
@@ -13,14 +12,10 @@ export const BudgetDistributionTab: React.FC = () => {
         const valAmount = parseInt(amount);
         if (isNaN(valAmount) || valAmount <= 0) return showModal("올바른 금액을 입력하세요.");
 
-        const bank = db.users['한국은행'];
+        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
+        if (!bank) return showModal("한국은행 계정을 찾을 수 없습니다.");
         if (bank.balanceKRW < valAmount) return showModal("은행 잔고가 부족합니다.");
 
-        // Distribute to all members of the branch? Or just hold in a 'Department Account'?
-        // The spec implies departments have budgets. In this simplified model, we will distribute to
-        // the 'Head' of the department if exists, OR split among all members.
-        // Let's implement split among all members for now as 'Department Wallet' isn't a separate entity type yet.
-        
         const branchMembers = (Object.values(db.users) as User[]).filter(u => u.govtBranch?.includes(targetBranch));
         
         if (branchMembers.length === 0) return showModal("해당 부처에 소속된 공무원이 없습니다.");
@@ -29,18 +24,23 @@ export const BudgetDistributionTab: React.FC = () => {
 
         const perPerson = Math.floor(valAmount / branchMembers.length);
         const newDb = { ...db };
-        const newBank = newDb.users['한국은행'];
+        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === '한국은행');
+        if (!newBankEntry) return;
+        const newBank = newBankEntry[1];
         
         newBank.balanceKRW -= (perPerson * branchMembers.length);
         const date = new Date().toISOString();
 
         branchMembers.forEach(m => {
-            const user = newDb.users[m.name];
-            user.balanceKRW += perPerson;
-            user.transactions = [...(user.transactions || []), {
-                id: Date.now() + Math.random(), type: 'income', amount: perPerson, currency: 'KRW', description: '부처 예산 배분', date
-            }];
-            notify(m.name, `[예산] ₩${perPerson.toLocaleString()}이 지급되었습니다.`, true);
+            const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === m.name);
+            if (userEntry) {
+                const user = userEntry[1];
+                user.balanceKRW += perPerson;
+                user.transactions = [...(user.transactions || []), {
+                    id: Date.now() + Math.random(), type: 'income', amount: perPerson, currency: 'KRW', description: '부처 예산 배분', date
+                }];
+                notify(m.name, `[예산] ₩${perPerson.toLocaleString()}이 지급되었습니다.`, true);
+            }
         });
 
         newBank.transactions = [...(newBank.transactions || []), {

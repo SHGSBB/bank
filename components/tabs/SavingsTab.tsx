@@ -2,18 +2,20 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput } from '../Shared';
-import { TermDeposit, Application } from '../../types';
+import { TermDeposit } from '../../types';
 
 export const SavingsTab: React.FC = () => {
-    const { currentUser, db, showModal, createChat, sendMessage, openChat, submitApplication } = useGame();
+    const { currentUser, db, showModal, createChat, sendMessage } = useGame();
     const [activeType, setActiveType] = useState<'regular' | 'term' | 'installment'>('regular');
     const [amount, setAmount] = useState('');
     const [duration, setDuration] = useState('');
 
     const interestSettings = db.settings.savingsInterest;
     
+    // Safety check for old DB structure
     const getRateInfo = (type: 'regular' | 'term' | 'installment') => {
         if (!interestSettings) return { rate: 0, periodWeeks: 0 };
+        // Handle migration case where interestSettings might be the old format
         // @ts-ignore
         if (typeof interestSettings.rate === 'number') {
              // @ts-ignore
@@ -23,7 +25,7 @@ export const SavingsTab: React.FC = () => {
     };
 
     const currentRate = getRateInfo(activeType);
-    const maxWeeks = currentRate.periodWeeks || 52; 
+    const maxWeeks = currentRate.periodWeeks || 52; // Default max 52 weeks if not set
 
     const savingsTypes = {
         regular: { label: '보통예금', desc: '자유롭게 입출금이 가능한 기본 통장입니다.' },
@@ -53,27 +55,20 @@ export const SavingsTab: React.FC = () => {
         const chatId = await createChat(['한국은행'], 'private');
         
         const durationText = activeType === 'regular' ? '기간 없음' : `${valDuration}주`;
-        const app: Application = {
-            id: `sav_req_${Date.now()}`,
-            type: 'savings',
-            applicantName: currentUser!.name,
-            amount: valAmount,
-            requestedDate: new Date().toISOString(),
-            status: 'pending',
-            savingsType: activeType,
-            durationWeeks: valDuration
-        };
 
         await sendMessage(chatId, `[${savingsTypes[activeType].label}] 신청\n금액: ₩${valAmount.toLocaleString()}\n기간: ${durationText}`, {
             type: 'application',
             value: `${savingsTypes[activeType].label} 신청`,
-            data: { ...app, appType: 'savings' }
+            data: {
+                appType: 'savings',
+                savingsType: activeType,
+                amount: valAmount,
+                durationWeeks: valDuration,
+                id: `sav_req_${Date.now()}` 
+            }
         });
 
-        await submitApplication(app);
-
-        openChat(chatId);
-        showModal("한국은행에 가입 신청을 보냈습니다. 채팅방으로 이동합니다.");
+        showModal("한국은행에 가입 신청 메시지를 보냈습니다. 채팅방을 확인하세요.");
         setAmount('');
         setDuration('');
     };
@@ -116,7 +111,7 @@ export const SavingsTab: React.FC = () => {
                         <div>
                             <label className="text-sm font-bold block mb-1">가입 기간 (주)</label>
                             <Input 
-                                type="number" 
+                                type="number"
                                 value={duration}
                                 onChange={e => setDuration(e.target.value)}
                                 placeholder={`최대 ${maxWeeks}주`}

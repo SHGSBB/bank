@@ -16,6 +16,7 @@ export const RealEstateTab: React.FC = () => {
     // Offer State
     const [offerPrice, setOfferPrice] = useState('');
     const [isOfferModalOpen, setIsOfferModalOpen] = useState(false);
+    const [offerType, setOfferType] = useState<'buy' | 'lease'>('buy');
 
     // Rent Handling
     const handlePayRent = async () => {
@@ -74,18 +75,32 @@ export const RealEstateTab: React.FC = () => {
         const owner = selectedCell.owner;
         const chatId = await createChat([owner], 'private');
         
-        await sendMessage(chatId, `[부동산 매수 제안]\n대상: 집 #${selectedCell.id}\n제안가: ₩${price.toLocaleString()}`, {
-            type: 'proposal',
-            value: '매수 제안',
-            data: {
-                type: 'real_estate_offer',
-                propertyId: selectedCell.id,
-                price: price,
-                buyer: currentUser!.name
-            }
-        });
+        if (offerType === 'buy') {
+            await sendMessage(chatId, `[부동산 매수 제안]\n대상: 집 #${selectedCell.id}\n제안가: ₩${price.toLocaleString()}`, {
+                type: 'proposal',
+                value: '매수 제안',
+                data: {
+                    type: 'real_estate_offer',
+                    propertyId: selectedCell.id,
+                    price: price,
+                    buyer: currentUser!.name
+                }
+            });
+        } else {
+            await sendMessage(chatId, `[임대 문의]\n대상: 집 #${selectedCell.id}\n제안 주세: ₩${price.toLocaleString()}/주\n\n계약이 성사되면 매주 자동으로 이체됩니다.`, {
+                type: 'proposal',
+                value: '임대 계약 제안',
+                data: {
+                    type: 'rent_contract',
+                    propertyId: selectedCell.id,
+                    weeklyRent: price,
+                    tenantName: currentUser!.name,
+                    ownerName: owner
+                }
+            });
+        }
 
-        showModal(`${owner}님에게 매수 제안 메시지를 보냈습니다.`);
+        showModal(`${owner}님에게 ${offerType === 'buy' ? '매수' : '임대'} 제안 메시지를 보냈습니다.`);
         setIsOfferModalOpen(false);
         setOfferPrice('');
     };
@@ -101,14 +116,11 @@ export const RealEstateTab: React.FC = () => {
                 style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
             >
                 {indices.map((id) => {
-                    // Match Admin logic for cell generation fallback
                     const cell = grid.find(c => c.id === id) || { id, owner: null, tenant: null, price: 10000000 } as RealEstateCell;
-                    
                     const isMall1 = id === 1;
                     const isMall2 = id === 7;
                     const isMall3 = id === 13;
 
-                    // Admin layout hides cell 7
                     if (isMall2) return null;
 
                     const isRedZone = isMall1 || isMall3;
@@ -189,9 +201,14 @@ export const RealEstateTab: React.FC = () => {
                                     구매하기 (₩{selectedCell.price.toLocaleString()})
                                 </Button>
                             ) : (
-                                <Button onClick={() => setIsOfferModalOpen(true)} className="w-full bg-blue-600 hover:bg-blue-500">
-                                    매수 제안 / 임대 문의
-                                </Button>
+                                <div className="flex gap-2">
+                                    <Button onClick={() => { setOfferType('buy'); setIsOfferModalOpen(true); }} className="flex-1 bg-blue-600 hover:bg-blue-500">
+                                        매수 제안
+                                    </Button>
+                                    <Button onClick={() => { setOfferType('lease'); setIsOfferModalOpen(true); }} className="flex-1 bg-green-600 hover:bg-green-500">
+                                        임대 문의
+                                    </Button>
+                                </div>
                             )}
                         </div>
                     </div>
@@ -202,15 +219,16 @@ export const RealEstateTab: React.FC = () => {
                 )}
             </Card>
 
-            <Modal isOpen={isOfferModalOpen} onClose={() => setIsOfferModalOpen(false)} title="거래 제안">
+            <Modal isOpen={isOfferModalOpen} onClose={() => setIsOfferModalOpen(false)} title={offerType === 'buy' ? "매수 제안" : "임대 문의"}>
                 <div className="space-y-4">
-                    <p className="text-sm">소유주 <b>{selectedCell?.owner}</b>님에게 매수 제안을 보냅니다.</p>
+                    <p className="text-sm">소유주 <b>{selectedCell?.owner}</b>님에게 {offerType === 'buy' ? '매수 제안' : '임대 문의'} 메시지를 보냅니다.</p>
                     <Input 
                         type="number" 
                         value={offerPrice} 
                         onChange={e => setOfferPrice(e.target.value)} 
-                        placeholder="제안 가격 (₩)" 
+                        placeholder={offerType === 'buy' ? "제안 가격 (₩)" : "제안 주세 (1주당 ₩)"} 
                     />
+                    {offerType === 'lease' && <p className="text-xs text-gray-500">* 계약이 체결되면 매주 자동으로 이체됩니다.</p>}
                     <Button onClick={handleMakeOffer} className="w-full">제안 메시지 보내기</Button>
                 </div>
             </Modal>

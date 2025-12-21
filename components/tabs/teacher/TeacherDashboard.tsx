@@ -1,8 +1,10 @@
+
 import React, { useState, useRef } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input, Modal } from '../../Shared';
 import { MintingTab } from '../admin/MintingTab';
 import { User, Auction } from '../../../types';
+import { chatService } from '../../../services/firebase';
 
 export const TeacherDashboard: React.FC = () => {
     const { db, saveDb, notify, showModal, showConfirm, currentUser } = useGame();
@@ -12,7 +14,6 @@ export const TeacherDashboard: React.FC = () => {
     const [aucItemName, setAucItemName] = useState('');
     const [aucDesc, setAucDesc] = useState('');
     const [aucStartPrice, setAucStartPrice] = useState('');
-    const [aucCurrentPrice, setAucCurrentPrice] = useState('');
     const [aucImage, setAucImage] = useState<string | null>(null);
 
     // God Mode State
@@ -20,7 +21,6 @@ export const TeacherDashboard: React.FC = () => {
     const [bonusAmount, setBonusAmount] = useState('');
 
     const auction = db.auction;
-    const bids = auction?.bids || [];
     const deferredAuctions = db.deferredAuctions || [];
 
     // --- Auction Functions ---
@@ -29,14 +29,18 @@ export const TeacherDashboard: React.FC = () => {
         const price = parseInt(aucStartPrice);
         const now = Date.now();
         
+        const auctionId = now.toString();
+        const chatId = 'auction_room'; // Fixed global auction room
+
+        // 1. Create Auction State
         const newDb = { ...db };
         newDb.auction = {
-            id: now.toString(),
+            id: auctionId,
             isActive: true,
             status: 'active',
             startTime: new Date(now).toISOString(),
-            endTime: now + 60 * 1000, // Explicitly 60 seconds from now
-            timerDuration: 10, 
+            endTime: now + 180 * 1000, // 3 minutes default
+            timerDuration: 180, 
             item: { name: aucItemName, description: aucDesc, image: aucImage },
             startingPrice: price,
             currentPrice: price,
@@ -44,9 +48,26 @@ export const TeacherDashboard: React.FC = () => {
             teams: {},
             isPaused: false
         };
+        
         await saveDb(newDb);
-        notify('ALL', `[긴급] ${aucItemName} 경매가 시작되었습니다!`, true);
-        setAucCurrentPrice(price.toString());
+
+        // 2. Setup/Reset Auction Chat Room
+        // We use a fixed ID for simplicity, or we could generate one. 
+        // Using fixed ID ensures everyone jumps to the same place easily.
+        await chatService.createChat(['ALL'], 'auction', `[경매] ${aucItemName}`);
+        
+        // Post welcome message
+        await chatService.sendMessage(chatId, {
+            id: `sys_${now}`,
+            sender: 'system',
+            text: `📢 경매가 시작되었습니다!\n품목: ${aucItemName}\n시작가: ₩${price.toLocaleString()}\n\n입찰은 하단 입력창에 숫자를 입력하세요.`,
+            timestamp: now,
+            type: 'notice'
+        });
+
+        notify('ALL', `[긴급] ${aucItemName} 경매가 시작되었습니다! 채팅방으로 이동합니다.`, true, 'open_chat', { chatId });
+        
+        // Reset form
         setAucItemName(''); setAucDesc(''); setAucStartPrice(''); setAucImage(null);
     };
 
@@ -58,123 +79,6 @@ export const TeacherDashboard: React.FC = () => {
              };
              reader.readAsDataURL(e.target.files[0]);
         }
-    };
-
-    const updatePrice = async () => {
-        const price = parseInt(aucCurrentPrice);
-        if (isNaN(price)) return;
-        const newDb = { ...db };
-        if (newDb.auction) {
-            newDb.auction.currentPrice = price;
-            await saveDb(newDb);
-        }
-    };
-
-    const endAuction = async (winner?: string, bidAmount?: number) => {
-        const newDb = { ...db };
-        if (!newDb.auction) return;
-        
-        newDb.auction.isActive = false;
-        newDb.auction.status = 'ended';
-        newDb.auction.isPaused = false;
-        
-        if (winner && bidAmount) {
-            newDb.auction.winner = winner;
-            newDb.auction.winningBid = bidAmount;
-            
-            // Handle Payment (Team or Single)
-            const bid = newDb.auction.bids.find(b => b.bidder === winner && b.amount === bidAmount);
-            if (bid && bid.contributors) {
-                // Team Payment
-                for (const c of bid.contributors) {
-                    const user = newDb.users[c.name];
-                    if (user) {
-                        user.balanceKRW -= c.amount;
-                        user.transactions = [...(user.transactions || []), {
-                            id: Date.now(), type: 'auction', amount: -c.amount, currency: 'KRW', description: `경매 낙찰(팀): ${newDb.auction.item.name}`, date: new Date().toISOString()
-                        }];
-                        notify(c.name, `경매 낙찰! 분담금 ₩${c.amount.toLocaleString()} 차감.`, true);
-                    }
-                }
-            } else {
-                // Single Payment fallback
-                const user = newDb.users[winner];
-                if (user && user.balanceKRW >= bidAmount) {
-                    user.balanceKRW -= bidAmount;
-                    user.transactions = [...(user.transactions || []), {
-                        id: Date.now(), type: 'auction', amount: -bidAmount, currency: 'KRW', description: `경매 낙찰: ${newDb.auction.item.name}`, date: new Date().toISOString()
-                    }];
-                    notify(winner, `경매 낙찰! ₩${bidAmount.toLocaleString()} 차감.`, true);
-                }
-            }
-        } else {
-             notify('ALL', `경매가 유찰되었습니다.`, true);
-        }
-
-        await saveDb(newDb);
-    };
-
-    const deferAuction = async () => {
-         const newDb = { ...db };
-         if (newDb.auction) {
-             const currentAuc = { ...newDb.auction, isActive: false, status: 'deferred' as const, isPaused: false };
-             newDb.auction = {
-                isActive: false, item: { name: '', description: '', image: null },
-                startingPrice: 0, currentPrice: 0, startTime: '', status: 'ended', bids: []
-            };
-             // Add to deferred list
-             if (!newDb.deferredAuctions) newDb.deferredAuctions = [];
-             newDb.deferredAuctions.push(currentAuc);
-             
-             await saveDb(newDb);
-             notify('ALL', `경매가 연기되었습니다.`, true);
-         }
-    };
-
-    const pauseAuction = async () => {
-        const newDb = { ...db };
-        if (newDb.auction && newDb.auction.status === 'active') {
-             newDb.auction.isPaused = true;
-             await saveDb(newDb);
-             notify('ALL', `경매가 일시 중지되었습니다.`, true);
-        }
-    };
-
-    const resumeAuction = async () => {
-        const newDb = { ...db };
-        if (newDb.auction && newDb.auction.isPaused) {
-             newDb.auction.isPaused = false;
-             // Add 30 seconds to compensate pause
-             newDb.auction.endTime = Date.now() + 30000;
-             await saveDb(newDb);
-             notify('ALL', `경매가 재개되었습니다.`, true);
-        }
-    };
-
-    const resumeDeferredAuction = async (targetAuction: Auction) => {
-        if (db.auction && db.auction.isActive) return showModal("현재 진행 중인 경매가 있습니다.");
-        
-        const newDb = { ...db };
-        newDb.auction = {
-            ...targetAuction,
-            isActive: true,
-            status: 'active',
-            startTime: new Date().toISOString(),
-            endTime: Date.now() + 60 * 1000,
-            isPaused: false
-        };
-        // Remove from list
-        newDb.deferredAuctions = newDb.deferredAuctions?.filter(a => a.id !== targetAuction.id) || [];
-        
-        await saveDb(newDb);
-        notify('ALL', `연기된 경매(${targetAuction.item.name})가 재개되었습니다!`, true);
-    };
-    
-    const deleteDeferredAuction = async (id: string) => {
-        if (!await showConfirm("연기된 경매 항목을 삭제하시겠습니까?")) return;
-        const newDb = { ...db };
-        newDb.deferredAuctions = newDb.deferredAuctions?.filter(a => a.id !== id) || [];
-        await saveDb(newDb);
     };
 
     // --- God Mode Functions ---
@@ -230,63 +134,18 @@ export const TeacherDashboard: React.FC = () => {
                 <Card>
                     <h3 className="text-2xl font-bold mb-4">경매 시스템</h3>
                     
-                    {auction?.status === 'active' || (auction?.isPaused && auction?.isActive) ? (
-                        <div className="space-y-4">
-                            <div className={`p-4 border rounded ${auction.isPaused ? 'bg-gray-200 border-gray-400' : 'bg-green-50 border-green-200'}`}>
-                                <p className="font-bold text-lg">{auction.item.name} {auction.isPaused && "(일시 중지됨)"}</p>
-                                <p className="text-sm text-gray-500 mb-2">관리자 제어는 우하단 경매 위젯을 사용하세요.</p>
-                                
-                                <div className="flex gap-2 mt-4">
-                                    {auction.isPaused ? (
-                                        <Button onClick={resumeAuction} className="bg-blue-600">재개</Button>
-                                    ) : (
-                                        <Button onClick={pauseAuction} className="bg-yellow-500">일시 중지</Button>
-                                    )}
-                                    <Button onClick={() => endAuction()} variant="danger">강제 종료 (유찰)</Button>
-                                    <Button onClick={deferAuction} variant="secondary">연기 (보관)</Button>
-                                </div>
-                            </div>
-
-                            <h4 className="font-bold">입찰 대상자 선택 (클릭하여 낙찰)</h4>
-                            <div className="max-h-60 overflow-y-auto space-y-2 border p-2 rounded bg-gray-50 dark:bg-gray-800">
-                                {[...bids].reverse().map((bid, i) => (
-                                    <div key={i} className="flex justify-between items-center p-3 hover:bg-green-100 dark:hover:bg-green-900 cursor-pointer border-b dark:border-gray-700 bg-white dark:bg-gray-700 rounded transition-colors"
-                                         onClick={async () => {
-                                             if(await showConfirm(`${bid.bidder}님에게 ₩${bid.amount.toLocaleString()}에 낙찰하시겠습니까?`)) {
-                                                 endAuction(bid.bidder, bid.amount);
-                                             }
-                                         }}>
-                                        <span className="font-bold">{bid.bidder}</span>
-                                        <span className="font-bold text-blue-600">₩{bid.amount.toLocaleString()}</span>
-                                        <span className="text-xs text-gray-400">{new Date(bid.timestamp).toLocaleTimeString()}</span>
-                                    </div>
-                                ))}
-                                {bids.length === 0 && <p className="text-gray-500 text-center text-sm py-4">입찰 내역이 없습니다.</p>}
-                            </div>
+                    {auction?.isActive ? (
+                        <div className="p-6 bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-xl text-center">
+                            <p className="text-lg font-bold text-green-700 dark:text-green-400 animate-pulse">현재 경매 진행 중</p>
+                            <p className="text-2xl font-black mt-2">{auction.item.name}</p>
+                            <p className="text-gray-500 mt-1">현재가: ₩{auction.currentPrice.toLocaleString()}</p>
+                            <p className="text-sm mt-4 text-gray-600 dark:text-gray-300">
+                                관리 기능은 <b>채팅방(경매 방)</b> 내 상단 패널에서 제공됩니다.<br/>
+                                (일시정지, 유찰, 강제 낙찰, 시간 추가 등)
+                            </p>
                         </div>
                     ) : (
                         <div className="space-y-6">
-                            {/* Deferred Auctions Section */}
-                            {deferredAuctions.length > 0 && (
-                                <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
-                                    <h4 className="font-bold text-orange-700 mb-2">연기된 경매 항목 ({deferredAuctions.length})</h4>
-                                    <div className="space-y-2">
-                                        {deferredAuctions.map((defAuc, idx) => (
-                                            <div key={defAuc.id || idx} className="flex justify-between items-center p-2 bg-white rounded border border-orange-100">
-                                                <div>
-                                                    <span className="font-bold">{defAuc.item.name}</span>
-                                                    <span className="text-xs text-gray-500 ml-2">마지막 가격: ₩{defAuc.currentPrice.toLocaleString()}</span>
-                                                </div>
-                                                <div className="flex gap-2">
-                                                    <Button onClick={() => resumeDeferredAuction(defAuc)} className="text-xs py-1 px-3">재개</Button>
-                                                    <Button onClick={() => deleteDeferredAuction(defAuc.id!)} variant="danger" className="text-xs py-1 px-3">삭제</Button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
                             <div>
                                 <h4 className="font-bold mb-2">새 경매 시작</h4>
                                 <div className="space-y-3">
@@ -297,7 +156,9 @@ export const TeacherDashboard: React.FC = () => {
                                         <span className="text-sm">이미지:</span>
                                         <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm" />
                                     </div>
-                                    <Button onClick={startAuction} className="w-full">경매 시작</Button>
+                                    <Button onClick={startAuction} className="w-full bg-indigo-600 hover:bg-indigo-500">
+                                        경매 시작 & 채팅방 개설
+                                    </Button>
                                 </div>
                             </div>
                         </div>

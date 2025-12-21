@@ -8,6 +8,12 @@ import { sendEmailVerification } from 'firebase/auth';
 
 type ViewMode = 'login' | 'signup' | 'email_change' | 'find_pw' | 'notif_setup';
 
+const GOVT_STRUCTURE = {
+    '행정부': ['대통령', '한국은행장', '법무부장관', '검사', '검찰총장'],
+    '입법부': ['국회의원', '국회의장'],
+    '사법부': ['판사', '대법원장']
+};
+
 export const AuthView: React.FC = () => {
     const { login, registerUser, showModal, requestPasswordReset, db, requestNotificationPermission, showPinModal } = useGame();
     const [view, setView] = useState<ViewMode>('login');
@@ -124,6 +130,10 @@ export const AuthView: React.FC = () => {
         } else if (step === 2) {
             if (!sName.trim() || !sBirth.trim()) return showModal("이름과 생년월일을 입력하세요.");
             if (sBirth.length !== 6) return showModal("생년월일 6자리를 입력하세요 (YYMMDD).");
+            
+            // Validate Gov Role
+            if (subType === 'govt' && !govtRole) return showModal("공무원 직책을 선택하세요.");
+            
             setStep(3);
         } else if (step === 3) {
             if (!email.includes('@')) return showModal("유효한 이메일을 입력하세요.");
@@ -135,16 +145,26 @@ export const AuthView: React.FC = () => {
                 let finalType: User['type'] = 'citizen';
                 let branches: GovtBranch[] = [];
                 let status: User['approvalStatus'] = 'pending';
+                let isPresident = false;
 
                 if (subType === 'personal') finalType = 'citizen';
                 else if (subType === 'business') finalType = 'mart';
                 else if (subType === 'teacher') finalType = 'teacher';
                 else if (subType === 'govt') {
                     finalType = 'government';
-                    if (['대통령', '법무부장관', '한국은행장', '검사'].includes(govtRole)) branches = ['executive'];
-                    else if (govtRole === '국회의원') branches = ['legislative'];
-                    else if (govtRole === '판사') branches = ['judicial'];
-                    if (govtRole === '한국은행장' || sName.trim() === '한국은행') status = 'approved';
+                    
+                    // Determine Branch based on Role
+                    if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
+                    else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
+                    else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
+
+                    // Specific Role Flags
+                    if (govtRole === '대통령') isPresident = true;
+                    
+                    // Auto-approve Korean Bank Governor or hardcoded name
+                    if (govtRole === '한국은행장' || sName.trim() === '한국은행') {
+                        status = 'approved';
+                    }
                 }
 
                 await registerUser({
@@ -156,6 +176,7 @@ export const AuthView: React.FC = () => {
                     birthDate: sBirth.trim(), 
                     govtBranch: branches, 
                     govtRole,
+                    isPresident,
                     approvalStatus: status,
                     balanceKRW: 0,
                     balanceUSD: 0
@@ -305,9 +326,38 @@ export const AuthView: React.FC = () => {
                                         <Input placeholder="생년월일 (YYMMDD)" value={sBirth} onChange={e => setSBirth(e.target.value)} maxLength={6} className="h-14" />
                                         <div className="grid grid-cols-2 gap-2">
                                             {[{ id: 'personal', label: '개인' }, { id: 'business', label: '사업자' }, { id: 'govt', label: '공무원' }, { id: 'teacher', label: '교사' }].map(t => (
-                                                <button key={t.id} onClick={() => setSubType(t.id as any)} className={`py-3 rounded-xl font-bold border ${subType === t.id ? 'bg-green-600 text-white' : 'bg-white dark:bg-[#2D2D2D]'}`}>{t.label}</button>
+                                                <button 
+                                                    key={t.id} 
+                                                    onClick={() => { setSubType(t.id as any); setGovtRole(''); }} 
+                                                    className={`py-3 rounded-xl font-bold border ${subType === t.id ? 'bg-green-600 text-white' : 'bg-white dark:bg-[#2D2D2D] dark:text-gray-200 dark:border-gray-700'}`}
+                                                >
+                                                    {t.label}
+                                                </button>
                                             ))}
                                         </div>
+                                        
+                                        {/* 공무원 직책 선택 UI */}
+                                        {subType === 'govt' && (
+                                            <div className="mt-2 space-y-3 bg-gray-50 dark:bg-white/5 p-3 rounded-xl border border-gray-100 dark:border-white/10 max-h-60 overflow-y-auto">
+                                                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">공무원 직책 선택</p>
+                                                {Object.entries(GOVT_STRUCTURE).map(([branchName, roles]) => (
+                                                    <div key={branchName} className="space-y-1">
+                                                        <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500">{branchName}</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {roles.map(role => (
+                                                                <button
+                                                                    key={role}
+                                                                    onClick={() => setGovtRole(role)}
+                                                                    className={`px-3 py-1.5 text-xs rounded-lg border transition-all font-medium ${govtRole === role ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white dark:bg-[#3D3D3D] text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-[#4D4D4D]'}`}
+                                                                >
+                                                                    {role}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 {step === 3 && (
@@ -320,19 +370,19 @@ export const AuthView: React.FC = () => {
                                 {step === 4 && (
                                     <div className="text-center py-6 animate-pulse">
                                         <div className="w-20 h-20 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6"><LineIcon icon="mail" className="text-blue-500 w-10 h-10" /></div>
-                                        <p className="font-bold">이메일 인증 대기 중</p>
-                                        <button onClick={handleResendEmail} className="text-xs text-blue-600 underline">인증 메일 재발송</button>
+                                        <p className="font-bold dark:text-white">이메일 인증 대기 중</p>
+                                        <button onClick={handleResendEmail} className="text-xs text-blue-600 underline mt-2">인증 메일 재발송</button>
                                     </div>
                                 )}
                                 {step === 5 && (
                                     <div className="text-center py-6">
                                         <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-6"><LineIcon icon="check" className="text-green-500 w-10 h-10" /></div>
-                                        <p className="text-xl font-bold">가입 처리 완료!</p>
+                                        <p className="text-xl font-bold dark:text-white">가입 처리 완료!</p>
                                     </div>
                                 )}
                                 <div className="flex gap-2">
                                     {step > 1 && step < 4 && <button onClick={() => setStep(step-1)} className="flex-1 h-14 bg-gray-100 dark:bg-white/5 text-gray-500 font-bold rounded-2xl">이전</button>}
-                                    {step < 4 && <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl">{step === 3 ? '가입 신청' : '다음'}</Button>}
+                                    {step < 4 && <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl shadow-lg">{step === 3 ? '가입 신청' : '다음'}</Button>}
                                 </div>
                             </div>
                         )}
