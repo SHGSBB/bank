@@ -6,7 +6,6 @@ import {
     generateId, 
     chatService, 
     assetService, 
-    fetchUser, 
     fetchAllUsers, 
     loginWithEmail, 
     logoutFirebase, 
@@ -66,6 +65,8 @@ interface GameContextType {
     requestPasswordReset: (email: string) => Promise<void>;
     payTax: (tax: PendingTax) => Promise<void>;
     dismissTax: (taxId: string) => Promise<void>;
+    openChat: (chatId: string) => void;
+    submitApplication: (app: Application) => Promise<void>;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -92,11 +93,24 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const refreshData = useCallback(async () => {
         try {
-            const data = await fetchGlobalData();
-            setDb(prev => ({ ...prev, ...data }));
-            if (currentUser) {
-                const updatedMe = (data.users && data.users[toSafeId(currentUser.email!)]) as User;
-                if (updatedMe) setCurrentUser(prev => ({ ...prev, ...updatedMe }));
+            const currentId = currentUser?.email || undefined;
+            const data = await fetchGlobalData(currentId);
+            
+            setDb(prev => ({ 
+                ...prev, 
+                ...data,
+                users: { ...prev.users, ...data.users } 
+            }));
+            
+            if (currentId) {
+                const safeId = toSafeId(currentId);
+                const updatedMe = (data.users && data.users[safeId]) ? data.users[safeId] : null;
+                if (updatedMe) {
+                    setCurrentUser(prev => ({ ...prev!, ...updatedMe }));
+                } else {
+                    const freshUser = await fetchUserByEmail(currentId);
+                    if(freshUser) setCurrentUser(freshUser);
+                }
             }
         } catch(e) { console.error("Global Data Fetch Error:", e); }
     }, [currentUser?.email]);
@@ -136,7 +150,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
         refreshData();
         return () => unsubscribe();
-    }, [refreshData, db.settings.requireSignupApproval]);
+    }, [db.settings.requireSignupApproval]);
 
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
@@ -161,6 +175,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSimulatedLoading(true);
         try {
             const inputId = id.trim();
+            // Use optimized fetch
             let userData = await fetchUserByLoginId(inputId);
             if (!userData && inputId.includes('@')) userData = await fetchUserByEmail(inputId);
             
@@ -187,7 +202,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
-            // Save Login History (Local Storage)
             try {
                 const historyStr = localStorage.getItem('sh_login_history');
                 const history = historyStr ? JSON.parse(historyStr) : [];
@@ -197,18 +211,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     name: userData.name,
                     id: userData.id,
                     profilePic: userData.profilePic,
-                    pin: userData.pin, // Store PIN for quick verification
-                    password: btoa(pass), // Simple encoding for quick login convenience
+                    pin: userData.pin, 
+                    password: btoa(pass), 
                     timestamp: Date.now()
                 };
 
-                // Remove existing entry for this user and add new one to top
                 const filtered = history.filter((h: any) => h.email !== userData.email);
-                const newHistory = [newEntry, ...filtered].slice(0, 4); // Keep max 4
+                const newHistory = [newEntry, ...filtered].slice(0, 4); 
                 localStorage.setItem('sh_login_history', JSON.stringify(newHistory));
-            } catch (e) {
-                console.error("Failed to save login history", e);
-            }
+            } catch (e) { console.error("History Save Error", e); }
 
             setCurrentUser(userData);
             if (remember) localStorage.setItem('sh_user_id', userData.email!);
@@ -226,9 +237,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const logout = async () => {
         setSimulatedLoading(true);
         if (currentUser) {
-            try {
-                await update(ref(database, `users/${toSafeId(currentUser.email!)}`), { isOnline: false });
-            } catch(e) {}
+            try { await update(ref(database, `users/${toSafeId(currentUser.email!)}`), { isOnline: false }); } catch(e) {}
         }
         await logoutFirebase();
         setCurrentUser(null);
@@ -272,7 +281,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (currentUser && currentUser.email === userEmail) {
             setCurrentUser(prev => ({ ...prev!, ...data }));
         }
-        await refreshData();
     };
 
     const saveDb = async (data: DB) => {
@@ -308,10 +316,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         
         const nativeEnabled = Notification.permission === 'granted';
-        
-        if (nativeEnabled) {
-            new Notification("성화은행 알림", { body: message });
-        } else {
+        if (nativeEnabled) new Notification("성화은행 알림", { body: message });
+        else {
             setToasts(prev => [...prev, newNotif]);
             setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
         }
@@ -325,8 +331,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             Object.keys(users).forEach(ukey => { updates[`users/${ukey}/notifications/${notifId}`] = sanitizedNotif; });
             await update(ref(database), updates);
         } else {
-            const allUsers = await fetchAllUsers();
-            const targetKey = Object.keys(allUsers).find(k => allUsers[k].name === targetUser || allUsers[k].email === targetUser);
+            const targetKey = Object.keys(db.users).find(k => db.users[k].name === targetUser) || toSafeId(targetUser);
             if (targetKey) await update(ref(database, `users/${targetKey}/notifications/${notifId}`), sanitizedNotif);
         }
     };
@@ -335,9 +340,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const loadAssetHistory = async () => { if(currentUser) setCurrentAssetHistory(await assetService.fetchHistory(currentUser.email!)); };
 
     const requestNotificationPermission = async (mode: 'native' | 'browser' = 'browser') => {
-        if (mode === 'native' && 'Notification' in window) {
-            await Notification.requestPermission();
-        }
+        if (mode === 'native' && 'Notification' in window) await Notification.requestPermission();
     };
     
     const createChat = async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string) => {
@@ -350,21 +353,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const myIdentity = (currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장') ? '한국은행' : currentUser!.name;
         const msg: ChatMessage = { id: generateId(), sender: myIdentity, text, timestamp: Date.now(), attachment };
         await chatService.sendMessage(chatId, msg);
-
-        if (attachment?.type === 'application' && attachment.data) {
-            const app: Application = {
-                id: attachment.data.id,
-                type: attachment.data.appType,
-                applicantName: currentUser!.name,
-                amount: attachment.data.amount,
-                requestedDate: new Date().toISOString(),
-                status: 'pending',
-                savingsType: attachment.data.savingsType,
-                collateral: attachment.data.collateral,
-                collateralStatus: attachment.data.collateral ? 'proposed_by_user' : undefined
-            };
-            await update(ref(database, `pendingApplications/${app.id}`), sanitize(app));
-        }
     };
 
     const wait = (type: 'light' | 'heavy') => new Promise<void>(resolve => setTimeout(resolve, type === 'light' ? 500 : 1500));
@@ -415,12 +403,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const switchAccount = async (targetEmail: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
+            if (currentUser?.email === targetEmail) return true;
+            
+            // Use optimized fetch to ensure no 87MB download
             const userData = await fetchUserByEmail(targetEmail);
             if (userData) { 
                 setCurrentUser(userData); 
                 setAdminMode(false);
                 return true; 
             }
+            return false;
+        } catch (e) {
+            console.error("Switch Account Error:", e);
             return false;
         } finally { 
             setSimulatedLoading(false); 
@@ -451,22 +445,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if(!await showConfirm(`₩${tax.amount.toLocaleString()} 세금을 납부하시겠습니까?`)) return;
         
         const newDb = {...db};
-        const bank = newDb.users['한국은행'];
         const me = newDb.users[toSafeId(currentUser.email!)];
+        if (me) me.balanceKRW -= tax.amount;
         
-        me.balanceKRW -= tax.amount;
-        bank.balanceKRW += tax.amount;
-        
-        // Mark as paid
-        const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
-        if(myTaxIdx !== -1 && me.pendingTaxes) {
+        const myTaxIdx = (me?.pendingTaxes || []).findIndex(t => t.id === tax.id);
+        if(myTaxIdx !== -1 && me?.pendingTaxes) {
             me.pendingTaxes[myTaxIdx].status = 'paid';
         }
-        
-        // Logs
-        const date = new Date().toISOString();
-        me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: `${tax.type} 납부`, date }];
-        bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} ${tax.type} 납부`, date }];
         
         await saveDb(newDb);
         setAlertMessage("세금 납부가 완료되었습니다.");
@@ -482,6 +467,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await refreshData();
     };
 
+    const openChat = (chatId: string) => {
+        window.dispatchEvent(new CustomEvent('open-chat', { detail: { chatId } }));
+    };
+
+    const submitApplication = async (app: Application) => {
+        setDb(prev => ({
+            ...prev,
+            pendingApplications: { ...prev.pendingApplications, [app.id]: app }
+        }));
+        await update(ref(database, `pendingApplications/${app.id}`), sanitize(app));
+    };
+
     return (
         <GameContext.Provider value={{
             db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
@@ -493,7 +490,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             requestNotificationPermission, createChat, sendMessage, clearPaidTax: async () => {}, cachedMarts, setCachedMarts, wait,
             requestPolicyChange, respondToAuctionInvite, updateStock, markChatRead: async () => {}, applyBankruptcy, switchAccount, approvePolicyChange, rejectPolicyChange,
             requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } },
-            payTax, dismissTax
+            payTax, dismissTax, openChat, submitApplication
         }}>
             {children}
             {simulatedLoading && (

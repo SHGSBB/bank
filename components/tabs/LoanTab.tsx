@@ -5,7 +5,7 @@ import { Card, Button, Input, MoneyInput, Modal } from '../Shared';
 import { Loan, RealEstateCell, Application } from '../../types';
 
 export const LoanTab: React.FC = () => {
-    const { currentUser, db, showModal, createChat, sendMessage } = useGame();
+    const { currentUser, db, showModal, createChat, sendMessage, openChat, submitApplication } = useGame();
     const [amount, setAmount] = useState('');
     const [selectedProperty, setSelectedProperty] = useState<RealEstateCell | null>(null);
     const [showPropModal, setShowPropModal] = useState(false);
@@ -25,19 +25,27 @@ export const LoanTab: React.FC = () => {
         const chatId = await createChat(['한국은행'], 'private');
         const collateralText = selectedProperty ? `집 #${selectedProperty.id} (₩${selectedProperty.price.toLocaleString()})` : "신용 대출 (담보 없음)";
 
+        const app: Application = {
+            id: `loan_req_${Date.now()}`,
+            type: 'loan',
+            applicantName: currentUser!.name,
+            amount: valAmount,
+            requestedDate: new Date().toISOString(),
+            status: 'pending',
+            collateral: selectedProperty ? `prop_${selectedProperty.id}` : null,
+            collateralStatus: selectedProperty ? 'proposed_by_user' : undefined
+        };
+
         await sendMessage(chatId, `[대출 신청]\n신청자: ${currentUser?.name}\n금액: ₩${valAmount.toLocaleString()}\n담보: ${collateralText}`, {
             type: 'application',
             value: '대출 신청',
-            data: {
-                appType: 'loan',
-                amount: valAmount,
-                collateral: selectedProperty ? `prop_${selectedProperty.id}` : null,
-                id: `loan_req_${Date.now()}`,
-                isThreadRoot: true 
-            }
+            data: { ...app, appType: 'loan', isThreadRoot: true }
         });
 
-        showModal("한국은행에 대출 신청을 보냈습니다. 메시지 탭의 스레드 대화에서 심사 과정을 확인하세요.");
+        await submitApplication(app);
+
+        openChat(chatId);
+        showModal("한국은행에 대출 신청을 보냈습니다. 채팅방으로 이동합니다.");
         setAmount('');
         setSelectedProperty(null);
     };

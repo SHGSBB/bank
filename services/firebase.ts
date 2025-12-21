@@ -1,3 +1,4 @@
+
 import * as firebaseApp from "firebase/app";
 import { 
     getDatabase, 
@@ -8,12 +9,10 @@ import {
     query, 
     limitToLast, 
     onValue, 
-    orderByChild, 
-    equalTo, 
-    set, 
-    remove,
-    startAt,
-    endAt 
+    set,
+    orderByChild,
+    equalTo,
+    limitToFirst
 } from "firebase/database";
 import { 
     getAuth, 
@@ -43,9 +42,21 @@ export const database = getDatabase(app);
 export const auth = getAuth(app);
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
-
-// Standardized safe ID generator for both client and API
 export const toSafeId = (id: string) => (id || '').trim().toLowerCase().replace(/[@.]/g, '_');
+
+// [신규] 서버 액션 호출 헬퍼
+const callServerAction = async (action: string, payload: any) => {
+    try {
+        const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action, payload })
+        });
+        return await res.json();
+    } catch (e) {
+        return null;
+    }
+};
 
 export const registerWithAutoRetry = async (email: string, pass: string, retryCount = 0): Promise<FirebaseUser> => {
     let tryEmail = email;
@@ -53,7 +64,6 @@ export const registerWithAutoRetry = async (email: string, pass: string, retryCo
         const [local, domain] = email.split('@');
         tryEmail = `${local}+${retryCount}@${domain}`;
     }
-
     try {
         const userCredential = await createUserWithEmailAndPassword(auth, tryEmail, pass);
         await sendEmailVerification(userCredential.user);
@@ -77,19 +87,22 @@ export const resetUserPassword = async (email: string) => {
 };
 
 export const logoutFirebase = async () => signOut(auth);
-
 export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => onAuthStateChanged(auth, callback);
 
-export const fetchGlobalData = async (): Promise<Partial<DB>> => {
+// [최적화] 내 데이터만 상세 조회
+export const fetchGlobalData = async (currentUserId?: string): Promise<Partial<DB>> => {
     try {
+        const safeId = currentUserId ? toSafeId(currentUserId) : undefined;
         const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'fetch_initial_data', payload: {} })
+            body: JSON.stringify({ action: 'fetch_initial_data', payload: { currentUserId: safeId } })
         }).catch(() => null);
+        
         if (res && res.ok) return await res.json();
-        const snapshot = await get(ref(database));
-        return snapshot.exists() ? snapshot.val() : {};
+        
+        // Fallback: Do NOT download everything if server fails, just return empty to prevent crash
+        return {};
     } catch (e) {
         return {};
     }
@@ -103,109 +116,89 @@ const normalizeUser = (user: User): User => {
 };
 
 export const fetchUser = async (userName: string): Promise<User | null> => {
+    // Note: userName here might be ID or Name. SafeId assumes email format mostly.
     const snapshot = await get(ref(database, `users/${toSafeId(userName)}`));
     return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
 };
 
+// [최적화] 클라이언트 전체 스캔 제거 -> 서버 액션 위임
 export const fetchUserByEmail = async (email: string): Promise<User | null> => {
-    const snapshot = await get(ref(database, 'users'));
-    if (snapshot.exists()) {
-        const users = snapshot.val();
-        const searchTerm = email.trim().toLowerCase();
-        const found = Object.values(users).find((u: any) => {
-            if (!u.email) return false;
-            const userEmail = u.email.toLowerCase();
-            if (userEmail === searchTerm) return true;
-            if (searchTerm.includes('@') && userEmail.includes('+')) {
-                const [inputLocal, inputDomain] = searchTerm.split('@');
-                const [storedLocal, storedDomain] = userEmail.split('@');
-                const baseLocal = storedLocal.split('+')[0];
-                return inputLocal === baseLocal && inputDomain === storedDomain;
-            }
-            return false;
-        }) as User;
-        return found ? normalizeUser(found) : null;
-    }
+    const safeKey = toSafeId(email);
+    // 1. Try Direct Key (Fastest)
+    const exactSnap = await get(ref(database, `users/${safeKey}`));
+    if (exactSnap.exists()) return normalizeUser(exactSnap.val());
+
+    // 2. Server Action Search (No client download)
+    const res = await callServerAction('fetch_user', { query: email });
+    if (res && res.user) return normalizeUser(res.user);
+
     return null;
 };
 
-export const findUserIdByInfo = async (name: string, birth: string): Promise<string | null> => {
-    const searchName = name.trim().toLowerCase();
-    const searchBirth = birth.trim();
-    const snapshot = await get(ref(database, 'users'));
-    if (snapshot.exists()) {
-        const users = Object.values(snapshot.val()) as User[];
-        const found = users.find(u => (u.name || "").toLowerCase() === searchName && u.birthDate === searchBirth);
-        return found ? (found.id || found.email || null) : null;
-    }
+// [최적화] 클라이언트 전체 스캔 제거 -> 서버 액션 위임
+export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
+    // 1. Try Direct Key
+    const safeKey = toSafeId(id);
+    const exactSnap = await get(ref(database, `users/${safeKey}`));
+    if (exactSnap.exists()) return normalizeUser(exactSnap.val());
+
+    // 2. Server Action Search
+    const res = await callServerAction('fetch_user', { query: id });
+    if (res && res.user) return normalizeUser(res.user);
+
     return null;
+};
+
+export const searchUsersByName = async (name: string): Promise<User[]> => {
+    // Optimization: Use orderByChild if index exists, else limit
+    const q = query(ref(database, 'users'), orderByChild('name'), limitToFirst(20)); // Limit scan
+    const snapshot = await get(q);
+    if (!snapshot.exists()) return [];
+    
+    // Filter locally from the limited set (not perfect but prevents 87MB download)
+    // For better search, needs server-side search action
+    const users = snapshot.val();
+    const term = name.trim().toLowerCase();
+    return Object.values(users).filter((u: any) => 
+        (u.name || "").toLowerCase().includes(term) || 
+        (u.nickname || "").toLowerCase().includes(term)
+    ) as User[];
+};
+
+export const fetchMartUsers = async (): Promise<User[]> => {
+    const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
+    if (!snapshot.exists()) return [];
+    return Object.values(snapshot.val()).filter((u: any) => u.approvalStatus === 'approved') as User[];
 };
 
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
+    // CAUTION: This still downloads everything. Only used by admin.
     const snapshot = await get(ref(database, 'users'));
     return snapshot.val() || {};
-};
-
-// Fix for TransferTab: Added missing searchUsersByName helper
-export const searchUsersByName = async (name: string): Promise<User[]> => {
-    const users = await fetchAllUsers();
-    const term = name.trim().toLowerCase();
-    return Object.values(users).filter(u => 
-        (u.name || "").toLowerCase().includes(term) || 
-        (u.nickname || "").toLowerCase().includes(term)
-    );
-};
-
-// Fix for PurchaseTab: Added missing fetchMartUsers helper
-export const fetchMartUsers = async (): Promise<User[]> => {
-    const users = await fetchAllUsers();
-    return Object.values(users).filter(u => u.type === 'mart' && u.approvalStatus === 'approved');
-};
-
-export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
-    const input = id.trim().toLowerCase();
-    const snapshot = await get(ref(database, 'users'));
-    if (snapshot.exists()) {
-        const users = snapshot.val();
-        const found = Object.values(users).find((u: any) => 
-            (u.id || "").toLowerCase() === input || 
-            (u.name || "").toLowerCase() === input || 
-            (u.email || "").toLowerCase() === input
-        ) as User;
-        if (found) return normalizeUser(found);
-        const safeId = toSafeId(id.trim());
-        if (users[safeId]) return normalizeUser(users[safeId]);
-    }
-    return null;
 };
 
 export const uploadImage = async (path: string, base64: string): Promise<string> => {
     const cloudName = "dopkc8q6l";
     const uploadPreset = "ml_default";
-
     const formData = new FormData();
     formData.append("file", base64);
     formData.append("upload_preset", uploadPreset);
-
     try {
         const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
             method: "POST",
             body: formData
         });
-
         if (!res.ok) throw new Error("이미지 서버 업로드 실패");
-
         const data = await res.json();
         return data.secure_url; 
     } catch (e: any) {
-        console.error("Cloudinary Upload Error:", e);
-        throw new Error("사진 업로드에 실패했습니다. 다시 시도해주세요.");
+        throw new Error("사진 업로드에 실패했습니다.");
     }
 };
 
 export const saveDb = async (data: DB) => {
     const updates: any = {};
-    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'stocks'];
+    const nodes = ['settings', 'realEstate', 'countries', 'announcements', 'ads', 'stocks', 'pendingApplications', 'deferredAuctions', 'auction', 'bonds', 'taxSessions'];
     nodes.forEach(node => {
         if ((data as any)[node] !== undefined) updates[node] = (data as any)[node];
     });
@@ -223,7 +216,7 @@ export const chatService = {
     },
     createChat: async (participants: string[], type: 'private'|'group'|'feedback' = 'private', groupName?: string) => {
         const chatId = `chat_${Date.now()}`;
-        await update(ref(database, `chatRooms/${chatId}`), sanitize({ id: chatId, participants, type, groupName: groupName || null }));
+        await update(ref(database, `chatRooms/${chatId}`), sanitize({ id: chatId, participants, type, groupName: groupName || null, lastTimestamp: Date.now() }));
         return chatId;
     }
 };

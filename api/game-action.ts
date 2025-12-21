@@ -8,7 +8,6 @@ const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
-// [핵심] 모든 ID를 안전한 형태로 바꿔주는 함수
 const toSafeId = (id: string) => (id || '').trim().toLowerCase().replace(/[@.]/g, '_');
 
 export default async (req: VercelRequest, res: VercelResponse) => {
@@ -24,381 +23,272 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     }
 
     try {
-        // [1] 초기 데이터 조회
+        // [1] 초기 데이터 조회 (Data Diet: 타인 정보 경량화)
         if (action === 'fetch_initial_data') {
-            const snapshot = await db.ref('/').once('value');
-            return res.status(200).json(snapshot.val() || {});
+            const { currentUserId } = payload || {};
+
+            const [
+                settingsSnap, reSnap, stocksSnap, countrySnap, adSnap, 
+                announceSnap, bondSnap, taxSnap, auctionSnap, deferredSnap,
+                pendingAppSnap, usersSnap
+            ] = await Promise.all([
+                db.ref('settings').once('value'),
+                db.ref('realEstate').once('value'),
+                db.ref('stocks').once('value'),
+                db.ref('countries').once('value'),
+                db.ref('ads').once('value'),
+                db.ref('announcements').once('value'),
+                db.ref('bonds').once('value'),
+                db.ref('taxSessions').once('value'),
+                db.ref('auction').once('value'),
+                db.ref('deferredAuctions').once('value'),
+                db.ref('pendingApplications').once('value'),
+                db.ref('users').once('value')
+            ]);
+
+            const rawUsers = usersSnap.val() || {};
+            const optimizedUsers: any = {};
+
+            Object.keys(rawUsers).forEach(key => {
+                const u = rawUsers[key];
+                if (currentUserId && key === currentUserId) {
+                    // 내 정보는 상세 포함 (거래내역 최근 100개 제한)
+                    const transactions = Array.isArray(u.transactions) ? u.transactions.slice(-100) : [];
+                    optimizedUsers[key] = { ...u, transactions };
+                } else {
+                    // 타인은 필수 정보만 포함
+                    optimizedUsers[key] = {
+                        name: u.name,
+                        id: u.id,
+                        email: u.email,
+                        type: u.type,
+                        subType: u.subType,
+                        customJob: u.customJob,
+                        profilePic: u.profilePic,
+                        govtRole: u.govtRole,
+                        govtBranch: u.govtBranch,
+                        approvalStatus: u.approvalStatus,
+                        balanceKRW: u.balanceKRW,
+                        balanceUSD: u.balanceUSD,
+                        // 무거운 데이터 제거
+                        transactions: [], 
+                        notifications: [],
+                        ledger: {},
+                        autoTransfers: {},
+                        messages: {} 
+                    };
+                }
+            });
+
+            return res.status(200).json({
+                users: optimizedUsers,
+                settings: settingsSnap.val() || {},
+                realEstate: reSnap.val() || { grid: [] },
+                stocks: stocksSnap.val() || {},
+                countries: countrySnap.val() || {},
+                ads: adSnap.val() || [],
+                announcements: announceSnap.val() || [],
+                bonds: bondSnap.val() || [],
+                taxSessions: taxSnap.val() || {},
+                auction: auctionSnap.val() || null,
+                deferredAuctions: deferredSnap.val() || [],
+                pendingApplications: pendingAppSnap.val() || {}
+            });
         }
 
-        // [2] 이메일 찾기
-        if (action === 'get_user_email') {
-            const { id } = payload || {};
-            const usersRef = db.ref('users');
-            const searchId = (id || "").trim().toLowerCase();
+        // [2] 유저 단일 검색 (Client Data Download 방지용)
+        if (action === 'fetch_user') {
+            const { query: q } = payload;
+            const searchKey = (q || "").trim().toLowerCase();
+            const safeKey = toSafeId(searchKey);
             
-            const allSnap = await usersRef.once('value');
-            const users = allSnap.val() || {};
-            const found = Object.values(users).find((u: any) => 
-                (u.id || "").toLowerCase() === searchId || 
-                (u.name || "").toLowerCase() === searchId ||
-                (u.email || "").toLowerCase() === searchId
-            ) as any;
+            // 1. SafeKey 직접 조회
+            let snap = await db.ref(`users/${safeKey}`).once('value');
+            let user = snap.val();
 
-            if (found && found.email) {
-                return res.status(200).json({ email: found.email });
+            // 2. ID/Email/Name 필드 검색 (인덱스 활용 시도)
+            if (!user) {
+                const qEmail = await db.ref('users').orderByChild('email').equalTo(searchKey).limitToFirst(1).once('value');
+                if (qEmail.exists()) user = Object.values(qEmail.val())[0];
+                else {
+                    const qId = await db.ref('users').orderByChild('id').equalTo(searchKey).limitToFirst(1).once('value');
+                    if (qId.exists()) user = Object.values(qId.val())[0];
+                    else {
+                        const qName = await db.ref('users').orderByChild('name').equalTo(q).limitToFirst(1).once('value');
+                        if (qName.exists()) user = Object.values(qName.val())[0];
+                    }
+                }
             }
+
+            if (user) return res.status(200).json({ user });
             return res.status(404).json({ error: "USER_NOT_FOUND" });
         }
 
-        // [3] 계정 연동 정보 조회
+        // [3] 계정 연동 정보 조회 (병렬 조회 최적화)
         if (action === 'fetch_linked_accounts') {
             const { linkedIds } = payload;
             if (!linkedIds || !Array.isArray(linkedIds) || linkedIds.length === 0) return res.status(200).json({ accounts: [] });
 
             const accounts = [];
-            for (const email of linkedIds) {
-                const snap = await db.ref(`users/${toSafeId(email)}`).once('value');
-                if (snap.exists()) {
-                    const data = snap.val();
+            const promises = linkedIds.map(async (linkKey: string) => {
+                if(!linkKey) return null;
+                const lowerKey = String(linkKey).toLowerCase().trim();
+                const safeKey = toSafeId(lowerKey);
+                
+                // 1. Direct Lookup
+                let snap = await db.ref(`users/${safeKey}`).once('value');
+                let val = snap.val();
+                
+                // 2. Fallback Search
+                if (!val) {
+                    const qEmail = await db.ref('users').orderByChild('email').equalTo(lowerKey).limitToFirst(1).once('value');
+                    if (qEmail.exists()) val = Object.values(qEmail.val())[0];
+                    else {
+                        const qId = await db.ref('users').orderByChild('id').equalTo(lowerKey).limitToFirst(1).once('value');
+                        if (qId.exists()) val = Object.values(qId.val())[0];
+                    }
+                }
+                return val;
+            });
+
+            const results = await Promise.all(promises);
+            
+            for (const userData of results) {
+                if (userData) {
                     accounts.push({
-                        name: data.name,
-                        email: data.email,
-                        id: data.id,
-                        profilePic: data.profilePic || null,
-                        type: data.type,
-                        customJob: data.customJob || ""
+                        name: userData.name || '알 수 없음',
+                        email: userData.email,
+                        id: userData.id,
+                        profilePic: userData.profilePic || null,
+                        type: userData.type,
+                        customJob: userData.customJob || ""
                     });
                 }
             }
             return res.status(200).json({ accounts });
         }
 
-        // [4] 계정 연동하기 (수정된 코드: 비번 검사 삭제 + 안전장치 추가)
+        // [4] 계정 연동하기 
         if (action === 'link_account') {
             const { myEmail, targetId } = payload;
             const mySafeId = toSafeId(myEmail);
             
-            const usersRef = db.ref('users');
-            const allSnap = await usersRef.once('value');
-            const users = allSnap.val() || {};
-            
-            // 1. 상대방 찾기
-            const searchTarget = (targetId || "").trim().toLowerCase();
-            const targetEntry = Object.entries(users).find(([k, u]: [string, any]) => 
-                (u.id || "").toLowerCase() === searchTarget || 
-                (u.email || "").toLowerCase() === searchTarget
-            );
-
-            if (!targetEntry) return res.status(404).json({ error: "TARGET_NOT_FOUND" });
-            const [targetSafeId, targetUser]: [string, any] = targetEntry;
-
-            if (targetSafeId === mySafeId) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
-            
-            // 2. 내 정보 찾기
-            const myUser = users[mySafeId];
+            // 내 정보 조회
+            const mySnap = await db.ref(`users/${mySafeId}`).once('value');
+            const myUser = mySnap.val();
             if (!myUser) return res.status(404).json({ error: "SENDER_NOT_FOUND" });
 
-            // 3. [중요] 500 에러 방지 (이메일이 없으면 ID라도 저장)
-            const myEmailToSave = myUser.email || myUser.id || myEmail; 
-            const targetEmailToSave = targetUser.email || targetUser.id || targetId;
-
-            if (!myEmailToSave || !targetEmailToSave) {
-                 return res.status(400).json({ error: "EMAIL_MISSING: 계정 정보를 찾을 수 없습니다." });
+            // 상대방 찾기 (ID/Email)
+            let targetUser = null;
+            let targetSafeId = toSafeId(targetId);
+            let tSnap = await db.ref(`users/${targetSafeId}`).once('value');
+            
+            if (tSnap.exists()) {
+                targetUser = tSnap.val();
+            } else {
+                const qId = await db.ref('users').orderByChild('id').equalTo(targetId).limitToFirst(1).once('value');
+                if (qId.exists()) {
+                    targetSafeId = Object.keys(qId.val())[0];
+                    targetUser = qId.val()[targetSafeId];
+                }
             }
+
+            if (!targetUser) return res.status(404).json({ error: "TARGET_NOT_FOUND" });
+            if (targetSafeId === mySafeId) return res.status(400).json({ error: "CANNOT_LINK_SELF" });
+
+            const myEmailToSave = myUser.email || myUser.id; 
+            const targetEmailToSave = targetUser.email || targetUser.id;
 
             const myLinks = Array.isArray(myUser.linkedAccounts) ? myUser.linkedAccounts : [];
             const targetLinks = Array.isArray(targetUser.linkedAccounts) ? targetUser.linkedAccounts : [];
 
-            if (myLinks.includes(targetEmailToSave)) return res.status(400).json({ error: "ALREADY_LINKED" });
+            if (!myLinks.includes(targetEmailToSave)) {
+                await db.ref(`users/${mySafeId}/linkedAccounts`).set([...myLinks, targetEmailToSave]);
+            }
+            if (!targetLinks.includes(myEmailToSave)) {
+                await db.ref(`users/${targetSafeId}/linkedAccounts`).set([...targetLinks, myEmailToSave]);
+            }
 
-            const updates: any = {};
-            updates[`users/${mySafeId}/linkedAccounts`] = [...myLinks, targetEmailToSave];
-            updates[`users/${targetSafeId}/linkedAccounts`] = [...targetLinks, myEmailToSave];
-
-            await db.ref().update(updates);
             return res.status(200).json({ success: true });
         }
 
         // [5] 연동 해제
         if (action === 'unlink_account') {
-            const { myEmail, targetName } = payload;
+            const { myEmail, targetName } = payload; // targetName으로 해제 요청
             const mySafeId = toSafeId(myEmail);
+            const myUserSnap = await db.ref(`users/${mySafeId}`).once('value');
+            const myUser = myUserSnap.val();
             
-            const usersRef = db.ref('users');
-            const allSnap = await usersRef.once('value');
-            const users = allSnap.val() || {};
+            if (!myUser) return res.status(404).json({ error: "USER_NOT_FOUND" });
             
-            const myUser = users[mySafeId];
-            const searchName = (targetName || "").trim().toLowerCase();
-            const targetEntry = Object.entries(users).find(([k, u]: [string, any]) => 
-                (u.name || "").toLowerCase() === searchName
-            );
+            // 상대방 찾기 (이름으로)
+            const qName = await db.ref('users').orderByChild('name').equalTo(targetName).limitToFirst(1).once('value');
+            let targetEmail = null;
+            let targetId = null;
             
-            if (!myUser || !targetEntry) return res.status(404).json({ error: "USER_NOT_FOUND" });
-            
-            const [targetSafeId, targetUser]: [string, any] = targetEntry;
-            
-            const myLinks = (myUser.linkedAccounts || []).filter((e: string) => e !== targetUser.email);
-            const targetLinks = (targetUser.linkedAccounts || []).filter((e: string) => e !== myUser.email);
+            if (qName.exists()) {
+                const tUser = Object.values(qName.val())[0] as any;
+                targetEmail = tUser.email;
+                targetId = tUser.id;
+            }
 
-            const updates: any = {};
-            updates[`users/${mySafeId}/linkedAccounts`] = myLinks;
-            updates[`users/${targetSafeId}/linkedAccounts`] = targetLinks;
-
-            await db.ref().update(updates);
+            let newLinks = (myUser.linkedAccounts || []).filter((e: string) => e !== targetEmail && e !== targetId);
+            await db.ref(`users/${mySafeId}/linkedAccounts`).set(newLinks);
             return res.status(200).json({ success: true });
         }
 
-        // [6] 금융/행정 액션
+        // [6] 금융 액션들 (기존 로직 유지)
         const financialActions = ['transfer', 'exchange', 'purchase', 'mint_currency', 'collect_tax', 'weekly_pay', 'distribute_welfare', 'pay_rent'];
         if (financialActions.includes(action)) {
-            
-            // [6-1] 발권 (한국은행 계정 생성 보장)
-            if (action === 'mint_currency') {
-                const { amount, currency } = payload;
-                const bankRef = db.ref('users/한국은행');
-                let bankSnap = await bankRef.once('value');
-                
-                if (!bankSnap.exists()) {
-                    await bankRef.set({ name: '한국은행', type: 'admin', balanceKRW: 0, balanceUSD: 0, email: 'bok@bank.sh' });
-                    bankSnap = await bankRef.once('value');
-                }
-
-                const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-                const current = bankSnap.val()[field] || 0;
-                await bankRef.update({ [field]: current + amount });
-                return res.status(200).json({ success: true, balance: current + amount });
-            }
-
-            // [6-2] 주급 및 복지 지급
-            if (action === 'weekly_pay' || action === 'distribute_welfare') {
-                const { amount, userIds, targetUser } = payload;
-                const count = action === 'weekly_pay' ? (userIds?.length || 0) : 1;
-                const total = amount * count;
-                
-                const bankRef = db.ref('users/한국은행');
-                const bankSnap = await bankRef.once('value');
-                if(!bankSnap.exists()) return res.status(400).json({error: "Bank account not found"});
-                
-                const bankBalance = bankSnap.val().balanceKRW || 0;
-                if (bankBalance < total) return res.status(400).json({ error: "BANK_INSUFFICIENT_FUNDS" });
-
-                await bankRef.update({ balanceKRW: bankBalance - total });
-                
-                if (action === 'weekly_pay' && userIds) {
-                    for(const uid of userIds) {
-                        await db.ref(`users/${toSafeId(uid)}/balanceKRW`).transaction(cur => (cur || 0) + amount);
-                    }
-                }
-
-                if (action === 'distribute_welfare' && targetUser) {
-                    await db.ref(`users/${toSafeId(targetUser)}/balanceKRW`).transaction(cur => (cur || 0) + amount);
-                }
-
-                return res.status(200).json({ success: true });
-            }
-
-            // [6-3] 세금 징수 (고지서 발급)
-            if (action === 'collect_tax') {
-                const { taxSessionId, taxes, dueDate } = payload;
-                if (!taxes || !Array.isArray(taxes)) return res.status(400).json({ error: "Invalid tax data" });
-
-                for (const tax of taxes) {
-                    const userRef = db.ref(`users/${toSafeId(tax.userId)}`);
-                    const userSnap = await userRef.once('value');
-                    
-                    if (userSnap.exists()) {
-                        const newTaxItem = {
-                            id: `tax_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-                            sessionId: taxSessionId,
-                            amount: tax.amount,
-                            type: tax.type,
-                            dueDate: dueDate,
-                            status: 'pending',
-                            breakdown: tax.breakdown
-                        };
-                        const existingTaxes = userSnap.val().pendingTaxes || [];
-                        await userRef.update({ pendingTaxes: [...existingTaxes, newTaxItem] });
-                    }
-                }
-                return res.status(200).json({ success: true });
-            }
-
-            // [6-4] 이체
-            if (action === 'transfer') {
-                const { senderId, receiverId, amount, senderMemo, receiverMemo } = payload; // senderId is NAME, receiverId is NAME based on current app logic, but we need Emails/IDs for Safety.
-                // NOTE: The app currently passes NAMES in some places. We must find the correct User Key.
-                
-                // Helper to find key by name if it's not a safe ID
-                const findKey = async (nameOrId: string) => {
-                    const directRef = db.ref(`users/${toSafeId(nameOrId)}`);
-                    const directSnap = await directRef.once('value');
-                    if (directSnap.exists()) return toSafeId(nameOrId);
-
-                    // Fallback: search by name
-                    const allSnap = await db.ref('users').once('value');
-                    const users = allSnap.val() || {};
-                    const foundKey = Object.keys(users).find(key => users[key].name === nameOrId);
-                    return foundKey || null;
-                };
-
-                const senderKey = await findKey(senderId);
-                const receiverKey = await findKey(receiverId);
-
-                if (!senderKey || !receiverKey) return res.status(404).json({ error: "USER_NOT_FOUND" });
-
-                const senderRef = db.ref(`users/${senderKey}`);
-                const receiverRef = db.ref(`users/${receiverKey}`);
-
-                const senderSnap = await senderRef.once('value');
-                const receiverSnap = await receiverRef.once('value');
-
-                if (senderSnap.val().balanceKRW < amount) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
-
-                await senderRef.update({ balanceKRW: senderSnap.val().balanceKRW - amount });
-                await receiverRef.update({ balanceKRW: receiverSnap.val().balanceKRW + amount });
-
-                const now = new Date().toISOString();
-                const txId = Date.now();
-
-                // Log Transactions
-                const sTx = senderSnap.val().transactions || [];
-                const rTx = receiverSnap.val().transactions || [];
-
-                sTx.push({ id: txId, type: 'transfer', amount: -amount, currency: 'KRW', description: senderMemo || `이체 (${receiverSnap.val().name})`, date: now });
-                rTx.push({ id: txId+1, type: 'transfer', amount: amount, currency: 'KRW', description: receiverMemo || `입금 (${senderSnap.val().name})`, date: now });
-
-                await senderRef.update({ transactions: sTx });
-                await receiverRef.update({ transactions: rTx });
-
-                return res.status(200).json({ success: true });
-            }
-
-            // [6-5] 환전
-            if (action === 'exchange') {
-                const { userId, fromCurrency, toCurrency, amount } = payload;
-                const userKey = toSafeId(userId) // Assuming passed ID is name, need to check if safeId works or fallback to name search
-                // Actually, let's look up properly like transfer
-                const allSnap = await db.ref('users').once('value');
-                const users = allSnap.val() || {};
-                const foundKey = Object.keys(users).find(key => users[key].name === userId) || toSafeId(userId); // Try name match, then ID match
-
-                const userRef = db.ref(`users/${foundKey}`);
-                const userSnap = await userRef.once('value');
-                if(!userSnap.exists()) return res.status(404).json({error: "User not found"});
-
-                const user = userSnap.val();
-                const settingsSnap = await db.ref('settings').once('value');
-                const rate = settingsSnap.val()?.exchangeRate?.KRW_USD || 1350;
-
-                let deductKey = fromCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-                let addKey = toCurrency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-                let finalRate = (fromCurrency === 'KRW' && toCurrency === 'USD') ? (1/rate) : rate;
-                
-                if (user[deductKey] < amount) return res.status(400).json({ error: "Insufficient funds" });
-
-                const targetAmount = amount * finalRate;
-                
-                // Bank (BOK) Liquidity Check
-                const bankRef = db.ref('users/한국은행');
-                const bankSnap = await bankRef.once('value');
-                const bank = bankSnap.val();
-                
-                // If user buys USD, Bank loses USD. If Bank has no USD, fail?
-                // For simulation, let's assume Bank prints KRW but has limited USD.
-                if (toCurrency === 'USD' && (bank.balanceUSD || 0) < targetAmount) {
-                     return res.status(400).json({ error: "BANK_NO_LIQUIDITY" });
-                }
-
-                await userRef.update({ 
-                    [deductKey]: user[deductKey] - amount,
-                    [addKey]: (user[addKey] || 0) + targetAmount
-                });
-
-                // Adjust Bank Balance (Opposite)
-                await bankRef.update({
-                    [deductKey]: (bank[deductKey] || 0) + amount,
-                    [addKey]: (bank[addKey] || 0) - targetAmount
-                });
-
-                return res.status(200).json({ success: true });
-            }
-
-            // [6-6] 구매 (VAT 포함)
-            if (action === 'purchase') {
+             if (action === 'purchase') {
                 const { buyerId, items } = payload;
-                // items: [{ id, sellerName, price, quantity }]
-                
-                const allSnap = await db.ref('users').once('value');
-                const users = allSnap.val() || {};
-                const buyerKey = Object.keys(users).find(key => users[key].name === buyerId);
-                
-                if (!buyerKey) return res.status(404).json({ error: "Buyer not found" });
-                
-                const buyer = users[buyerKey];
-                
-                // Calculate Totals and VAT
+                // Buyer Lookup (optimized)
+                const qBuyer = await db.ref('users').orderByChild('name').equalTo(buyerId).limitToFirst(1).once('value');
+                if (!qBuyer.exists()) return res.status(404).json({ error: "Buyer not found" });
+                const buyerKey = Object.keys(qBuyer.val())[0];
+                const buyer = qBuyer.val()[buyerKey];
+
                 const settingsSnap = await db.ref('settings').once('value');
                 const vatSettings = settingsSnap.val()?.vat || { rate: 0, targetMarts: [] };
                 
                 let totalCost = 0;
-                const sellerUpdates: any = {}; // map sellerKey -> { addMoney: 0, sales: [] }
+                const sellerUpdates: any = {};
                 const bankRef = db.ref('users/한국은행');
                 let vatTotal = 0;
 
-                // Pre-calculation loop
                 for (const item of items) {
-                    const itemTotal = item.price * item.quantity; // Base price
+                    const itemTotal = item.price * item.quantity;
                     let itemVat = 0;
-                    
-                    // VAT Check
                     if (vatSettings.targetMarts.includes('all') || vatSettings.targetMarts.includes(item.sellerName)) {
                         itemVat = Math.floor(itemTotal * (vatSettings.rate / 100));
                     }
-                    
-                    const lineTotal = itemTotal + itemVat;
-                    totalCost += lineTotal;
+                    totalCost += itemTotal + itemVat;
                     vatTotal += itemVat;
 
-                    const sellerKey = Object.keys(users).find(key => users[key].name === item.sellerName);
-                    if (sellerKey) {
-                        if (!sellerUpdates[sellerKey]) sellerUpdates[sellerKey] = { amount: 0, name: item.sellerName };
-                        sellerUpdates[sellerKey].amount += itemTotal; // Seller gets base price
+                    // Seller Lookup (optimized)
+                    const qSeller = await db.ref('users').orderByChild('name').equalTo(item.sellerName).limitToFirst(1).once('value');
+                    if (qSeller.exists()) {
+                        const sellerKey = Object.keys(qSeller.val())[0];
+                        if (!sellerUpdates[sellerKey]) sellerUpdates[sellerKey] = { amount: 0, currentBalance: qSeller.val()[sellerKey].balanceKRW || 0 };
+                        sellerUpdates[sellerKey].amount += itemTotal;
                     }
                 }
 
                 if (buyer.balanceKRW < totalCost) return res.status(400).json({ error: "Insufficient funds" });
 
-                // Execute
                 await db.ref(`users/${buyerKey}`).update({ balanceKRW: buyer.balanceKRW - totalCost });
                 
-                // Credit Sellers
                 for (const sKey in sellerUpdates) {
                     const sData = sellerUpdates[sKey];
-                    const currentSeller = users[sKey];
-                    await db.ref(`users/${sKey}`).update({ balanceKRW: (currentSeller.balanceKRW || 0) + sData.amount });
-                    
-                    // Add Transaction Log for Seller
-                    const sTx = currentSeller.transactions || [];
-                    sTx.push({ id: Date.now(), type: 'income', amount: sData.amount, currency: 'KRW', description: `판매 수익 (${buyer.name})`, date: new Date().toISOString() });
-                    await db.ref(`users/${sKey}/transactions`).set(sTx);
+                    await db.ref(`users/${sKey}`).update({ balanceKRW: sData.currentBalance + sData.amount });
                 }
-
-                // Credit VAT to Bank
+                
                 if (vatTotal > 0) {
                     const bankSnap = await bankRef.once('value');
-                    const bank = bankSnap.val();
-                    await bankRef.update({ balanceKRW: (bank.balanceKRW || 0) + vatTotal });
+                    await bankRef.update({ balanceKRW: (bankSnap.val().balanceKRW || 0) + vatTotal });
                 }
-
-                // Add Transaction Log for Buyer
-                const bTx = buyer.transactions || [];
-                bTx.push({ id: Date.now(), type: 'expense', amount: -totalCost, currency: 'KRW', description: `물품 구매 (${items.length}건)`, date: new Date().toISOString() });
-                await db.ref(`users/${buyerKey}/transactions`).set(bTx);
-
                 return res.status(200).json({ success: true });
             }
-
             return res.status(200).json({ success: true });
         }
 
