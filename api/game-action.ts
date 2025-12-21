@@ -25,7 +25,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     try {
         // [1] 초기 데이터 조회 (Data Diet: 타인 정보 경량화)
         if (action === 'fetch_initial_data') {
-            const { currentUserId } = payload || {};
+            const { currentUserId, currentEmail } = payload || {}; // SafeID and Raw Email
 
             const [
                 settingsSnap, reSnap, stocksSnap, countrySnap, adSnap, 
@@ -51,7 +51,10 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
             Object.keys(rawUsers).forEach(key => {
                 const u = rawUsers[key];
-                if (currentUserId && key === currentUserId) {
+                // Match by SafeID key OR by Email property to ensure we catch "Me"
+                const isMe = (currentUserId && key === currentUserId) || (currentEmail && u.email === currentEmail);
+
+                if (isMe) {
                     // 내 정보는 상세 포함 (거래내역 최근 100개 제한)
                     const transactions = Array.isArray(u.transactions) ? u.transactions.slice(-100) : [];
                     optimizedUsers[key] = { ...u, transactions };

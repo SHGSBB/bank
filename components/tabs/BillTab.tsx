@@ -65,7 +65,9 @@ export const BillTab: React.FC = () => {
                                             {overdue && <span className="bg-red-100 text-red-600 text-[10px] px-2 py-0.5 rounded-full font-bold">연체</span>}
                                             {tax.status === 'paid' && <span className="bg-gray-200 text-gray-600 text-[10px] px-2 py-0.5 rounded-full font-bold">납부완료</span>}
                                         </div>
-                                        <p className="text-xs text-gray-500">납부기한: {new Date(tax.dueDate).toLocaleString()}</p>
+                                        <p className={`text-xs mt-1 ${overdue ? 'text-red-500 font-bold' : 'text-gray-500'}`}>
+                                            마감: {new Date(tax.dueDate).toLocaleString()}
+                                        </p>
                                     </div>
                                     <p className="font-black text-xl">₩{tax.amount.toLocaleString()}</p>
                                 </div>
@@ -92,6 +94,7 @@ export const BillTab: React.FC = () => {
                         <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-xl">
                             <p className="text-sm text-gray-500">{getTaxName(selectedTax.type)}</p>
                             <p className="text-3xl font-black mt-2">₩{selectedTax.amount.toLocaleString()}</p>
+                            <p className="text-xs text-red-500 mt-2 font-bold">납부기한: {new Date(selectedTax.dueDate).toLocaleString()}</p>
                         </div>
                         <div className="p-4 border rounded-xl">
                             <h5 className="font-bold mb-2">산출 내역</h5>

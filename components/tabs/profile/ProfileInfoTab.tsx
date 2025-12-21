@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Button, Input, FileInput, formatName, Modal, Card, LineIcon } from '../../Shared';
@@ -5,21 +6,23 @@ import { uploadImage, toSafeId } from '../../../services/firebase';
 
 export const ProfileInfoTab: React.FC = () => {
     const { currentUser, updateUser, showModal, applyBankruptcy, db } = useGame();
-    const [nickname, setNickname] = useState(currentUser?.nickname || '');
-    const [customJob, setCustomJob] = useState(currentUser?.customJob || '');
-    const [showIdCard, setShowIdCard] = useState(false);
     
-    // Use local state for immediate feedback, initialized by currentUser
-    const [idPhoto, setIdPhoto] = useState<string | null>(currentUser?.profilePic || null);
+    // Sync local state with currentUser whenever it updates
+    const [nickname, setNickname] = useState('');
+    const [customJob, setCustomJob] = useState('');
+    const [idPhoto, setIdPhoto] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (currentUser) {
+            setNickname(currentUser.nickname || '');
+            setCustomJob(currentUser.customJob || '');
+            setIdPhoto(currentUser.profilePic || null);
+        }
+    }, [currentUser?.nickname, currentUser?.customJob, currentUser?.profilePic]);
+
+    const [showIdCard, setShowIdCard] = useState(false);
     const [genderSelect, setGenderSelect] = useState<'male' | 'female'>('male');
     const [isReissuing, setIsReissuing] = useState(false);
-
-    // Keep local photo in sync if user changes from outside
-    useEffect(() => {
-        if (currentUser?.profilePic !== undefined) {
-            setIdPhoto(currentUser?.profilePic || null);
-        }
-    }, [currentUser?.profilePic]);
 
     const handleUpdateProfile = async () => {
         if (!currentUser?.email) return;
@@ -41,18 +44,12 @@ export const ProfileInfoTab: React.FC = () => {
         }
 
         try {
-            // Using toSafeId helper to ensure valid storage paths
             const safeEmail = toSafeId(currentUser.email);
             const path = `profiles/${safeEmail}_${Date.now()}.png`;
-            
             const url = await uploadImage(path, base64);
             
-            // 1. Update Database
             await updateUser(currentUser.email, { profilePic: url });
-            
-            // 2. Update Local UI immediately
             setIdPhoto(url);
-            
             showModal('프로필 사진이 업데이트되었습니다.');
         } catch (e: any) {
             console.error(e);

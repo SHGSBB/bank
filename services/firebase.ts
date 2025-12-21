@@ -93,10 +93,17 @@ export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => 
 export const fetchGlobalData = async (currentUserId?: string): Promise<Partial<DB>> => {
     try {
         const safeId = currentUserId ? toSafeId(currentUserId) : undefined;
+        // Pass both safeId and raw email to help server identify "Me" correctly
         const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'fetch_initial_data', payload: { currentUserId: safeId } })
+            body: JSON.stringify({ 
+                action: 'fetch_initial_data', 
+                payload: { 
+                    currentUserId: safeId,
+                    currentEmail: currentUserId // Passing email also as a fallback identifier
+                } 
+            })
         }).catch(() => null);
         
         if (res && res.ok) return await res.json();
