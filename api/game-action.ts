@@ -29,14 +29,37 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     }
 
     try {
+        // [OPTIMIZATION] Do NOT fetch root ('/'). Fetch only lightweight essentials.
         if (action === 'fetch_initial_data') {
-            const snapshot = await db.ref('/').once('value');
-            const data = snapshot.val() || {};
-            // Strip users completely for initial load to save massive bandwidth
-            if (data.users) delete data.users; 
-            // Strip chats completely
-            if (data.chatRooms) delete data.chatRooms;
-            if (data.chatMessages) delete data.chatMessages;
+            const [
+                settingsSnap, 
+                realEstateSnap, 
+                announcementsSnap, 
+                adsSnap, 
+                stocksSnap, 
+                auctionSnap,
+                countriesSnap
+            ] = await Promise.all([
+                db.ref('settings').once('value'),
+                db.ref('realEstate/grid').once('value'), // Only fetch grid, avoid transaction logs if any
+                db.ref('announcements').limitToLast(20).once('value'),
+                db.ref('ads').once('value'),
+                db.ref('stocks').once('value'),
+                db.ref('auction').once('value'),
+                db.ref('countries').once('value')
+            ]);
+
+            // Construct minimal response
+            const data = {
+                settings: settingsSnap.val() || {},
+                realEstate: { grid: realEstateSnap.val() || [] },
+                announcements: announcementsSnap.val() || {},
+                ads: adsSnap.val() || {},
+                stocks: stocksSnap.val() || {},
+                auction: auctionSnap.val() || {},
+                countries: countriesSnap.val() || {},
+                // Explicitly EXCLUDE users, chats, transactions
+            };
             
             return res.status(200).json(data);
         }
@@ -51,11 +74,13 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             
             if (!u) return res.status(404).json({});
 
-            // Strip heavy arrays
-            if (u.transactions) delete u.transactions; // History loaded separately
+            // [EXTREME REDUCTION] Strip all heavy arrays
+            if (u.transactions) delete u.transactions; 
             if (u.ledger) delete u.ledger;
             if (u.assetHistory) delete u.assetHistory;
-            if (u.profilePic && u.profilePic.length > 500) u.profilePic = null; // Don't send huge base64 on ping
+            if (u.notifications) delete u.notifications; // Load separately if needed
+            // Only send profilePic if it's a URL (short), not Base64 (long)
+            if (u.profilePic && u.profilePic.startsWith('data:')) u.profilePic = null; 
 
             return res.status(200).json(u);
         }
@@ -83,18 +108,24 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     approvalStatus: u.approvalStatus,
                     govtRole: u.govtRole,
                     customJob: u.customJob,
-                    // EXCLUDE: profilePic, transactions, notifications, ledger, etc.
+                    // EXCLUDE: profilePic, transactions, notifications, ledger, assetHistory
                 };
             });
             
             return res.status(200).json({ users: lightweightUsers });
         }
 
-        // ... (Keep existing actions logic as-is: fetch_wealth_stats, etc)
-        // ... (Including the previously defined logic for link_account, mint_currency, etc.)
+        if (action === 'fetch_my_transactions') {
+            const { userId, limit = 50 } = payload;
+            const safeKey = toSafeId(userId);
+            // Fetch only transactions
+            const snap = await db.ref(`users/${safeKey}/transactions`).limitToLast(limit).once('value');
+            return res.status(200).json({ transactions: Object.values(snap.val() || {}) });
+        }
         
         if (action === 'fetch_wealth_stats') {
             const [usersSnap, settingsSnap, realEstateSnap] = await Promise.all([
+                // We still need all users for accurate stats, but we process on server
                 db.ref('users').once('value'),
                 db.ref('settings/exchangeRate').once('value'),
                 db.ref('realEstate/grid').once('value')
@@ -283,10 +314,15 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             updates[`users/${sKey}/${balanceField}`] = (sVal[balanceField] || 0) - amount;
             updates[`users/${rKey}/${balanceField}`] = (rVal[balanceField] || 0) + amount;
             
-            const sTx = sVal.transactions || [];
+            // Only push transaction to history, limit history length if possible (RTDB doesn't support easy array push limit without reading)
+            // We read sVal/rVal anyway, so we can limit.
+            
+            let sTx = sVal.transactions || [];
+            if(sTx.length > 50) sTx = sTx.slice(-50);
             sTx.push({ id: txId, type: 'transfer', amount: -amount, currency, description: senderMemo || `이체 (${rVal.name})`, date: now });
             
-            const rTx = rVal.transactions || [];
+            let rTx = rVal.transactions || [];
+            if(rTx.length > 50) rTx = rTx.slice(-50);
             rTx.push({ id: txId+1, type: 'transfer', amount: amount, currency, description: receiverMemo || `입금 (${sVal.name})`, date: now });
 
             updates[`users/${sKey}/transactions`] = sTx;

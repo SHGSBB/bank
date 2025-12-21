@@ -46,7 +46,6 @@ export const auth = getAuth(app);
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
-// Standardized safe ID generator for both client and API
 export const toSafeId = (id: string) => 
     (id || '').trim().toLowerCase()
     .replace(/[@.+]/g, '_')
@@ -58,7 +57,6 @@ export const registerWithAutoRetry = async (email: string, pass: string, retryCo
         const [local, domain] = email.split('@');
         tryEmail = `${local}+${retryCount}@${domain}`;
     }
-
     try {
         const userCredential = await createUserWithEmailAndPassword(auth, tryEmail, pass);
         await sendEmailVerification(userCredential.user);
@@ -93,29 +91,25 @@ export const logoutFirebase = async () => signOut(auth);
 
 export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => onAuthStateChanged(auth, callback);
 
-// --- OPTIMIZED FETCHERS ---
-
+// Client-side essentials fetch - ONLY used as fallback if server action fails
 export const fetchEssentials = async (): Promise<Partial<DB>> => {
     try {
-        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap, appsSnap] = await Promise.all([
+        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap] = await Promise.all([
             get(ref(database, 'settings')),
-            get(ref(database, 'realEstate')),
-            get(ref(database, 'announcements')),
+            get(ref(database, 'realEstate/grid')), // Fetch grid only
+            get(query(ref(database, 'announcements'), limitToLast(5))), // Limit announcements
             get(ref(database, 'auction')),
-            get(ref(database, 'stocks')),
-            get(ref(database, 'pendingApplications'))
+            get(ref(database, 'stocks'))
         ]);
 
         return {
             settings: settingsSnap.val() || {},
-            realEstate: realEstateSnap.val() || { grid: [] },
-            announcements: announceSnap.val() || [],
+            realEstate: { grid: realEstateSnap.val() || [] },
+            announcements: Object.values(announceSnap.val() || {}),
             auction: auctionSnap.val() || null,
-            stocks: stocksSnap.val() || {},
-            pendingApplications: appsSnap.val() || {}
+            stocks: stocksSnap.val() || {}
         };
     } catch (e) {
-        console.error("Fetch Essentials Failed", e);
         return {};
     }
 };
@@ -124,6 +118,8 @@ const normalizeUser = (user: User): User => {
     if (!user) return user;
     if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) user.pendingTaxes = Object.values(user.pendingTaxes);
     if (user.loans && !Array.isArray(user.loans)) user.loans = Object.values(user.loans);
+    // Ensure we don't accidentally load huge data if client SDK is used
+    if (user.transactions && user.transactions.length > 50) user.transactions = user.transactions.slice(-50);
     return user;
 };
 
@@ -137,15 +133,6 @@ export const fetchUserByEmail = async (email: string): Promise<User | null> => {
     const safeKey = toSafeId(email);
     const snap = await get(ref(database, `users/${safeKey}`));
     if (snap.exists()) return normalizeUser(snap.val());
-
-    // Fallback: Query by email field
-    const q = query(ref(database, 'users'), orderByChild('email'), equalTo(email));
-    const querySnap = await get(q);
-    if (querySnap.exists()) {
-        const val = querySnap.val();
-        const firstKey = Object.keys(val)[0];
-        return normalizeUser(val[firstKey]);
-    }
     return null;
 };
 
@@ -166,31 +153,28 @@ export const findUserEmailForRecovery = async (id: string, name: string, birth: 
     const snap = await get(userRef);
     if (snap.exists()) {
         const u = snap.val();
-        if (u.name === name && u.birthDate === birth) {
-            return u.email;
-        }
+        if (u.name === name && u.birthDate === birth) return u.email;
     }
     return null;
 };
 
-// Admin Only - Heavy Fetch (DEPRECATED: Use server action 'fetch_all_users_light')
+// 🔴 [CRITICAL] Block full user fetch to prevent 200MB download
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
-    const snapshot = await get(ref(database, 'users'));
-    return snapshot.val() || {};
+    console.warn("Client-side fetchAllUsers blocked for performance. Use serverAction.");
+    return {}; 
 };
 
 export const searchUsersByName = async (name: string): Promise<User[]> => {
-    const q = query(ref(database, 'users'), orderByChild('name'), startAt(name), endAt(name + "\uf8ff"));
+    const q = query(ref(database, 'users'), orderByChild('name'), startAt(name), endAt(name + "\uf8ff"), limitToLast(10));
     const snapshot = await get(q);
     if (snapshot.exists()) return Object.values(snapshot.val());
     return [];
 };
 
 export const fetchMartUsers = async (): Promise<User[]> => {
-    const snapshot = await get(ref(database, 'users'));
+    const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
     if (snapshot.exists()) {
-        const allUsers = Object.values(snapshot.val()) as User[];
-        return allUsers.filter(u => u.type === 'mart');
+        return Object.values(snapshot.val()) as User[];
     }
     return [];
 };
@@ -209,18 +193,15 @@ export const uploadImage = async (path: string, base64: string): Promise<string>
     const formData = new FormData();
     formData.append("file", base64);
     formData.append("upload_preset", uploadPreset);
-
     try {
         const res = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-            method: "POST",
-            body: formData
+            method: "POST", body: formData
         });
-        if (!res.ok) throw new Error("이미지 서버 업로드 실패");
+        if (!res.ok) throw new Error("Upload failed");
         const data = await res.json();
         return data.secure_url; 
     } catch (e: any) {
-        console.error("Cloudinary Upload Error:", e);
-        throw new Error("사진 업로드에 실패했습니다. 다시 시도해주세요.");
+        throw new Error("사진 업로드에 실패했습니다.");
     }
 };
 
@@ -236,8 +217,12 @@ export const saveDb = async (data: DB) => {
 export const generateId = (): string => rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
 
 export const chatService = {
-    subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => onValue(ref(database, 'chatRooms'), (s) => callback(s.val() || {})),
-    subscribeToMessages: (chatId: string, limit: number = 50, callback: (messages: Record<string, ChatMessage>) => void) => onValue(query(ref(database, `chatMessages/${chatId}`), limitToLast(limit)), (s) => callback(s.val() || {})),
+    subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => 
+        onValue(ref(database, 'chatRooms'), (s) => callback(s.val() || {})),
+
+    subscribeToMessages: (chatId: string, limit: number = 20, callback: (messages: Record<string, ChatMessage>) => void) => 
+        onValue(query(ref(database, `chatMessages/${chatId}`), limitToLast(limit)), (s) => callback(s.val() || {})),
+    
     sendMessage: async (chatId: string, message: ChatMessage) => {
         await set(ref(database, `chatMessages/${chatId}/${message.id}`), sanitize(message));
         await update(ref(database, `chatRooms/${chatId}`), { lastMessage: message.text, lastTimestamp: message.timestamp });
@@ -258,7 +243,8 @@ export const chatService = {
 
 export const assetService = {
     fetchHistory: async (userId: string): Promise<AssetHistoryPoint[]> => {
-        const snapshot = await get(ref(database, `asset_histories/${toSafeId(userId)}`));
+        // Load only last 30 points
+        const snapshot = await get(query(ref(database, `asset_histories/${toSafeId(userId)}`), limitToLast(30)));
         return snapshot.exists() ? Object.values(snapshot.val()) : [];
     }
 };

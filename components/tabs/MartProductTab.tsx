@@ -37,9 +37,10 @@ export const MartProductTab: React.FC = () => {
         let imageUrl = image;
         if (image && image.startsWith('data:')) {
             try {
+                // Ensure cloud upload
                 imageUrl = await uploadImage(`products/${currentUser!.name}/${Date.now()}`, image);
             } catch (e) {
-                return showModal("이미지 업로드 실패");
+                return showModal("이미지 업로드 실패: " + e);
             }
         }
 

@@ -2,10 +2,10 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useGame } from '../context/GameContext';
-import { chatService, fetchAllUsers, uploadImage, toSafeId, database } from '../services/firebase'; 
-import { Button, Input, LineIcon, Modal, Toggle, formatName, FileInput, Card, MoneyInput } from './Shared';
+import { chatService, uploadImage, database } from '../services/firebase'; 
+import { Button, Input, LineIcon, Modal, Card, MoneyInput } from './Shared';
 import { Chat, ChatMessage, User } from '../types';
-import { ref, update, remove } from 'firebase/database';
+import { ref, remove } from 'firebase/database';
 
 // Helper for Link Parsing
 const LinkText: React.FC<{ text: string }> = ({ text }) => {
@@ -24,7 +24,7 @@ const LinkText: React.FC<{ text: string }> = ({ text }) => {
 };
 
 export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAttachTab?: (tab: string) => void }> = ({ isOpen, onClose, onAttachTab }) => {
-    const { currentUser, db, isAdminMode, notify, showModal, showConfirm, serverAction, saveDb, showPinModal, wait } = useGame();
+    const { currentUser, db, isAdminMode, notify, showModal, showConfirm, serverAction } = useGame();
     
     const [view, setView] = useState<'list' | 'chat'>('list');
     const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -76,22 +76,21 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     };
 
     useEffect(() => {
-        chatService.subscribeToChatList(setChats);
-        
+        const unsubscribe = chatService.subscribeToChatList(setChats);
+        return () => unsubscribe();
+    }, []);
+
+    useEffect(() => {
         // OPTIMIZATION: If Admin (db.users populated), use cached data instead of heavy fetch
         if (db.users && Object.keys(db.users).length > 2) {
             setUserCache(db.users);
-        } else {
-            // For normal users, try not to fetch all users if possible, or use the stripped down version
-            // For now, only load if explicitly needed (e.g. new chat) or settle for cached names
-            // If chat needs user details, it will fetch on demand or use what's available
         }
     }, [db.users]);
 
     useEffect(() => {
         if (selectedChatId) {
             setView('chat');
-            // Optimization: Reduce message limit to 20 to save bandwidth on images
+            // Optimization: Reduce message limit to 20
             return chatService.subscribeToMessages(selectedChatId, 20, setActiveMessages);
         } else {
             setView('list');
@@ -99,7 +98,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         }
     }, [selectedChatId]);
 
-    // ... (rest of the file remains unchanged, keeping previous functionality)
     useEffect(() => {
         if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }, [activeMessages, view, showAttachMenu, replyingTo]);
@@ -118,7 +116,16 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     const isAuctionChat = activeChat?.type === 'auction';
     
     const sortedChats = useMemo(() => {
-        return (Object.values(chats || {}) as Chat[]).sort((a: Chat, b: Chat) => {
+        const allChats = Object.values(chats || {}) as Chat[];
+        const myName = currentUser?.name;
+        
+        // Filter chats: Must be participant OR it's an auction (public) OR participants includes 'ALL'
+        const myChats = allChats.filter(c => 
+            c.type === 'auction' || 
+            (c.participants && (c.participants.includes(myName || '') || c.participants.includes('ALL')))
+        );
+
+        return myChats.sort((a: Chat, b: Chat) => {
             if (a.type === 'auction' && b.type !== 'auction') return -1;
             if (a.type !== 'auction' && b.type === 'auction') return 1;
             const pinA = currentUser?.chatPreferences?.[a.id]?.isPinned;
@@ -127,7 +134,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
             if (!pinA && pinB) return 1;
             return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
         });
-    }, [chats, currentUser?.chatPreferences]);
+    }, [chats, currentUser?.chatPreferences, currentUser?.name]);
 
     const isGovernor = currentUser?.govtRole === '한국은행장';
     const isBank = currentUser?.name === '한국은행';
@@ -234,6 +241,12 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
     const handleSendMessage = async (text: string = inputText, attachment?: any) => {
         if (!selectedChatId) return;
+        
+        // Ensure no raw Base64 is sent in attachment
+        if (attachment?.data?.image && String(attachment.data.image).startsWith('data:image')) {
+             return showModal("이미지 처리 오류: URL이 아닌 Base64가 감지되었습니다. 전송을 중단합니다.");
+        }
+
         if (chats[selectedChatId]?.type === 'auction') {
             const bidAmount = parseInt(text);
             if (isNaN(bidAmount)) {
@@ -262,14 +275,18 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     const handleFileUpload = async (base64: string) => {
         if (!selectedChatId) return;
         try {
+            // Force upload to Cloudinary to get URL
             const url = await uploadImage(`chat/${selectedChatId}/${Date.now()}`, base64);
+            if (!url || !url.startsWith('http')) throw new Error("Invalid URL from server");
+            
             await handleSendMessage("", {
                 type: 'image',
                 value: '사진',
-                data: { image: url }
+                data: { image: url } // Store URL only
             });
         } catch(e) {
-            showModal("사진 전송 실패");
+            console.error(e);
+            showModal("사진 업로드 및 전송에 실패했습니다.");
         }
     };
 
@@ -350,7 +367,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                         <div className={`px-4 py-2 rounded-[18px] text-sm relative shadow-sm group ${bubbleColor} ${isMine ? 'rounded-tr-none' : 'rounded-tl-none'}`}>
                             {msg.attachment?.type === 'image' ? (
                                 <div className="rounded-xl overflow-hidden mt-1 cursor-pointer" onClick={() => showModal(<img src={msg.attachment!.data.image} className="w-full"/>)}>
-                                    <img src={msg.attachment.data.image} className="max-w-full max-h-60 object-cover" />
+                                    <img src={msg.attachment.data.image} className="max-w-full max-h-60 object-cover" loading="lazy" />
                                 </div>
                             ) : msg.attachment?.type === 'transfer_request' ? (
                                 <div className="flex flex-col gap-2 min-w-[150px]">

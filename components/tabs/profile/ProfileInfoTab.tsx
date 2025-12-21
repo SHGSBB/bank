@@ -44,6 +44,7 @@ export const ProfileInfoTab: React.FC = () => {
         try {
             const safeEmail = toSafeId(currentUser.email);
             const path = `profiles/${safeEmail}_${Date.now()}.png`;
+            // Ensure Cloudinary upload
             const url = await uploadImage(path, base64);
             await updateUser(currentUser.email, { profilePic: url });
             setIdPhoto(url);

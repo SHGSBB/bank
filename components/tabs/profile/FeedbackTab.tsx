@@ -18,7 +18,7 @@ export const FeedbackTab: React.FC = () => {
         let imageUrl = null;
         if (fbImage) {
             try {
-                // Ensure unique path
+                // Ensure unique path and Cloudinary upload
                 imageUrl = await uploadImage(`feedback/${Date.now()}_${currentUser!.name}`, fbImage);
             } catch (e) {
                 console.error("Upload failed", e);

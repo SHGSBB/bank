@@ -1,12 +1,12 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Card, Button, Input, Modal, MoneyInput } from '../Shared';
+import { Card, Button, Input, Modal, MoneyInput, Spinner } from '../Shared';
 import { Transaction, LedgerItem } from '../../types';
 import { generateId } from '../../services/firebase';
 
 export const TransactionHistoryTab: React.FC = () => {
-    const { currentUser, updateUser } = useGame();
+    const { currentUser, updateUser, serverAction } = useGame();
     const [activeTab, setActiveTab] = useState<'history' | 'ledger'>('history');
     
     // Ledger View Mode
@@ -24,8 +24,29 @@ export const TransactionHistoryTab: React.FC = () => {
     const [startDate, setStartDate] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]);
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
+    
+    // Transaction Data from Server
+    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    const [isLoadingTx, setIsLoadingTx] = useState(false);
 
-    const transactions = useMemo(() => currentUser?.transactions || [], [currentUser]);
+    useEffect(() => {
+        const fetchTx = async () => {
+            if (!currentUser) return;
+            setIsLoadingTx(true);
+            try {
+                const res = await serverAction('fetch_my_transactions', { userId: currentUser.id || currentUser.email, limit: 100 });
+                if (res && res.transactions) {
+                    setTransactions(res.transactions);
+                }
+            } catch(e) {
+                console.error("Failed to load transactions", e);
+            } finally {
+                setIsLoadingTx(false);
+            }
+        };
+        if (activeTab === 'history') fetchTx();
+    }, [currentUser, activeTab]);
+
     const ledgerItems = useMemo(() => Object.values(currentUser?.ledger || {}), [currentUser]);
 
     const typeLabels: Record<string, string> = {
@@ -99,6 +120,8 @@ export const TransactionHistoryTab: React.FC = () => {
     };
 
     const renderHistoryList = () => {
+        if (isLoadingTx) return <Spinner />;
+
         const start = new Date(startDate);
         const end = new Date(endDate);
         end.setHours(23, 59, 59, 999);
