@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { 
     fetchGlobalData, 
@@ -93,7 +92,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const refreshData = useCallback(async () => {
         try {
-            const currentId = currentUser?.email || undefined;
+            // Use Email or ID as the key for fetching data. 
+            // Crucial: Use the ID if email is missing (legacy support or ID-based login)
+            const currentId = currentUser?.email || currentUser?.id || undefined;
             const data = await fetchGlobalData(currentId);
             
             setDb(prev => ({ 
@@ -105,15 +106,36 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (currentId) {
                 const safeId = toSafeId(currentId);
                 const updatedMe = (data.users && data.users[safeId]) ? data.users[safeId] : null;
+                
                 if (updatedMe) {
-                    setCurrentUser(prev => ({ ...prev!, ...updatedMe }));
-                } else {
-                    const freshUser = await fetchUserByEmail(currentId);
-                    if(freshUser) setCurrentUser(freshUser);
+                    setCurrentUser(prev => {
+                        if (!prev) return updatedMe;
+                        
+                        // [Critical Fix] If the server returned a 'diet' object (missing transactions) because it failed to identify 'me',
+                        // we MUST NOT overwrite the existing detailed data with the diet data.
+                        const isDietObject = (!updatedMe.transactions || updatedMe.transactions.length === 0) && (prev.transactions && prev.transactions.length > 0);
+                        
+                        if (isDietObject) {
+                            // Merge carefully: Keep local heavy data, update light data
+                            return {
+                                ...updatedMe,
+                                transactions: prev.transactions,
+                                notifications: prev.notifications || updatedMe.notifications,
+                                ledger: prev.ledger || updatedMe.ledger,
+                                // Ensure critical fields aren't lost
+                                name: updatedMe.name || prev.name,
+                                type: updatedMe.type || prev.type,
+                                govtRole: updatedMe.govtRole || prev.govtRole,
+                                customJob: updatedMe.customJob || prev.customJob
+                            };
+                        }
+                        
+                        return { ...prev, ...updatedMe };
+                    });
                 }
             }
         } catch(e) { console.error("Global Data Fetch Error:", e); }
-    }, [currentUser?.email]);
+    }, [currentUser?.email, currentUser?.id]);
 
     const isBOKUser = (user: User | null) => {
         if (!user) return false;
@@ -148,6 +170,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
             setIsLoading(false);
         });
+        // Initial fetch call moved to after mount to ensure context is ready
         refreshData();
         return () => unsubscribe();
     }, [db.settings.requireSignupApproval]);
@@ -179,6 +202,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             let userData = await fetchUserByLoginId(inputId);
             if (!userData && inputId.includes('@')) userData = await fetchUserByEmail(inputId);
             
+            // Allow login even if fetch failed initially (Firebase Auth will verify)
+            // But we need the email for Firebase Auth
             let actualEmail = userData?.email || inputId;
 
             const fUser = await loginWithEmail(actualEmail.toLowerCase(), pass);
@@ -188,7 +213,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
+            // Fetch again to be sure we have the latest
             userData = await fetchUserByEmail(fUser.email!);
+            
             if (!userData) {
                 setAlertMessage("계정 데이터가 존재하지 않습니다.");
                 await logoutFirebase();
@@ -225,6 +252,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (remember) localStorage.setItem('sh_user_id', userData.email!);
             await update(ref(database, `users/${toSafeId(userData.email!)}`), { isOnline: true, lastActive: Date.now() });
             
+            // Force immediate data refresh
+            await refreshData();
             return true;
         } catch (authError: any) {
             setAlertMessage("아이디 또는 비밀번호가 올바르지 않습니다.");

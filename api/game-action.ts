@@ -25,7 +25,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     try {
         // [1] 초기 데이터 조회 (Data Diet: 타인 정보 경량화)
         if (action === 'fetch_initial_data') {
-            const { currentUserId, currentEmail } = payload || {}; // SafeID and Raw Email
+            const { currentUserId, currentEmail } = payload || {}; // SafeID and Raw Email/ID
 
             const [
                 settingsSnap, reSnap, stocksSnap, countrySnap, adSnap, 
@@ -51,28 +51,31 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
             Object.keys(rawUsers).forEach(key => {
                 const u = rawUsers[key];
-                // Match by SafeID key OR by Email property to ensure we catch "Me"
-                const isMe = (currentUserId && key === currentUserId) || (currentEmail && u.email === currentEmail);
+                // [강화된 본인 식별] SafeID 매칭 OR 이메일 매칭 OR ID 매칭
+                const isMe = (currentUserId && key === currentUserId) || 
+                             (currentEmail && u.email === currentEmail) || 
+                             (currentEmail && u.id === currentEmail);
 
                 if (isMe) {
-                    // 내 정보는 상세 포함 (거래내역 최근 100개 제한)
-                    const transactions = Array.isArray(u.transactions) ? u.transactions.slice(-100) : [];
+                    // 내 정보는 상세 포함
+                    // 거래내역이 너무 많으면 최신 100개만 전송하여 로딩 속도 향상
+                    const transactions = Array.isArray(u.transactions) ? u.transactions.slice(-100) : (u.transactions ? Object.values(u.transactions).slice(-100) : []);
                     optimizedUsers[key] = { ...u, transactions };
                 } else {
-                    // 타인은 필수 정보만 포함
+                    // 타인은 필수 정보만 포함 (UI 표시에 필요한 데이터는 꼭 포함해야 함)
                     optimizedUsers[key] = {
-                        name: u.name,
+                        name: u.name || '알 수 없음', // 이름 필수 보장
                         id: u.id,
                         email: u.email,
                         type: u.type,
                         subType: u.subType,
-                        customJob: u.customJob,
+                        customJob: u.customJob || '',
                         profilePic: u.profilePic,
                         govtRole: u.govtRole,
                         govtBranch: u.govtBranch,
                         approvalStatus: u.approvalStatus,
-                        balanceKRW: u.balanceKRW,
-                        balanceUSD: u.balanceUSD,
+                        balanceKRW: u.balanceKRW || 0,
+                        balanceUSD: u.balanceUSD || 0,
                         // 무거운 데이터 제거
                         transactions: [], 
                         notifications: [],
@@ -127,6 +130,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(404).json({ error: "USER_NOT_FOUND" });
         }
 
+        // ... (나머지 로직은 기존 유지) ...
         // [3] 계정 연동 정보 조회 (병렬 조회 최적화)
         if (action === 'fetch_linked_accounts') {
             const { linkedIds } = payload;
