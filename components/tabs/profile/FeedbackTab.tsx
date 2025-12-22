@@ -18,7 +18,6 @@ export const FeedbackTab: React.FC = () => {
         let imageUrl = null;
         if (fbImage) {
             try {
-                // Ensure unique path and Cloudinary upload
                 imageUrl = await uploadImage(`feedback/${Date.now()}_${currentUser!.name}`, fbImage);
             } catch (e) {
                 console.error("Upload failed", e);
@@ -30,7 +29,7 @@ export const FeedbackTab: React.FC = () => {
         await sendMessage(chatId, `[피드백 내용]\n${fbContent}\n\n[첨부 링크]\n${fbLink || '없음'}`, imageUrl ? { type: 'image', value: '이미지 첨부', data: { image: imageUrl } } : undefined);
 
         notify('한국은행', `[피드백] ${fbTitle} 접수되었습니다.`, true);
-        showModal("관리자에게 피드백을 전송했습니다.");
+        showModal("관리자에게 피드백을 전송했습니다. 관리자 모드의 피드백 탭에서 확인할 수 있습니다.");
         setFbTitle(''); setFbContent(''); setFbLink(''); setFbImage(null);
     };
 

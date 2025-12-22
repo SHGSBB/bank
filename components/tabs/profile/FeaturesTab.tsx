@@ -10,7 +10,8 @@ export const FeaturesTab: React.FC = () => {
 
     const handleUpdatePrefs = (key: keyof UserPreferences, value: any) => {
         const newPrefs = { ...preferences, [key]: value };
-        updateUser(currentUser!.name, { preferences: newPrefs });
+        // Use ID/Email for reliable update
+        updateUser(currentUser!.id || currentUser!.email!, { preferences: newPrefs });
     };
 
     return (

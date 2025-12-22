@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect, useRef, Suspense, lazy } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Button, formatSmartMoney, formatName, LineIcon, PieChart, Spinner, Modal } from '../Shared';
+import { Button, formatSmartMoney, formatName, LineIcon, PieChart, Spinner, Modal, RichText, Input } from '../Shared';
 import { Announcement, User, TermDeposit, StockHolding, PendingTax } from '../../types';
 
 // Lazy Load Tabs
@@ -26,7 +26,6 @@ const BillTab = lazy(() => import('../tabs/BillTab').then(module => ({ default: 
 const ChatSystem = lazy(() => import('../ChatSystem').then(module => ({ default: module.ChatSystem })));
 const AuctionModal = lazy(() => import('../tabs/AuctionModal').then(module => ({ default: module.AuctionModal })));
 const AdminModeDashboard = lazy(() => import('./AdminModeDashboard').then(module => ({ default: module.AdminModeDashboard })));
-const SimplePayTab = lazy(() => import('../tabs/SimplePayTab').then(module => ({ default: module.SimplePayTab })));
 
 const Wallet: React.FC = () => {
     const { currentUser, db } = useGame();
@@ -83,7 +82,7 @@ const Wallet: React.FC = () => {
 };
 
 export const Dashboard: React.FC = () => {
-    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax, setupPin, activeTab, setActiveTab, serverAction } = useGame();
+    const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax, setupPin, activeTab, setActiveTab, serverAction, refreshData } = useGame();
     
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
@@ -92,6 +91,17 @@ export const Dashboard: React.FC = () => {
     const [taxDetail, setTaxDetail] = useState<PendingTax | null>(null);
     const [bannerIndex, setBannerIndex] = useState(0);
 
+    // Terms Update Modal State
+    const [showTermsUpdate, setShowTermsUpdate] = useState(false);
+    const [mockOldTerms, setMockOldTerms] = useState("");
+    const [mockNewTerms, setMockNewTerms] = useState("");
+    const [viewingOld, setViewingOld] = useState(false); // For hover effect
+    
+    // Announce Hidden List State
+    const [hiddenAnnouncements, setHiddenAnnouncements] = useState<number[]>(() => {
+        try { return JSON.parse(localStorage.getItem('hidden_announcements') || '[]'); } catch { return []; }
+    });
+
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
     const isPresident = currentUser?.isPresident;
@@ -99,18 +109,64 @@ export const Dashboard: React.FC = () => {
     
     const myTaxes = useMemo(() => currentUser?.pendingTaxes || [], [currentUser?.pendingTaxes]);
     const now = new Date();
-    const actionableTaxes = myTaxes.filter(t => { const isPending = t.status === 'pending'; const isPaid = t.status === 'paid'; const isOverdue = new Date(t.dueDate).getTime() <= now.getTime(); return (isPending && !isOverdue) || isPaid; });
+    
+    // Tax Logic Update:
+    // Actionable = Pending AND Not Overdue. Also Paid (for review).
+    // Overdue = Pending AND Overdue. (Shows as warning, not red banner)
+    const actionableTaxes = myTaxes.filter(t => { 
+        const isPending = t.status === 'pending'; 
+        const isPaid = t.status === 'paid'; 
+        const isOverdue = new Date(t.dueDate).getTime() <= now.getTime(); 
+        return (isPending && !isOverdue) || isPaid; 
+    });
+    
     const overdueTaxes = myTaxes.filter(t => t.status === 'pending' && new Date(t.dueDate).getTime() <= now.getTime());
     
     const activeAnnouncements = useMemo(() => { 
         if (!db.announcements) return []; 
         const list = Array.isArray(db.announcements) ? db.announcements : Object.values(db.announcements);
-        return list.filter(a => { 
+        
+        return (list as Announcement[]).filter(a => { 
             const createTime = new Date(a.date).getTime(); 
             const expireTime = createTime + (a.displayPeriodDays * 24 * 60 * 60 * 1000); 
-            return Date.now() <= expireTime; 
+            return Date.now() <= expireTime && !hiddenAnnouncements.includes(a.id);
         }); 
+    }, [db.announcements, hiddenAnnouncements]);
+
+    // Check for Terms Update Announcement
+    useEffect(() => {
+        const termsUpdate = db.announcements?.find(a => a.category === 'terms_update');
+        if (termsUpdate) {
+            const hasSeen = localStorage.getItem(`seen_terms_update_${termsUpdate.id}`);
+            if (!hasSeen) {
+                // Content Format: OLD|||NEW
+                const parts = termsUpdate.content.split('|||');
+                if (parts.length === 2) {
+                    setMockOldTerms(parts[0]);
+                    setMockNewTerms(parts[1]);
+                } else {
+                    setMockNewTerms(termsUpdate.content);
+                    setMockOldTerms("이전 약관 내용 없음");
+                }
+                setShowTermsUpdate(true);
+            }
+        }
     }, [db.announcements]);
+
+    const handleHideAnnouncement = (id: number) => {
+        const newList = [...hiddenAnnouncements, id];
+        setHiddenAnnouncements(newList);
+        localStorage.setItem('hidden_announcements', JSON.stringify(newList));
+    };
+
+    const handleTermsAgree = () => {
+        const termsUpdate = db.announcements?.find(a => a.category === 'terms_update');
+        if(termsUpdate) {
+            localStorage.setItem(`seen_terms_update_${termsUpdate.id}`, 'true');
+        }
+        setShowTermsUpdate(false);
+        showModal("변경된 약관에 동의하였습니다.");
+    };
 
     const currentBannerTax = actionableTaxes[bannerIndex] || actionableTaxes[0];
 
@@ -122,8 +178,8 @@ export const Dashboard: React.FC = () => {
         if (isTeacher) return ['교사', '운영 관리', '이체', '거래 내역'];
         if (isPresident) return ['국정 운영', '정부', '이체', '거래 내역'];
         if (currentUser?.type === 'government') return ['정부', '이체', '거래 내역', '고지서'];
-        if (currentUser?.type === 'citizen') return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '간편결제', '거래 내역', '기준표'];
-        if (currentUser?.type === 'mart') return ['물품관리', '가게설정', '간편결제', '이체', '주식', '고지서', '거래 내역'];
+        if (currentUser?.type === 'citizen') return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역', '기준표'];
+        if (currentUser?.type === 'mart') return ['물품관리', '가게설정', '이체', '주식', '고지서', '거래 내역'];
         if (currentUser?.type === 'admin') return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
         return ['이체', '거래 내역'];
     }, [currentUser, isTeacher, isPresident, isEasyMode, isBOK]);
@@ -168,16 +224,58 @@ export const Dashboard: React.FC = () => {
                         )}
                     </div>
                     
+                    {/* Overdue Tax Warning (Fixed Yellow Banner) */}
+                    {overdueTaxes.length > 0 && (
+                        <div className="mb-4 bg-yellow-100 dark:bg-yellow-900/40 border-l-4 border-yellow-500 text-yellow-800 dark:text-yellow-200 p-4 rounded-r shadow-sm flex justify-between items-center animate-pulse">
+                            <div>
+                                <p className="font-bold text-sm">⚠️ 세금 납부 의무 미이행</p>
+                                <p className="text-xs mt-1">납부기한이 지난 세금이 있습니다. 계속 연체 시 과태료가 부과될 수 있습니다.</p>
+                            </div>
+                            <Button className="text-xs bg-yellow-600 hover:bg-yellow-500 border-none" onClick={() => setActiveTab('고지서')}>확인하기</Button>
+                        </div>
+                    )}
+
+                    {/* Announcements */}
                     {activeAnnouncements.length > 0 && (
-                        <div className="mb-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-xl p-3 flex flex-col gap-2 animate-slide-down origin-top">
+                        <div className="mb-6 space-y-3">
                             {activeAnnouncements.map(a => (
-                                <div key={a.id} className="flex items-start gap-2">
-                                    <span className="text-xl">📢</span>
-                                    <div>
-                                        <p className={`text-sm ${a.isImportant ? 'font-bold text-red-600' : 'text-gray-800 dark:text-gray-200'}`}>
-                                            {a.content}
-                                        </p>
-                                        <p className="text-[10px] text-gray-500">{new Date(a.date).toLocaleDateString()}</p>
+                                <div key={a.id} className="relative bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-gray-800 rounded-xl p-4 shadow-sm group animate-slide-down">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div className="flex-1">
+                                            {a.category === 'terms_update' ? (
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded">약관 변경</span>
+                                                    <span className="text-sm font-bold">서비스 이용약관이 변경되었습니다.</span>
+                                                </div>
+                                            ) : (
+                                                a.isImportant && <span className="inline-block bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded mb-2">중요 공지</span>
+                                            )}
+                                            
+                                            {a.category === 'terms_update' ? (
+                                                <button 
+                                                    onClick={() => { 
+                                                        const parts = a.content.split('|||');
+                                                        setMockOldTerms(parts.length > 1 ? parts[0] : "내용 없음");
+                                                        setMockNewTerms(parts.length > 1 ? parts[1] : a.content);
+                                                        setShowTermsUpdate(true); 
+                                                    }}
+                                                    className="text-xs font-bold text-blue-600 dark:text-blue-400 hover:underline"
+                                                >
+                                                    변경된 내용 확인하기 &gt;
+                                                </button>
+                                            ) : (
+                                                <RichText text={a.content} className={`text-sm leading-relaxed ${a.isImportant ? 'font-bold' : 'text-gray-600 dark:text-gray-300'}`} />
+                                            )}
+                                            <p className="text-[10px] text-gray-400 mt-2">{new Date(a.date).toLocaleDateString()}</p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button 
+                                                onClick={() => handleHideAnnouncement(a.id)}
+                                                className="text-[10px] text-gray-400 border border-gray-300 dark:border-gray-700 px-2 py-1 rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors whitespace-nowrap"
+                                            >
+                                                다시 보지 않기
+                                            </button>
+                                        </div>
                                     </div>
                                 </div>
                             ))}
@@ -210,15 +308,6 @@ export const Dashboard: React.FC = () => {
                                 )}
                             </div>
                         )}
-                        {overdueTaxes.map(t => (
-                            <div key={t.id} className="bg-orange-100 dark:bg-orange-900/30 border-l-4 border-orange-500 text-orange-800 dark:text-orange-200 p-4 rounded-r shadow-sm flex justify-between items-center">
-                                <div>
-                                    <p className="font-bold text-sm">⚠️ {getTaxName(t.type)}를 미납하셨습니다.</p>
-                                    <p className="text-xs mt-1">납부기한이 지났습니다. 본인의 재산에서 과태료가 징수될 수 있습니다.</p>
-                                </div>
-                                <Button className="text-xs bg-orange-600 hover:bg-orange-500 border-none" onClick={() => setActiveTab('고지서')}>확인</Button>
-                            </div>
-                        ))}
                     </div>
 
                     <div className="flex items-center gap-4 mb-8 px-2">
@@ -261,7 +350,6 @@ export const Dashboard: React.FC = () => {
                             {activeTab === '기준표' && <StandardTableTab />}
                             {activeTab === '재정 관리' && <AdminFinanceTab restricted={false} />}
                             {activeTab === '신청 관리' && <AdminRequestTab />}
-                            {activeTab === '간편결제' && <SimplePayTab />}
                         </Suspense>
                     </div>
                 </div>
@@ -314,6 +402,41 @@ export const Dashboard: React.FC = () => {
 
             <Modal isOpen={isProfileOpen} onClose={() => setIsProfileOpen(false)} title="설정" wide>
                 <Suspense fallback={<Spinner />}><ProfileSettingsTab /></Suspense>
+            </Modal>
+
+            {/* Terms Update Modal (Diff View) */}
+            <Modal isOpen={showTermsUpdate} onClose={() => {}} title="약관 변경 안내">
+                <div className="space-y-4">
+                    <p className="text-sm font-bold text-red-600">이용 약관이 변경되었습니다.</p>
+                    <p className="text-xs text-gray-500">
+                        * 마우스를 올려(터치하여) 변경 전 내용을 확인할 수 있습니다.<br/>
+                        * 빨간색 텍스트는 변경된 부분입니다.
+                    </p>
+                    
+                    <div 
+                        className="bg-gray-50 dark:bg-gray-900 border rounded-lg p-4 max-h-[400px] overflow-y-auto relative"
+                        onMouseEnter={() => setViewingOld(true)}
+                        onMouseLeave={() => setViewingOld(false)}
+                        onTouchStart={() => setViewingOld(true)}
+                        onTouchEnd={() => setViewingOld(false)}
+                    >
+                        {viewingOld ? (
+                            <div className="animate-fade-in text-gray-500 dark:text-gray-400">
+                                <p className="text-xs font-bold mb-2 uppercase tracking-widest sticky top-0 bg-gray-50 dark:bg-gray-900 z-10 py-1 border-b">변경 전 (Old)</p>
+                                <RichText text={mockOldTerms} className="line-through opacity-70" />
+                            </div>
+                        ) : (
+                            <div className="animate-fade-in">
+                                <p className="text-xs font-bold mb-2 uppercase tracking-widest text-red-600 sticky top-0 bg-gray-50 dark:bg-gray-900 z-10 py-1 border-b">변경 후 (New)</p>
+                                <RichText text={mockNewTerms} className="text-red-600 font-medium" />
+                            </div>
+                        )}
+                    </div>
+                    
+                    <Button onClick={handleTermsAgree} className="w-full py-4 text-lg font-black bg-red-600 hover:bg-red-500 shadow-xl">
+                        변경된 약관에 동의합니다
+                    </Button>
+                </div>
             </Modal>
         </div>
     );

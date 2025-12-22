@@ -127,13 +127,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             
             if (currentUser) {
                 const uid = currentUser.id || currentUser.email!;
-                // Changed: Call lightweight server API instead of client SDK full download
                 const userData = await serverAction('fetch_my_lite_info', { userId: uid });
                 if (userData && userData.id) {
+                    // Ensure pendingTaxes is array
+                    if (userData.pendingTaxes && !Array.isArray(userData.pendingTaxes)) {
+                        userData.pendingTaxes = Object.values(userData.pendingTaxes);
+                    }
                     setCurrentUser(prev => {
-                        // Merge with existing to keep history if we already have it from login
+                        // Merge logic: prefer new data but keep existing structure if missing
                         if (!prev) return userData;
-                        // Avoid deep merging huge arrays if not changed
                         return { ...prev, ...userData };
                     });
                 }
@@ -180,17 +182,25 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     }, [currentUser?.name, currentUser?.govtRole, currentUser?.type]);
 
-    // Main Auth Listener
+    // Main Auth Listener & Loop Prevention
+    useEffect(() => {
+        if (currentUser?.email) {
+            refreshData();
+        }
+    }, [currentUser?.email, currentUser?.id]); 
+
+    // Initial Auth
     useEffect(() => {
         let isMount = true;
         
         const initAuth = async () => {
-            // Priority: Local Storage "Switch" Mode
             const switchedId = localStorage.getItem('sh_user_id');
             if (switchedId) {
-                // Fetch full info ONCE on hard reload/login, then use lite for refresh
                 const switchedUser = await fetchUserByLoginId(switchedId);
                 if (switchedUser && isMount) {
+                    if (switchedUser.pendingTaxes && !Array.isArray(switchedUser.pendingTaxes)) {
+                        switchedUser.pendingTaxes = Object.values(switchedUser.pendingTaxes);
+                    }
                     setCurrentUser(switchedUser);
                     if (isBOKUser(switchedUser)) setAdminMode(false);
                     const userKey = toSafeId(switchedUser.id || switchedUser.email!);
@@ -204,7 +214,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             const unsubscribe = subscribeAuth(async (firebaseUser) => {
                 if (!isMount) return;
-                
                 if (localStorage.getItem('sh_user_id')) return;
 
                 if (firebaseUser) {
@@ -217,7 +226,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     const userData = await fetchUserByEmail(firebaseUser.email!);
                     if (userData) {
                         const requireApproval = db.settings.requireSignupApproval !== false;
+                        
                         if (userData.approvalStatus === 'approved' || !requireApproval || isBOKUser(userData)) {
+                            if (userData.pendingTaxes && !Array.isArray(userData.pendingTaxes)) {
+                                userData.pendingTaxes = Object.values(userData.pendingTaxes);
+                            }
                             setCurrentUser(userData);
                             localStorage.setItem('sh_user_id', userData.id || userData.email!);
                             
@@ -237,16 +250,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 }
                 setIsLoading(false);
             });
-            
             return unsubscribe;
         };
 
-        // Use server action to fetch initial lightweight data
         serverAction('fetch_initial_data', {}).then((data) => {
             if(isMount) setDb(prev => ({ ...prev, ...data }));
             initAuth();
         }).catch(() => {
-            // Fallback: load essentials manually if server fails, but minimize user fetch
             fetchEssentials().then((data) => {
                 if(isMount) setDb(prev => ({ ...prev, ...data }));
                 initAuth();
@@ -262,7 +272,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const loadAllUsers = async () => {
-        // Optimized for Data Diet: ONLY use server action
         setSimulatedLoading(true);
         try {
             const res = await serverAction('fetch_all_users_light', {});
@@ -298,6 +307,31 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             await loginWithEmail(actualEmail, pass);
             
+            // Check Approval Status explicitly on login
+            const requireApproval = db.settings.requireSignupApproval !== false;
+            if (requireApproval && userData.approvalStatus !== 'approved' && !isBOKUser(userData)) {
+                await logoutFirebase();
+                setAlertMessage("가입 승인 대기 중입니다. 관리자에게 문의하세요.");
+                return false;
+            }
+
+            // PIN Setup Logic
+            if (!userData.pin) {
+                setSimulatedLoading(false); // Hide loading to show modal
+                // Allow user to choose length, default to 6 in the call but UI handles toggle if expectedPin is undefined
+                const newPin = await showPinModal("보안을 위해 PIN(간편비밀번호)을 설정해주세요.", undefined, 6, false);
+                if (!newPin) {
+                    await logoutFirebase();
+                    setAlertMessage("PIN 설정을 취소하여 로그인이 중단되었습니다.");
+                    return false;
+                }
+                const userKey = toSafeId(userData.id || userData.email!);
+                await update(ref(database, `users/${userKey}`), { pin: newPin, pinLength: newPin.length });
+                userData.pin = newPin; // Update local data
+                userData.pinLength = newPin.length;
+                setSimulatedLoading(true); // Resume loading state if needed
+            }
+
             const userId = userData.id || userData.email!;
             localStorage.setItem('sh_user_id', userId);
             setCurrentUser(userData);
@@ -305,7 +339,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             try {
                 const historyStr = localStorage.getItem('sh_login_history');
                 const history = historyStr ? JSON.parse(historyStr) : [];
-                // Only store lightweight profile info locally
                 const newEntry = {
                     email: userData.email, name: userData.name, id: userData.id, 
                     profilePic: (userData.profilePic && userData.profilePic.length < 500) ? userData.profilePic : null, 
@@ -363,6 +396,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const initialBalance = isKoreaBank ? 1000000000000000 : 0;
             const finalType = isKoreaBank ? 'admin' : (userData.type || 'citizen');
             
+            // Check if approval is required (default true)
+            const requireApproval = db.settings.requireSignupApproval !== false;
+            // If approval NOT required, approve immediately
+            const approvalStatus = (!requireApproval || isKoreaBank || userData.approvalStatus === 'approved') ? 'approved' : 'pending';
+
             const newUser: User = {
                 id: userData.id!.trim(), 
                 email: userEmail,
@@ -372,7 +410,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 subType: userData.subType || 'personal',
                 govtRole: userData.govtRole || '',
                 govtBranch: userData.govtBranch || [],
-                approvalStatus: userData.approvalStatus || 'pending',
+                approvalStatus,
                 balanceKRW: initialBalance,
                 balanceUSD: 0,
                 birthDate: userData.birthDate || '',
@@ -406,12 +444,23 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const targetKey = key || currentUser?.id || currentUser?.email;
         if (!targetKey) return;
         const safeKey = toSafeId(targetKey);
-        await update(ref(database, `users/${safeKey}`), sanitize(data));
         
-        // Refresh ONLY current user via LITE fetch
+        // Optimistic UI Update: If updating current user, update local state immediately
         if (currentUser && (targetKey === currentUser.id || targetKey === currentUser.email)) {
-            const userData = await serverAction('fetch_my_lite_info', { userId: targetKey });
-            if(userData && userData.id) setCurrentUser(prev => ({...prev, ...userData}));
+            setCurrentUser(prev => {
+                if (!prev) return null;
+                // Deep merge preferences if present
+                if (data.preferences) {
+                    return { ...prev, ...data, preferences: { ...prev.preferences, ...data.preferences } };
+                }
+                return { ...prev, ...data };
+            });
+        }
+
+        try {
+            await update(ref(database, `users/${safeKey}`), sanitize(data));
+        } catch (e) {
+            console.error("DB Update failed", e);
         }
     };
 
@@ -543,14 +592,18 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
             const userData = await fetchUserByEmail(targetEmail);
             if (userData) { 
-                setCurrentUser(userData);
                 localStorage.setItem('sh_user_id', userData.id || userData.email!);
-                setAdminMode(false);
+                // Critical fix: Wait for localStorage to be reliably set before reloading
+                await new Promise(resolve => setTimeout(resolve, 100));
+                window.location.reload();
                 return true; 
             }
             return false;
+        } catch(e) {
+            setAlertMessage("계전 전환 실패");
+            return false;
         } finally { 
-            setSimulatedLoading(false); 
+            // Don't disable loading here if successful, as reload happens
         }
     };
 
@@ -582,8 +635,15 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if (bank) bank.balanceKRW += tax.amount;
         me.balanceKRW -= tax.amount;
         
+        // Ensure pendingTaxes is array
+        if (!Array.isArray(me.pendingTaxes)) {
+            // @ts-ignore - Handle legacy object structure if present
+            me.pendingTaxes = me.pendingTaxes ? Object.values(me.pendingTaxes) : [];
+        }
+
         const myTaxIdx = (me.pendingTaxes || []).findIndex(t => t.id === tax.id);
         if(myTaxIdx !== -1 && me.pendingTaxes) me.pendingTaxes[myTaxIdx].status = 'paid';
+        
         const date = new Date().toISOString();
         me.transactions = [...(me.transactions||[]), { id: Date.now(), type: 'tax', amount: -tax.amount, currency: 'KRW', description: `${tax.type} 납부`, date }];
         if (bank) bank.transactions = [...(bank.transactions||[]), { id: Date.now(), type: 'income', amount: tax.amount, currency: 'KRW', description: `${me.name} ${tax.type} 납부`, date }];
@@ -595,11 +655,14 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const dismissTax = async (taxId: string) => {
         if(!currentUser) return;
         const userKey = toSafeId(currentUser.id || currentUser.email!);
-        const currentTaxes = currentUser.pendingTaxes || [];
+        
+        // Ensure array
+        let currentTaxes = currentUser.pendingTaxes || [];
+        if (!Array.isArray(currentTaxes)) currentTaxes = Object.values(currentTaxes);
+
         const newTaxes = currentTaxes.filter(t => t.id !== taxId);
         await update(ref(database, `users/${userKey}`), { pendingTaxes: newTaxes });
         
-        // Local update
         setCurrentUser(prev => prev ? { ...prev, pendingTaxes: newTaxes } : null);
     };
 

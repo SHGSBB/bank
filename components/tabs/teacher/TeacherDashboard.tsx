@@ -173,7 +173,9 @@ export const TeacherDashboard: React.FC = () => {
                         <Input placeholder="유저 검색..." onChange={e => setGodTarget(e.target.value)} />
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            {(Object.values(db.users) as User[]).filter(u => u.type !== 'admin' && u.name.includes(godTarget || '')).map(u => (
+                            {(Object.values(db.users) as User[])
+                                .filter(u => u.type !== 'admin' && (u.name || '').includes(godTarget || ''))
+                                .map(u => (
                                 <div key={u.name} className="border p-3 rounded flex flex-col gap-2">
                                     <div className="flex justify-between">
                                         <span className="font-bold">{u.name}</span>

@@ -20,10 +20,16 @@ export const SecurityTab: React.FC = () => {
     const [isBioSupported, setIsBioSupported] = useState(false);
     const [bioEnabled, setBioEnabled] = useState(currentUser?.preferences?.biometricEnabled || false);
 
+    const userKey = currentUser!.id || currentUser!.email!;
+
     useEffect(() => {
         const check = async () => {
-            const supported = await checkBiometricSupport();
-            setIsBioSupported(supported);
+            try {
+                const supported = await checkBiometricSupport();
+                setIsBioSupported(supported);
+            } catch(e) {
+                console.warn("Biometric check failed silently", e);
+            }
         };
         check();
     }, []);
@@ -31,7 +37,7 @@ export const SecurityTab: React.FC = () => {
     const handleIdChange = async () => {
         if (!newId.trim()) return showModal("새 아이디를 입력하세요.");
         if (currentPwForId !== currentUser?.password) return showModal("현재 비밀번호가 일치하지 않습니다.");
-        updateUser(currentUser!.name, { id: newId.trim() });
+        updateUser(userKey, { id: newId.trim() });
         showModal('아이디가 변경되었습니다.');
         setNewId(''); setCurrentPwForId('');
     };
@@ -39,7 +45,7 @@ export const SecurityTab: React.FC = () => {
     const handlePasswordChange = async () => {
         if (oldPw !== currentUser?.password) return showModal('현재 비밀번호가 일치하지 않습니다.');
         if (newPw !== newPwConfirm) return showModal('새 비밀번호가 일치하지 않습니다.');
-        updateUser(currentUser!.name, { password: newPw });
+        updateUser(userKey, { password: newPw });
         showModal('비밀번호가 변경되었습니다.');
         setOldPw(''); setNewPw(''); setNewPwConfirm('');
     };
@@ -50,7 +56,7 @@ export const SecurityTab: React.FC = () => {
         const current = await showPinModal("변경 확인을 위해 현재 PIN을 입력하세요.", currentUser?.pin!, (currentUser?.pinLength as 4 | 6) || 4);
         if(current !== currentUser?.pin) return;
         
-        await updateUser(currentUser!.name, { pin: newPinSimple, pinLength: newPinSimple.length as any });
+        await updateUser(userKey, { pin: newPinSimple, pinLength: newPinSimple.length as any });
         showModal('간편번호가 변경되었습니다.');
         setNewPinSimple('');
     };
@@ -70,7 +76,7 @@ export const SecurityTab: React.FC = () => {
             const success = await registerBiometrics(currentUser!.id!, currentUser!.name);
             if (success) {
                 const prefs = currentUser?.preferences || {};
-                await updateUser(currentUser!.name, { preferences: { ...prefs, biometricEnabled: true } });
+                await updateUser(userKey, { preferences: { ...prefs, biometricEnabled: true } });
                 setBioEnabled(true);
                 showModal("✅ 생체 정보가 등록되었습니다.");
             } else {
@@ -78,7 +84,7 @@ export const SecurityTab: React.FC = () => {
             }
         } else {
             const prefs = currentUser?.preferences || {};
-            await updateUser(currentUser!.name, { preferences: { ...prefs, biometricEnabled: false } });
+            await updateUser(userKey, { preferences: { ...prefs, biometricEnabled: false } });
             setBioEnabled(false);
             showModal("생체 인증 사용이 해제되었습니다.");
         }
@@ -86,12 +92,12 @@ export const SecurityTab: React.FC = () => {
 
     const handleToggle2FA = async (val: boolean) => {
         const prefs = currentUser?.preferences || {};
-        await updateUser(currentUser!.name, { preferences: { ...prefs, use2FA: val } });
+        await updateUser(userKey, { preferences: { ...prefs, use2FA: val } });
         showModal(val ? "로그인 시 2단계 인증(PIN)이 활성화되었습니다." : "2단계 인증이 비활성화되었습니다.");
     };
 
     return (
-        <div className="space-y-6">
+        <div className="space-y-6 w-full h-full min-h-[400px]">
             {/* 2FA Section */}
             <div className="bg-indigo-50 dark:bg-indigo-900/20 p-4 rounded-2xl border border-indigo-200 dark:border-indigo-800">
                 <div className="flex justify-between items-center">

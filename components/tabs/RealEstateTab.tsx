@@ -106,7 +106,6 @@ export const RealEstateTab: React.FC = () => {
     };
 
     const renderGrid = () => {
-        // Admin layout: 6 columns
         const cols = 6;
         const indices = Array.from({ length: 18 }, (_, i) => i + 1);
         
@@ -131,6 +130,26 @@ export const RealEstateTab: React.FC = () => {
                     let rowSpan = 'row-span-1';
                     if (isMall1) rowSpan = 'row-span-2';
 
+                    // Determine Style Classes
+                    let bgClass = 'bg-white dark:bg-[#2D2D2D]';
+                    let borderClass = 'border-gray-200 dark:border-gray-700';
+                    
+                    if (isRedZone) {
+                        bgClass = 'bg-red-50 dark:bg-red-900/40';
+                        borderClass = 'border-red-400';
+                    }
+                    if (isOwnedByMe) {
+                        bgClass = 'bg-green-100 dark:bg-green-900/40';
+                        borderClass = 'border-green-500';
+                    } else if (isTenantMe) {
+                        bgClass = 'bg-blue-100 dark:bg-blue-900/40';
+                        borderClass = 'border-blue-500';
+                    }
+
+                    if (isSelected) {
+                        borderClass += ' ring-2 ring-yellow-400 z-10';
+                    }
+
                     return (
                         <div 
                             key={id}
@@ -138,15 +157,19 @@ export const RealEstateTab: React.FC = () => {
                             className={`
                                 col-span-1 ${rowSpan}
                                 min-h-[6rem] rounded-xl p-1 flex flex-col items-center justify-center cursor-pointer border-2 transition-all text-[10px] sm:text-xs relative shadow-sm
-                                ${isOwnedByMe ? 'bg-green-100 border-green-500' : (isTenantMe ? 'bg-blue-100 border-blue-500' : (isRedZone ? 'bg-red-50 border-red-200' : 'bg-white dark:bg-[#2D2D2D] border-gray-200 dark:border-gray-700'))}
-                                ${isSelected ? 'ring-2 ring-yellow-400 z-10 scale-105' : ''}
+                                ${bgClass} ${borderClass}
+                                ${isSelected ? 'scale-105' : ''}
                             `}
                         >
                             <span className="font-bold truncate w-full text-center">
                                 {cell.owner ? (cell.isJointOwnership ? '공동' : cell.owner) : `빈 집 ${id}`}
                             </span>
-                            <span className="text-[9px] text-gray-500 mt-1">{formatShortPrice(cell.price)}</span>
-                            {cell.tenant && <span className="text-[8px] text-blue-500 bg-blue-50 px-1 rounded absolute bottom-1 right-1">임대중</span>}
+                            {cell.tenant && (
+                                <span className="text-[9px] text-gray-500 truncate w-full text-center">
+                                    임대: {cell.tenant}
+                                </span>
+                            )}
+                            <span className="text-[9px] opacity-70 mt-1">{formatShortPrice(cell.price)}</span>
                             {isRedZone && <span className="absolute top-1 right-1 text-[9px] text-red-500 font-bold">상가</span>}
                         </div>
                     );

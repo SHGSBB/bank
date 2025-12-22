@@ -1,13 +1,12 @@
 
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
-import { Card, Button, Input } from '../../Shared';
+import { Card, Button, Input, RichText } from '../../Shared';
 
 export const ConsentsTab: React.FC = () => {
     const { db, saveDb, showModal } = useGame();
     const consents = db.settings.consents || {};
     
-    // State to hold local edits before saving
     // Helper to decode <br> to \n for editing
     const decodeContent = (html: string) => {
         return html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/?p>/gi, '').trim();
@@ -25,8 +24,13 @@ export const ConsentsTab: React.FC = () => {
         }, {} as any)
     );
 
+    // Ensure general provisions exists in local state
+    if (!localConsents['general']) {
+        localConsents['general'] = { title: '서비스 이용 약관 (총칙)', content: '총칙 내용을 입력하세요.', isMandatory: true };
+    }
+
     const handleUpdate = (key: string, field: 'title' | 'content' | 'isMandatory', val: any) => {
-        setLocalConsents(prev => ({
+        setLocalConsents((prev: any) => ({
             ...prev,
             [key]: { ...prev[key], [field]: val }
         }));
@@ -46,13 +50,14 @@ export const ConsentsTab: React.FC = () => {
 
     const handleAdd = () => {
         const id = `custom_${Date.now()}`;
-        setLocalConsents(prev => ({
+        setLocalConsents((prev: any) => ({
             ...prev,
             [id]: { title: '새 약관', content: '내용을 입력하세요.', isMandatory: true }
         }));
     };
 
     const handleDelete = (key: string) => {
+        if (key === 'general') return showModal("총칙은 삭제할 수 없습니다.");
         const newC = { ...localConsents };
         delete newC[key];
         setLocalConsents(newC);
@@ -65,7 +70,33 @@ export const ConsentsTab: React.FC = () => {
                 <Button onClick={handleAdd} className="text-sm py-1">약관 추가</Button>
             </div>
             
-            {Object.keys(localConsents).map(key => (
+            {/* General Provisions First */}
+            {localConsents['general'] && (
+                <Card className="border-l-4 border-blue-500 bg-blue-50/20 dark:bg-blue-900/10">
+                    <div className="flex justify-between items-center mb-3">
+                        <h4 className="font-bold text-lg text-blue-600">📜 서비스 이용 약관 (총칙)</h4>
+                        <span className="text-xs text-gray-500">필수 항목 (삭제 불가)</span>
+                    </div>
+                    <div className="space-y-2 w-full">
+                        <div>
+                            <label className="text-sm font-medium mb-1 block">내용 (30초 강제 열람 적용됨)</label>
+                            <textarea 
+                                className="w-full p-3 rounded-xl bg-white dark:bg-[#2D2D2D] dark:text-[#E0E0E0] outline-none focus:ring-2 focus:ring-blue-500 border border-gray-200 dark:border-gray-700"
+                                rows={10}
+                                value={localConsents['general'].content} 
+                                onChange={e => handleUpdate('general', 'content', e.target.value)}
+                                placeholder="총칙 내용을 입력하세요."
+                            />
+                            <div className="mt-2 p-3 bg-white dark:bg-black rounded border border-gray-200 dark:border-gray-700 max-h-40 overflow-y-auto">
+                                <p className="text-xs font-bold text-gray-500 mb-1">미리보기 (스타일 확인)</p>
+                                <RichText text={localConsents['general'].content} className="text-sm" />
+                            </div>
+                        </div>
+                    </div>
+                </Card>
+            )}
+
+            {Object.keys(localConsents).filter(k => k !== 'general').map(key => (
                 <Card key={key}>
                     <div className="flex justify-between items-center mb-3">
                         <h4 className="font-bold uppercase text-xs text-gray-500">{key}</h4>
@@ -90,19 +121,19 @@ export const ConsentsTab: React.FC = () => {
                             <label className="text-sm font-bold">회원가입 시 필수 동의</label>
                         </div>
                         <div>
-                            <label className="text-sm font-medium mb-1 block">내용 (줄바꿈 자동 변환)</label>
+                            <label className="text-sm font-medium mb-1 block">내용</label>
                             <textarea 
                                 className="w-full p-2 rounded-md bg-[#F0F0F0] text-[#121212] dark:bg-[#2D2D2D] dark:text-[#E0E0E0] outline-none focus:ring-2 focus:ring-green-500"
-                                rows={8}
+                                rows={5}
                                 value={localConsents[key].content} 
                                 onChange={e => handleUpdate(key, 'content', e.target.value)}
-                                placeholder="약관 내용을 입력하세요. 엔터를 치면 자동으로 줄바꿈 처리됩니다."
+                                placeholder="약관 내용을 입력하세요."
                             />
                         </div>
                     </div>
                 </Card>
             ))}
-            <Button className="w-full" onClick={handleSaveAll}>모든 약관 저장</Button>
+            <Button className="w-full py-4 text-lg" onClick={handleSaveAll}>모든 약관 저장</Button>
         </div>
     );
 };

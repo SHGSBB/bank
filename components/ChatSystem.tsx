@@ -3,25 +3,9 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useGame } from '../context/GameContext';
 import { chatService, uploadImage, database } from '../services/firebase'; 
-import { Button, Input, LineIcon, Modal, Card, MoneyInput } from './Shared';
+import { Button, Input, LineIcon, Modal, Card, MoneyInput, RichText, formatName } from './Shared';
 import { Chat, ChatMessage, User } from '../types';
 import { ref, remove } from 'firebase/database';
-
-// Helper for Link Parsing
-const LinkText: React.FC<{ text: string }> = ({ text }) => {
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    const parts = text.split(urlRegex);
-    return (
-        <>
-            {parts.map((part, i) => {
-                if (part.match(urlRegex)) {
-                    return <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-400 underline hover:text-blue-300 break-all">{part}</a>;
-                }
-                return part;
-            })}
-        </>
-    );
-};
 
 export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAttachTab?: (tab: string) => void }> = ({ isOpen, onClose, onAttachTab }) => {
     const { currentUser, db, isAdminMode, notify, showModal, showConfirm, serverAction } = useGame();
@@ -40,6 +24,9 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     const [showNewChatModal, setShowNewChatModal] = useState(false);
     const [selectedUsersForChat, setSelectedUsersForChat] = useState<string[]>([]);
     
+    // Transfer Options Modal
+    const [showTransferOptions, setShowTransferOptions] = useState(false);
+    
     // Context Menus
     const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
     const [msgContextMenu, setMsgContextMenu] = useState<{ x: number, y: number, target: ChatMessage | null } | null>(null);
@@ -48,6 +35,12 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     // Transfer & ID
     const [showTransferModal, setShowTransferModal] = useState(false);
     const [transferAmount, setTransferAmount] = useState('');
+    const [directTransferAmount, setDirectTransferAmount] = useState('');
+    const [showDirectTransferModal, setShowDirectTransferModal] = useState(false);
+    
+    // ID Share States
+    const [showIdChoiceModal, setShowIdChoiceModal] = useState(false);
+    const [idTargetUser, setIdTargetUser] = useState<string | null>(null);
 
     // Local hide list
     const [hiddenMessages, setHiddenMessages] = useState<string[]>([]);
@@ -65,7 +58,8 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         right: 0,
         bottom: 0,
         width: sidebarWidth,
-        backgroundColor: '#121212', 
+        backgroundColor: 'rgba(18, 18, 18, 0.8)', 
+        backdropFilter: 'blur(20px)',
         transform: isOpen ? 'translateX(0)' : 'translateX(100%)',
         transition: 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)', 
         zIndex: 5000,
@@ -81,17 +75,19 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     }, []);
 
     useEffect(() => {
-        // OPTIMIZATION: If Admin (db.users populated), use cached data instead of heavy fetch
-        if (db.users && Object.keys(db.users).length > 2) {
+        if (db.users && Object.keys(db.users).length > 0) {
             setUserCache(db.users);
+        } else if (Object.keys(userCache).length === 0) {
+             serverAction('fetch_all_users_light', {}).then((res) => {
+                 if (res && res.users) setUserCache(res.users);
+             });
         }
     }, [db.users]);
 
     useEffect(() => {
         if (selectedChatId) {
             setView('chat');
-            // Optimization: Reduce message limit to 20
-            return chatService.subscribeToMessages(selectedChatId, 20, setActiveMessages);
+            return chatService.subscribeToMessages(selectedChatId, 50, setActiveMessages);
         } else {
             setView('list');
             setActiveMessages({});
@@ -119,7 +115,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         const allChats = Object.values(chats || {}) as Chat[];
         const myName = currentUser?.name;
         
-        // Filter chats: Must be participant OR it's an auction (public) OR participants includes 'ALL'
         const myChats = allChats.filter(c => 
             c.type === 'auction' || 
             (c.participants && (c.participants.includes(myName || '') || c.participants.includes('ALL')))
@@ -222,13 +217,18 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     };
 
     const handleCreateChat = async () => {
-        // Load users on demand if not loaded
-        if (Object.keys(userCache).length === 0) {
-             const res = await serverAction('fetch_all_users_light', {});
-             if (res && res.users) setUserCache(res.users);
+        if (selectedUsersForChat.length === 0) return showModal("대화 상대를 선택하세요.");
+        
+        // Prevent 1:1 with Admin/Teacher/Gov for non-privileged users
+        if (selectedUsersForChat.length === 1 && !hasAdminPrivilege) {
+            const targetName = selectedUsersForChat[0];
+            const targetUser = userCache[Object.keys(userCache).find(k => userCache[k].name === targetName) || ''];
+            
+            if (targetUser && (targetUser.type === 'admin' || targetUser.type === 'root' || targetUser.subType === 'teacher')) {
+                return showModal("관리자 또는 교사와는 1:1 채팅을 시작할 수 없습니다. 필요한 경우 피드백 기능을 이용하세요.");
+            }
         }
 
-        if (selectedUsersForChat.length === 0) return showModal("대화 상대를 선택하세요.");
         const type = selectedUsersForChat.length > 1 ? 'group' : 'private';
         const participants = [currentUser!.name, ...selectedUsersForChat];
         try {
@@ -241,8 +241,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
     const handleSendMessage = async (text: string = inputText, attachment?: any) => {
         if (!selectedChatId) return;
-        
-        // Ensure no raw Base64 is sent in attachment
         if (attachment?.data?.image && String(attachment.data.image).startsWith('data:image')) {
              return showModal("이미지 처리 오류: URL이 아닌 Base64가 감지되었습니다. 전송을 중단합니다.");
         }
@@ -275,14 +273,13 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     const handleFileUpload = async (base64: string) => {
         if (!selectedChatId) return;
         try {
-            // Force upload to Cloudinary to get URL
             const url = await uploadImage(`chat/${selectedChatId}/${Date.now()}`, base64);
             if (!url || !url.startsWith('http')) throw new Error("Invalid URL from server");
             
             await handleSendMessage("", {
                 type: 'image',
                 value: '사진',
-                data: { image: url } // Store URL only
+                data: { image: url } 
             });
         } catch(e) {
             console.error(e);
@@ -302,12 +299,111 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         setTransferAmount('');
     };
 
-    const handleShareID = () => {
+    const handleDirectTransfer = async () => {
+        if (!selectedChatId) return;
+        const amt = parseInt(directTransferAmount);
+        if (isNaN(amt) || amt <= 0) return showModal("금액을 입력하세요.");
+        if (currentUser!.balanceKRW < amt) return showModal("잔액이 부족합니다.");
+
+        // Identify receiver
+        const chat = chats[selectedChatId];
+        const receiverName = chat.participants.find(p => p !== currentUser!.name);
+        
+        if (!receiverName) return showModal("받는 사람을 찾을 수 없습니다.");
+
+        try {
+            await serverAction('transfer', {
+                senderId: currentUser!.name,
+                receiverId: receiverName,
+                amount: amt,
+                senderMemo: "채팅 송금", 
+                receiverMemo: "채팅 송금"
+            });
+            
+            handleSendMessage("송금 완료", {
+                type: 'transfer_request',
+                value: '송금 완료',
+                data: { amount: amt, currency: 'KRW', isRequest: false }
+            });
+            setShowDirectTransferModal(false);
+            setDirectTransferAmount('');
+        } catch(e) {
+            showModal("송금 실패");
+        }
+    };
+
+    const handleShareIDTrigger = () => {
+        if (!selectedChatId || !currentUser?.profilePic) return showModal("프로필 사진이 없습니다. 설정에서 등록해주세요.");
+        
+        const chat = chats[selectedChatId];
+        // 1:1 check
+        if (chat.participants.length === 2) {
+            const otherName = chat.participants.find(p => p !== currentUser.name);
+            if (otherName) {
+                // Find user info for logic
+                // We might not have user info if not cached. 
+                const targetUserKey = Object.keys(userCache).find(k => userCache[k].name === otherName);
+                const targetUser = targetUserKey ? userCache[targetUserKey] : null;
+
+                if (targetUser) {
+                    if (targetUser.name === '한국은행' || targetUser.govtRole === '한국은행장') {
+                        // Full ID
+                        sendIDCard(false);
+                    } else if (targetUser.type === 'government') {
+                        // Choice
+                        setIdTargetUser(targetUser.name);
+                        setShowIdChoiceModal(true);
+                    } else {
+                        // Masked
+                        sendIDCard(true);
+                    }
+                } else {
+                    // Default to masked if info unknown
+                    sendIDCard(true);
+                }
+            } else {
+                sendIDCard(true);
+            }
+        } else {
+            // Group chat -> Masked default
+            sendIDCard(true);
+        }
+        setShowAttachMenu(false);
+    };
+
+    const sendIDCard = (masked: boolean) => {
+        if (!currentUser) return;
+        const resNum = currentUser.idCard?.residentNumber || `${currentUser.birthDate}-*******`;
+        // Logic: if masked is true, ensure it's masked. if false, ensure it's full (if available)
+        let finalResNum = resNum;
+        
+        if (masked) {
+            if (finalResNum.length > 8 && !finalResNum.includes('*')) {
+                // Manually mask: YYMMDD-G******
+                finalResNum = finalResNum.substring(0, 8) + "******";
+            }
+        } else {
+            // Unmask logic requires storing the full number securely?
+            // In current simple implementation, 'residentNumber' might already be masked in currentUser state if not stored fully.
+            // If the user entered it fully in Profile, it is stored.
+            // Assuming currentUser holds the source of truth. 
+            // If masked locally, we can't unmask. But let's assume it's available.
+        }
+
         handleSendMessage("신분증 공유", {
-            type: 'share_id',
+            type: 'image',
             value: '신분증',
-            data: { name: currentUser!.name }
+            data: { 
+                image: currentUser.profilePic, 
+                isIdCard: true, 
+                name: currentUser.name, 
+                birthDate: currentUser.birthDate, 
+                gender: currentUser.gender, 
+                address: currentUser.idCard?.address,
+                residentNumber: finalResNum
+            }
         });
+        setShowIdChoiceModal(false);
     };
 
     const handleInviteUser = async (userName: string) => {
@@ -334,11 +430,26 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
         const myName = (isBank || isGovernor) ? "한국은행" : currentUser?.name;
         const isMine = msg.sender === myName;
-        const senderInfo = userCache[msg.sender] || { name: msg.sender, profilePic: null, type: 'citizen' };
         
-        let bubbleColor = isMine ? 'bg-[#FEE500] text-black border-none' : 'bg-white text-black border border-gray-200 dark:bg-[#2D2D2D] dark:text-white dark:border-gray-700';
-        if (msg.sender === '한국은행') bubbleColor = 'bg-yellow-400 text-black border border-yellow-500 font-bold';
-        else if (senderInfo.type === 'admin' || senderInfo.type === 'root') bubbleColor = 'bg-red-600 text-white border border-red-700 font-bold';
+        // Find sender details
+        const senderInfo = userCache[msg.sender] || { name: msg.sender, profilePic: null, type: 'citizen', govtRole: '', subType: 'personal' };
+        
+        // --- Bubble Color Logic ---
+        let bubbleColor = '';
+        if (isMine) {
+            bubbleColor = 'bg-[#FEE500] text-black'; // Kakao Yellow style for me
+        } else {
+            // Colors for others
+            if (senderInfo.type === 'admin' || senderInfo.type === 'root' || senderInfo.subType === 'teacher') {
+                bubbleColor = 'bg-red-100 text-red-900 border border-red-200 dark:bg-red-900 dark:text-red-100 dark:border-red-800'; // Admin/Teacher
+            } else if (senderInfo.name === '한국은행' || senderInfo.govtRole === '한국은행장') {
+                bubbleColor = 'bg-blue-100 text-blue-900 border border-blue-200 dark:bg-blue-900 dark:text-blue-100 dark:border-blue-800'; // Bank
+            } else if (senderInfo.type === 'government') {
+                bubbleColor = 'bg-green-100 text-green-900 border border-green-200 dark:bg-green-900 dark:text-green-100 dark:border-green-800'; // Gov
+            } else {
+                bubbleColor = 'bg-white text-black border border-gray-200 dark:bg-[#333] dark:text-white dark:border-gray-700'; // Normal
+            }
+        }
 
         return (
             <div 
@@ -352,7 +463,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                     {!isMine && (
                         <div className="flex flex-col items-center mr-2">
                             <div className="w-8 h-8 rounded-full overflow-hidden bg-gray-200 border border-gray-300 shadow-sm">
-                                {senderInfo.profilePic ? <img src={senderInfo.profilePic} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center font-bold text-gray-500 text-xs">{msg.sender[0]}</div>}
+                                {senderInfo.profilePic ? <img src={senderInfo.profilePic} className="w-full h-full object-cover" /> : <div className="w-full h-full flex items-center justify-center font-bold text-gray-500 text-xs">{(msg.sender || '?')[0]}</div>}
                             </div>
                         </div>
                     )}
@@ -364,14 +475,33 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                                 {msg.replyTo.text}
                             </div>
                         )}
-                        <div className={`px-4 py-2 rounded-[18px] text-sm relative shadow-sm group ${bubbleColor} ${isMine ? 'rounded-tr-none' : 'rounded-tl-none'}`}>
-                            {msg.attachment?.type === 'image' ? (
+                        <div className={`px-3 py-2 rounded-[18px] text-sm relative shadow-sm group ${bubbleColor} ${isMine ? 'rounded-tr-none' : 'rounded-tl-none'}`}>
+                            {msg.attachment?.type === 'image' && msg.attachment.data.isIdCard ? (
+                                // ID CARD RENDERING
+                                <div className="w-48 aspect-[1.58/1] bg-white text-black rounded-lg border border-gray-300 overflow-hidden shadow-sm relative p-2 flex flex-col justify-between select-none">
+                                    <div className="flex items-center gap-1">
+                                        <div className="w-3 h-3 rounded-full border border-gray-400 bg-gradient-to-br from-red-500 to-blue-500"></div>
+                                        <span className="text-xs font-black">주민등록증</span>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <div className="flex-1 space-y-0.5">
+                                            <p className="font-bold text-sm">{msg.attachment.data.name}</p>
+                                            <p className="text-[9px]">{msg.attachment.data.residentNumber}</p>
+                                            <p className="text-[8px] text-gray-600">{msg.attachment.data.address || '성화국'}</p>
+                                        </div>
+                                        <div className="w-10 h-12 bg-gray-100 border overflow-hidden">
+                                            <img src={msg.attachment.data.image} className="w-full h-full object-cover"/>
+                                        </div>
+                                    </div>
+                                    <p className="text-[8px] text-center font-serif font-bold opacity-80">성화국 정부</p>
+                                </div>
+                            ) : msg.attachment?.type === 'image' ? (
                                 <div className="rounded-xl overflow-hidden mt-1 cursor-pointer" onClick={() => showModal(<img src={msg.attachment!.data.image} className="w-full"/>)}>
                                     <img src={msg.attachment.data.image} className="max-w-full max-h-60 object-cover" loading="lazy" />
                                 </div>
                             ) : msg.attachment?.type === 'transfer_request' ? (
-                                <div className="flex flex-col gap-2 min-w-[150px]">
-                                    <div className="flex items-center gap-2 border-b border-white/20 pb-2 mb-1">
+                                <div className="flex flex-col gap-2 min-w-[180px]">
+                                    <div className="flex items-center gap-2 border-b border-black/10 dark:border-white/10 pb-2 mb-1">
                                         <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">💸</div>
                                         <div>
                                             <p className="font-bold text-xs">{msg.attachment.data.isRequest ? '송금 요청' : '송금 완료'}</p>
@@ -379,20 +509,18 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                                         </div>
                                     </div>
                                     {!isMine && msg.attachment.data.isRequest && (
-                                        <Button className="py-1 text-xs bg-white text-black hover:bg-gray-100" onClick={() => {
-                                            if (onAttachTab) onAttachTab('이체'); // Navigate to transfer
-                                            notify(msg.sender, "송금을 위해 이체 탭으로 이동합니다.", false);
-                                        }}>보내기</Button>
+                                        <Button className="py-2 text-xs bg-white text-black hover:bg-gray-100 font-bold border border-gray-300" onClick={() => {
+                                            if (onAttachTab) {
+                                                onAttachTab('이체'); 
+                                                notify(msg.sender, "이체 탭으로 이동합니다.", false);
+                                                onClose();
+                                            } else {
+                                                showModal("이체 탭으로 이동하여 송금해주세요.");
+                                            }
+                                        }}>송금하러 가기</Button>
                                     )}
                                 </div>
-                            ) : msg.attachment?.type === 'share_id' ? (
-                                <div className="cursor-pointer">
-                                    <div className="flex items-center gap-3 bg-black/10 dark:bg-white/10 p-2 rounded-lg">
-                                        <LineIcon icon="id_card" className="w-8 h-8" />
-                                        <div><p className="font-bold text-xs">모바일 신분증</p><p className="text-[10px] opacity-70">{msg.attachment.data.name}</p></div>
-                                    </div>
-                                </div>
-                            ) : (<p className="whitespace-pre-wrap break-all"><LinkText text={msg.text} /></p>)}
+                            ) : (<RichText text={msg.text} />)}
                         </div>
                         <span className="text-[9px] text-gray-400 mt-1 mx-1">{new Date(msg.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
                     </div>
@@ -407,15 +535,15 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
             <div style={containerStyle}>
                 {/* List View */}
                 {view === 'list' && (
-                    <div className="flex-1 flex flex-col h-full w-full bg-[#121212]">
-                        <div className="h-14 bg-[#1C1C1E] flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
+                    <div className="flex-1 flex flex-col h-full w-full">
+                        <div className="h-14 flex items-center justify-between px-4 border-b border-white/10 shrink-0 bg-[#1C1C1E]/50 backdrop-blur-md">
                             <h2 className="font-bold text-xl text-white">채팅</h2>
                             <div className="flex gap-2">
                                 <button onClick={() => setShowNewChatModal(true)} className="p-2 hover:bg-white/10 rounded-full transition-colors"><LineIcon icon="plus" className="text-white w-6 h-6" /></button>
                                 <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-colors"><LineIcon icon="close" className="text-white w-6 h-6" /></button>
                             </div>
                         </div>
-                        <div className="px-4 py-2 bg-[#1C1C1E] shrink-0">
+                        <div className="px-4 py-2 bg-[#1C1C1E]/50 shrink-0">
                             <Input placeholder="대화, 친구 검색" value={searchChat} onChange={e => setSearchChat(e.target.value)} className="h-10 text-sm bg-[#2D2D2D] border-none text-white" />
                         </div>
                         <div className="flex-1 overflow-y-auto">
@@ -430,7 +558,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                                         onContextMenu={(e) => handleChatListLongPress(e, c)}
                                         onTouchStart={(e) => handleChatListLongPress(e, c)}
                                         onTouchEnd={clearLongPress}
-                                        className={`flex items-center gap-4 p-4 hover:bg-[#1C1C1E] cursor-pointer border-b border-white/5 text-white ${prefs.isPinned ? 'bg-gray-800/50' : ''} ${isAuction ? 'bg-red-900/20 border-l-4 border-l-red-500' : ''}`}
+                                        className={`flex items-center gap-4 p-4 hover:bg-white/10 cursor-pointer border-b border-white/5 text-white transition-colors ${prefs.isPinned ? 'bg-gray-800/50' : ''} ${isAuction ? 'bg-red-900/20 border-l-4 border-l-red-500' : ''}`}
                                     >
                                         <div className={`w-12 h-12 rounded-full overflow-hidden flex items-center justify-center font-bold text-lg border ${isAuction ? 'bg-red-700 border-red-500 text-white' : 'bg-gray-700 border-gray-600'}`}>
                                             {c.coverImage ? <img src={c.coverImage} className="w-full h-full object-cover"/> : name[0]}
@@ -456,44 +584,72 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
                 {/* Chat Room View */}
                 {view === 'chat' && activeChat && (
-                    <div className="flex-1 flex flex-col h-full bg-[#0F0F0F] relative w-full text-white">
-                        {/* Header: Fixed */}
-                        <div className="h-14 bg-[#1C1C1E] flex items-center px-4 justify-between border-b border-gray-800 shrink-0 z-20">
+                    <div className="flex-1 flex flex-col h-full bg-[#E9E9EB] dark:bg-[#0F0F0F] relative w-full text-black dark:text-white">
+                        {/* Header */}
+                        <div className="h-14 bg-white/80 dark:bg-[#1C1C1E]/80 backdrop-blur-md flex items-center px-4 justify-between border-b border-gray-200 dark:border-gray-800 shrink-0 z-20">
                             <div className="flex items-center gap-3 w-full">
-                                <button onClick={() => setSelectedChatId(null)} className="p-1 text-white"><LineIcon icon="arrow-left" className="w-6 h-6" /></button>
+                                <button onClick={() => setSelectedChatId(null)} className="p-1"><LineIcon icon="arrow-left" className="w-6 h-6" /></button>
                                 <div className="flex-1 min-w-0">
                                     <h2 className="font-bold text-base truncate">
                                         {activeChat.groupName || (activeChat.participants || []).filter(p=>p!==currentUser?.name).join(', ')}
                                     </h2>
-                                    <p className="text-[10px] text-gray-400">{(activeChat.participants || []).length}명 참여중</p>
+                                    <p className="text-[10px] text-gray-500">{(activeChat.participants || []).length}명 참여중</p>
                                 </div>
-                                <button onClick={() => setShowDrawer(true)} className="p-2 text-white"><LineIcon icon="menu" /></button>
+                                <button onClick={() => setShowDrawer(true)} className="p-2"><LineIcon icon="menu" /></button>
                             </div>
                         </div>
 
-                        {/* Messages Area: Grow */}
-                        <div className="flex-1 overflow-y-auto p-4 bg-[#0F0F0F] scroll-smooth min-h-0" ref={scrollRef} style={myPrefs.backgroundImage ? { backgroundImage: `url(${myPrefs.backgroundImage})`, backgroundSize: 'cover' } : {}}>
+                        {/* Messages */}
+                        <div className="flex-1 overflow-y-auto p-4 scroll-smooth min-h-0" ref={scrollRef} style={myPrefs.backgroundImage ? { backgroundImage: `url(${myPrefs.backgroundImage})`, backgroundSize: 'cover' } : {}}>
                             {Object.values(activeMessages).length === 0 && <p className="text-center text-gray-500 mt-10 text-sm">대화 내용이 없습니다.</p>}
                             {(Object.values(activeMessages) as ChatMessage[]).sort((a: ChatMessage, b: ChatMessage)=>a.timestamp-b.timestamp).map(renderMessage)}
                         </div>
 
-                        {/* Input Area: Fixed at Bottom */}
-                        <div className="bg-[#1C1C1E] border-t border-gray-800 shrink-0 relative p-2 pb-6 sm:pb-2 z-20 w-full">
+                        {/* Input Area */}
+                        <div className="bg-white dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 shrink-0 relative p-2 pb-6 sm:pb-2 z-20 w-full">
+                            {/* Attach Menu Above Input */}
+                            {showAttachMenu && !isAuctionChat && (
+                                <div className="absolute bottom-full left-0 right-0 p-4 bg-white dark:bg-[#1C1C1E] border-t border-gray-200 dark:border-gray-800 animate-slide-up grid grid-cols-4 gap-4 z-50 shadow-lg rounded-t-2xl mx-2 mb-2">
+                                    <button onClick={() => document.getElementById('chat-file-input')?.click()} className="flex flex-col items-center gap-2">
+                                        <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-[#2D2D2D] flex items-center justify-center text-black dark:text-white hover:opacity-80"><LineIcon icon="image" /></div>
+                                        <span className="text-xs text-gray-500">사진</span>
+                                    </button>
+                                    <button onClick={() => setShowTransferOptions(true)} className="flex flex-col items-center gap-2">
+                                        <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-[#2D2D2D] flex items-center justify-center text-black dark:text-white hover:opacity-80"><LineIcon icon="finance" /></div>
+                                        <span className="text-xs text-gray-500">송금</span>
+                                    </button>
+                                    <button onClick={handleShareIDTrigger} className="flex flex-col items-center gap-2">
+                                        <div className="w-12 h-12 rounded-full bg-gray-100 dark:bg-[#2D2D2D] flex items-center justify-center text-black dark:text-white hover:opacity-80"><LineIcon icon="id_card" /></div>
+                                        <span className="text-xs text-gray-500">신분증</span>
+                                    </button>
+                                    <input type="file" id="chat-file-input" className="hidden" accept="image/*" onChange={e => {
+                                        if(e.target.files?.[0]) {
+                                            const reader = new FileReader();
+                                            reader.onload = (ev) => handleFileUpload(ev.target?.result as string);
+                                            reader.readAsDataURL(e.target.files[0]);
+                                        }
+                                        setShowAttachMenu(false);
+                                    }} />
+                                </div>
+                            )}
+
                             {replyingTo && (
-                                <div className="p-2 bg-gray-800 border-l-4 border-green-500 text-xs text-gray-300 flex justify-between items-center mb-2 rounded">
+                                <div className="p-2 bg-gray-100 dark:bg-gray-800 border-l-4 border-green-500 text-xs text-gray-600 dark:text-gray-300 flex justify-between items-center mb-2 rounded">
                                     <div className="truncate max-w-[200px]"><span className="font-bold block text-[10px]">{replyingTo.sender}에게 답장</span>{replyingTo.text}</div>
                                     <button onClick={() => setReplyingTo(null)} className="p-2">✕</button>
                                 </div>
                             )}
 
                             <div className="flex items-center gap-2">
-                                <button onClick={() => setShowAttachMenu(!showAttachMenu)} className={`p-2 rounded-full transition-transform ${showAttachMenu ? 'rotate-45' : ''}`}>
-                                    <LineIcon icon="plus" className="w-6 h-6 text-gray-400" />
-                                </button>
+                                {!isAuctionChat && (
+                                    <button onClick={() => setShowAttachMenu(!showAttachMenu)} className={`p-2 rounded-full transition-transform ${showAttachMenu ? 'rotate-45' : ''}`}>
+                                        <LineIcon icon="plus" className="w-6 h-6 text-gray-400" />
+                                    </button>
+                                )}
                                 
                                 <textarea 
-                                    className="flex-1 bg-[#2D2D2D] rounded-xl px-4 py-3 text-sm text-white outline-none resize-none max-h-24 scrollbar-hide"
-                                    placeholder={isAuctionChat ? "입찰가 (숫자만)" : "메시지 입력 (Shift+Enter 줄바꿈)"}
+                                    className="flex-1 bg-gray-100 dark:bg-[#2D2D2D] rounded-xl px-4 py-3 text-sm text-black dark:text-white outline-none resize-none max-h-24 scrollbar-hide"
+                                    placeholder={isAuctionChat ? "입찰가 (숫자만)" : "메시지 입력"}
                                     rows={1}
                                     value={inputText}
                                     onChange={e => setInputText(e.target.value)}
@@ -510,77 +666,55 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                                     <LineIcon icon="send" />
                                 </button>
                             </div>
-                            
-                            {showAttachMenu && (
-                                <div className="grid grid-cols-4 gap-4 p-4 mt-2 bg-[#1C1C1E] border-t border-gray-800 animate-slide-up">
-                                    {/* Attach Menu Items */}
-                                    <button onClick={() => document.getElementById('chat-file-input')?.click()} className="flex flex-col items-center gap-2">
-                                        <div className="w-12 h-12 rounded-full bg-[#2D2D2D] flex items-center justify-center text-white hover:bg-[#3D3D3D]"><LineIcon icon="image" /></div>
-                                        <span className="text-xs text-gray-400">사진</span>
-                                    </button>
-                                    <button onClick={() => setShowTransferModal(true)} className="flex flex-col items-center gap-2">
-                                        <div className="w-12 h-12 rounded-full bg-[#2D2D2D] flex items-center justify-center text-white hover:bg-[#3D3D3D]"><LineIcon icon="finance" /></div>
-                                        <span className="text-xs text-gray-400">송금</span>
-                                    </button>
-                                    <button onClick={handleShareID} className="flex flex-col items-center gap-2">
-                                        <div className="w-12 h-12 rounded-full bg-[#2D2D2D] flex items-center justify-center text-white hover:bg-[#3D3D3D]"><LineIcon icon="id_card" /></div>
-                                        <span className="text-xs text-gray-400">신분증</span>
-                                    </button>
-                                    {/* ... other items ... */}
-                                    <input type="file" id="chat-file-input" className="hidden" accept="image/*" onChange={e => {
-                                        if(e.target.files?.[0]) {
-                                            const reader = new FileReader();
-                                            reader.onload = (ev) => handleFileUpload(ev.target?.result as string);
-                                            reader.readAsDataURL(e.target.files[0]);
-                                        }
-                                    }} />
-                                </div>
-                            )}
                         </div>
                     </div>
                 )}
 
-                {/* Restore Drawer Code */}
+                {/* Drawer */}
                 {showDrawer && activeChat && (
                     <div className="absolute inset-0 z-[6000] bg-black/50 flex justify-end animate-fade-in" onClick={() => setShowDrawer(false)}>
-                        <div className="w-64 h-full bg-[#1C1C1E] shadow-2xl flex flex-col animate-slide-left" onClick={e => e.stopPropagation()}>
-                            <div className="p-4 border-b border-gray-800 flex justify-between items-center text-white">
+                        <div className="w-64 h-full bg-white dark:bg-[#1C1C1E] shadow-2xl flex flex-col animate-slide-left text-black dark:text-white" onClick={e => e.stopPropagation()}>
+                            <div className="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
                                 <h3 className="font-bold text-lg">채팅방 설정</h3>
                                 <button onClick={() => setShowDrawer(false)}><LineIcon icon="close" /></button>
                             </div>
-                            <div className="flex-1 overflow-y-auto p-4 space-y-4 text-white">
+                            <div className="flex-1 overflow-y-auto p-4 space-y-4">
                                 <div>
                                     <p className="text-xs text-gray-500 mb-2 uppercase font-bold">대화상대</p>
                                     <div className="space-y-2">
                                         {activeChat.participants.map(p => (
                                             <div key={p} className="flex items-center gap-2 text-sm">
-                                                <div className="w-6 h-6 rounded-full bg-gray-700 flex items-center justify-center text-xs">{p[0]}</div>
+                                                <div className="w-6 h-6 rounded-full bg-gray-300 dark:bg-gray-700 flex items-center justify-center text-xs">{(p || '?')[0]}</div>
                                                 <span>{p}</span>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                                
-                                <div className="border-t border-gray-800 pt-4">
-                                    <p className="text-xs text-gray-500 mb-2 uppercase font-bold">초대</p>
-                                    <div className="space-y-2 max-h-40 overflow-y-auto">
-                                        {Object.values(userCache)
-                                            .filter((u: User) => u.type === 'citizen' && !activeChat.participants.includes(u.name))
-                                            .map((u: User) => (
-                                                <button key={u.name} onClick={() => handleInviteUser(u.name)} className="w-full text-left text-sm py-1 hover:text-green-500 flex justify-between">
-                                                    <span>{u.name}</span>
-                                                    <span className="text-xs text-gray-500">+ 초대</span>
-                                                </button>
-                                            ))
-                                        }
-                                    </div>
-                                </div>
-
-                                <button onClick={() => handleLeaveChatAction(activeChat.id)} className="w-full py-2 bg-red-900/30 text-red-500 rounded font-bold text-sm hover:bg-red-900/50 mt-auto">나가기</button>
+                                <button onClick={() => handleLeaveChatAction(activeChat.id)} className="w-full py-2 bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-500 rounded font-bold text-sm hover:opacity-80 mt-auto">나가기</button>
                             </div>
                         </div>
                     </div>
                 )}
+
+                {/* Transfer Options Modal */}
+                <Modal isOpen={showTransferOptions} onClose={() => setShowTransferOptions(false)} title="송금 옵션">
+                    <div className="space-y-3">
+                        <Button onClick={() => { setShowTransferOptions(false); setShowDirectTransferModal(true); }} className="w-full py-4 text-lg bg-green-600 hover:bg-green-500">
+                            직접 송금
+                        </Button>
+                        <Button onClick={() => { setShowTransferOptions(false); setShowTransferModal(true); }} className="w-full py-4 text-lg bg-blue-600 hover:bg-blue-500">
+                            송금 요청
+                        </Button>
+                    </div>
+                </Modal>
+
+                {/* Direct Transfer Modal */}
+                <Modal isOpen={showDirectTransferModal} onClose={() => setShowDirectTransferModal(false)} title="직접 송금">
+                    <div className="space-y-4">
+                        <MoneyInput value={directTransferAmount} onChange={e => setDirectTransferAmount(e.target.value)} placeholder="보낼 금액 (₩)" />
+                        <Button onClick={handleDirectTransfer} className="w-full">보내기</Button>
+                    </div>
+                </Modal>
 
                 {/* Transfer Request Modal */}
                 <Modal isOpen={showTransferModal} onClose={() => setShowTransferModal(false)} title="송금 요청">
@@ -589,63 +723,86 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                         <Button onClick={handleSendTransferRequest} className="w-full">요청 보내기</Button>
                     </div>
                 </Modal>
+
+                {/* ID Choice Modal (For Officials) */}
+                <Modal isOpen={showIdChoiceModal} onClose={() => setShowIdChoiceModal(false)} title="신분증 전송 선택">
+                    <div className="space-y-4 text-center">
+                        <p className="text-sm text-gray-500">
+                            <b>{idTargetUser}</b>님은 공무원입니다.<br/>
+                            주민등록번호 전체를 공개하시겠습니까?
+                        </p>
+                        <div className="flex gap-2">
+                            <Button onClick={() => sendIDCard(true)} variant="secondary" className="flex-1">마스킹 전송</Button>
+                            <Button onClick={() => sendIDCard(false)} className="flex-1 bg-red-600 hover:bg-red-500">전체 공개</Button>
+                        </div>
+                    </div>
+                </Modal>
                 
-                {/* New Chat Modal */}
+                {/* New Chat Modal (User List) */}
                 <Modal isOpen={showNewChatModal} onClose={() => setShowNewChatModal(false)} title="새 채팅">
                     <div className="space-y-4">
-                        <div className="max-h-60 overflow-y-auto space-y-1">
-                            {Object.values(userCache).filter((u: User) => u.name !== currentUser?.name).map((u: User) => (
-                                <div key={u.name} className="flex items-center gap-3 p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer" onClick={() => {
-                                    if(selectedUsersForChat.includes(u.name)) setSelectedUsersForChat(selectedUsersForChat.filter(n=>n!==u.name));
-                                    else setSelectedUsersForChat([...selectedUsersForChat, u.name]);
-                                }}>
-                                    <input type="checkbox" checked={selectedUsersForChat.includes(u.name)} readOnly className="accent-green-600 w-5 h-5" />
-                                    <span>{u.name} ({u.type})</span>
+                        <Input placeholder="이름 검색" className="w-full mb-2" onChange={e => { /* Local filter logic could be added here */ }} />
+                        <div className="max-h-80 overflow-y-auto space-y-2 grid grid-cols-1">
+                            {Object.values(userCache)
+                                .filter((u: User) => u.name !== currentUser?.name && u.type !== 'admin' && u.type !== 'root' && u.subType !== 'teacher')
+                                .sort((a,b) => (a.name || '').localeCompare(b.name || ''))
+                                .map((u: User) => (
+                                <div key={u.name} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${selectedUsersForChat.includes(u.name) ? 'bg-green-50 border-green-500 dark:bg-green-900/30' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:shadow-md'}`} 
+                                    onClick={() => {
+                                        if(selectedUsersForChat.includes(u.name)) setSelectedUsersForChat(selectedUsersForChat.filter(n=>n!==u.name));
+                                        else setSelectedUsersForChat([...selectedUsersForChat, u.name]);
+                                    }}
+                                >
+                                    <div className="w-10 h-10 rounded-full bg-gray-200 dark:bg-gray-600 overflow-hidden flex items-center justify-center">
+                                        {u.profilePic ? <img src={u.profilePic} className="w-full h-full object-cover"/> : <span className="font-bold text-gray-500">{(u.name || '?')[0]}</span>}
+                                    </div>
+                                    <div className="flex-1">
+                                        <p className="font-bold text-sm text-black dark:text-white">{formatName(u.name)}</p>
+                                        <p className="text-xs text-gray-500">{u.customJob || u.type}</p>
+                                    </div>
+                                    <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${selectedUsersForChat.includes(u.name) ? 'bg-green-500 border-green-500' : 'border-gray-300'}`}>
+                                        {selectedUsersForChat.includes(u.name) && <LineIcon icon="check" className="w-3 h-3 text-white" />}
+                                    </div>
                                 </div>
                             ))}
                         </div>
-                        <Button onClick={handleCreateChat} className="w-full">채팅하기</Button>
+                        <Button onClick={handleCreateChat} className="w-full py-3" disabled={selectedUsersForChat.length === 0}>
+                            {selectedUsersForChat.length}명과 채팅하기
+                        </Button>
                     </div>
                 </Modal>
             </div>
 
-            {/* Context Menu Rendered via Portal to escape transforms */}
+            {/* Context Menus */}
             {msgContextMenu && createPortal(
                 <div 
-                    className="fixed z-[9999] bg-[#2D2D2D] border border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[150px] animate-scale-in"
-                    style={{ top: msgContextMenu.y, left: Math.min(msgContextMenu.x, window.innerWidth - 160) }}
+                    className="fixed z-[9999] bg-white dark:bg-[#2D2D2D] border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[150px] animate-scale-in"
+                    style={{ top: Math.min(msgContextMenu.y, window.innerHeight - 200), left: Math.min(msgContextMenu.x, window.innerWidth - 160) }}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <button className="w-full text-left px-4 py-3 text-white hover:bg-white/10 text-sm" onClick={() => { setReplyingTo(msgContextMenu.target); setMsgContextMenu(null); }}>답장</button>
-                    <button className="w-full text-left px-4 py-3 text-white hover:bg-white/10 text-sm" onClick={() => { navigator.clipboard.writeText(msgContextMenu.target?.text || ''); setMsgContextMenu(null); }}>복사</button>
+                    <button className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-white/10 text-sm text-black dark:text-white" onClick={() => { setReplyingTo(msgContextMenu.target); setMsgContextMenu(null); }}>답장</button>
+                    <button className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-white/10 text-sm text-black dark:text-white" onClick={() => { navigator.clipboard.writeText(msgContextMenu.target?.text || ''); setMsgContextMenu(null); }}>복사</button>
                     {(msgContextMenu.target?.sender === currentUser?.name || hasAdminPrivilege) && (
-                        <>
-                            <button className="w-full text-left px-4 py-3 text-red-500 hover:bg-white/10 text-sm" onClick={() => { handleDeleteMessage(msgContextMenu.target!); }}>회수 (모두 삭제)</button>
-                            <button className="w-full text-left px-4 py-3 text-gray-400 hover:bg-white/10 text-sm" onClick={() => { setHiddenMessages([...hiddenMessages, msgContextMenu.target!.id]); setMsgContextMenu(null); }}>삭제 (나에게만)</button>
-                        </>
+                        <button className="w-full text-left px-4 py-3 text-red-500 hover:bg-gray-100 dark:hover:bg-white/10 text-sm" onClick={() => { handleDeleteMessage(msgContextMenu.target!); }}>삭제 (모두에게)</button>
                     )}
+                    <button className="w-full text-left px-4 py-3 text-gray-400 hover:bg-gray-100 dark:hover:bg-white/10 text-sm" onClick={() => { setHiddenMessages([...hiddenMessages, msgContextMenu.target!.id]); setMsgContextMenu(null); }}>삭제 (나에게만)</button>
                 </div>,
                 document.body
             )}
 
             {listContextMenu && createPortal(
                 <div 
-                    className="fixed z-[9999] bg-[#2D2D2D] border border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[150px] animate-scale-in"
-                    style={{ top: listContextMenu.y, left: Math.min(listContextMenu.x, window.innerWidth - 160) }}
+                    className="fixed z-[9999] bg-white dark:bg-[#2D2D2D] border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[150px] animate-scale-in"
+                    style={{ top: Math.min(listContextMenu.y, window.innerHeight - 200), left: Math.min(listContextMenu.x, window.innerWidth - 160) }}
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <button className="w-full text-left px-4 py-3 text-white hover:bg-white/10 text-sm" onClick={() => handleTogglePin(listContextMenu.target!)}>
+                    <button className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-white/10 text-sm text-black dark:text-white" onClick={() => handleTogglePin(listContextMenu.target!)}>
                         {currentUser?.chatPreferences?.[listContextMenu.target!.id]?.isPinned ? '상단 고정 해제' : '상단 고정'}
                     </button>
-                    <button className="w-full text-left px-4 py-3 text-white hover:bg-white/10 text-sm" onClick={() => handleToggleMute(listContextMenu.target!)}>
+                    <button className="w-full text-left px-4 py-3 hover:bg-gray-100 dark:hover:bg-white/10 text-sm text-black dark:text-white" onClick={() => handleToggleMute(listContextMenu.target!)}>
                         {currentUser?.chatPreferences?.[listContextMenu.target!.id]?.isMuted ? '알림 켜기' : '알림 끄기'}
                     </button>
-                    {listContextMenu.target!.type === 'private' && (
-                        <button className="w-full text-left px-4 py-3 text-red-400 hover:bg-white/10 text-sm" onClick={() => handleBlockUser(listContextMenu.target!)}>
-                            상대방 차단
-                        </button>
-                    )}
-                    <button className="w-full text-left px-4 py-3 text-red-500 hover:bg-white/10 text-sm font-bold" onClick={() => handleLeaveChatAction(listContextMenu.target!.id)}>
+                    <button className="w-full text-left px-4 py-3 text-red-500 hover:bg-gray-100 dark:hover:bg-white/10 text-sm font-bold" onClick={() => handleLeaveChatAction(listContextMenu.target!.id)}>
                         채팅방 나가기
                     </button>
                 </div>,

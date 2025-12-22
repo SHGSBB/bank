@@ -40,6 +40,7 @@ export interface LedgerItem {
     amount: number;
     isScheduled: boolean; // 예정 내역 여부
     isCompleted?: boolean; // 실제 실행 여부
+    isAuto?: boolean; // 자동 생성된 내역 여부
 }
 
 export interface ScheduledTransfer {

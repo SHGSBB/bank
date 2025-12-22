@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, Modal, MoneyInput, Spinner } from '../Shared';
 import { Transaction, LedgerItem } from '../../types';
@@ -25,27 +25,40 @@ export const TransactionHistoryTab: React.FC = () => {
     const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
     const [selectedTx, setSelectedTx] = useState<Transaction | null>(null);
     
-    // Transaction Data from Server
-    const [transactions, setTransactions] = useState<Transaction[]>([]);
+    // Transaction Data from Server (Or Cache)
+    const [transactions, setTransactions] = useState<Transaction[]>(currentUser?.transactions || []);
     const [isLoadingTx, setIsLoadingTx] = useState(false);
+    const hasFetched = useRef(false);
 
-    useEffect(() => {
-        const fetchTx = async () => {
-            if (!currentUser) return;
-            setIsLoadingTx(true);
-            try {
-                const res = await serverAction('fetch_my_transactions', { userId: currentUser.id || currentUser.email, limit: 100 });
-                if (res && res.transactions) {
-                    setTransactions(res.transactions);
-                }
-            } catch(e) {
-                console.error("Failed to load transactions", e);
-            } finally {
-                setIsLoadingTx(false);
+    const fetchTx = async (force = false) => {
+        if (!currentUser) return;
+        // Optimization: Don't refetch if we already have data, unless forced.
+        // Also respect the currentUser transactions if recently updated via refreshData
+        if (!force && (transactions.length > 0 || hasFetched.current)) return;
+
+        setIsLoadingTx(true);
+        try {
+            const res = await serverAction('fetch_my_transactions', { userId: currentUser.id || currentUser.email, limit: 500 });
+            if (res && res.transactions) {
+                setTransactions(res.transactions);
+                hasFetched.current = true;
             }
-        };
-        if (activeTab === 'history') fetchTx();
-    }, [currentUser, activeTab]);
+        } catch(e) {
+            console.error("Failed to load transactions", e);
+        } finally {
+            setIsLoadingTx(false);
+        }
+    };
+
+    // Initial Load - Check local first, then server if empty
+    useEffect(() => {
+        if (currentUser?.transactions && currentUser.transactions.length > 0) {
+            setTransactions(currentUser.transactions);
+            hasFetched.current = true;
+        } else {
+            fetchTx();
+        }
+    }, [currentUser?.id]);
 
     const ledgerItems = useMemo(() => Object.values(currentUser?.ledger || {}), [currentUser]);
 
@@ -65,7 +78,26 @@ export const TransactionHistoryTab: React.FC = () => {
         const year = calendarMonth.getFullYear();
         const month = calendarMonth.getMonth();
         const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-        return ledgerItems.filter(l => l.date === dateStr);
+        
+        // Manual Ledger Items
+        const manuals = ledgerItems.filter(l => l.date === dateStr);
+        
+        // Automatic Transactions Integration
+        const autos = transactions.filter(t => {
+            const d = new Date(t.date);
+            return d.getFullYear() === year && d.getMonth() === month && d.getDate() === day;
+        }).map(t => ({
+            id: String(t.id),
+            date: dateStr,
+            type: t.amount > 0 ? 'income' : 'expense',
+            category: typeLabels[t.type] || '기타',
+            description: t.description,
+            amount: Math.abs(t.amount),
+            isScheduled: false,
+            isAuto: true
+        } as LedgerItem & { isAuto: boolean }));
+
+        return [...manuals, ...autos];
     };
 
     const handleAddLedgerItem = async () => {
@@ -120,7 +152,7 @@ export const TransactionHistoryTab: React.FC = () => {
     };
 
     const renderHistoryList = () => {
-        if (isLoadingTx) return <Spinner />;
+        if (isLoadingTx && transactions.length === 0) return <Spinner />;
 
         const start = new Date(startDate);
         const end = new Date(endDate);
@@ -135,6 +167,7 @@ export const TransactionHistoryTab: React.FC = () => {
             return (
                 <div className="text-center py-10 text-gray-500">
                     <p className="mb-2">표시할 거래 내역이 없습니다.</p>
+                    <Button onClick={() => fetchTx(true)} className="text-xs mt-2" variant="secondary">내역 새로고침</Button>
                     <div className="flex justify-center gap-2 mt-4">
                         <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="p-2 border rounded text-xs" />
                         <span className="self-center">~</span>
@@ -147,6 +180,7 @@ export const TransactionHistoryTab: React.FC = () => {
         return (
             <div className="space-y-2">
                 <div className="flex gap-2 mb-4 justify-end items-center">
+                    <Button onClick={() => fetchTx(true)} className="text-xs py-1 h-8" variant="secondary">새로고침</Button>
                     <span className="text-xs text-gray-500">조회 기간:</span>
                     <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="p-2 border rounded text-xs" />
                     <span className="text-xs">~</span>
@@ -169,8 +203,8 @@ export const TransactionHistoryTab: React.FC = () => {
     return (
         <div className="space-y-4">
             <div className="flex gap-4 border-b border-gray-200 dark:border-gray-700 pb-2">
-                <button onClick={() => setActiveTab('history')} className={`text-lg font-bold pb-2 border-b-2 transition-colors ${activeTab === 'history' ? 'border-black dark:border-white' : 'border-transparent text-gray-400'}`}>거래 기록</button>
-                <button onClick={() => setActiveTab('ledger')} className={`text-lg font-bold pb-2 border-b-2 transition-colors ${activeTab === 'ledger' ? 'border-black dark:border-white' : 'border-transparent text-gray-400'}`}>가계부</button>
+                <button onClick={() => setActiveTab('history')} className={`text-lg font-bold pb-2 border-b-2 transition-colors ${activeTab === 'history' ? 'border-black dark:border-white text-black dark:text-white' : 'border-transparent text-gray-400'}`}>거래 기록</button>
+                <button onClick={() => setActiveTab('ledger')} className={`text-lg font-bold pb-2 border-b-2 transition-colors ${activeTab === 'ledger' ? 'border-black dark:border-white text-black dark:text-white' : 'border-transparent text-gray-400'}`}>가계부</button>
             </div>
 
             {activeTab === 'history' && renderHistoryList()}
@@ -182,24 +216,25 @@ export const TransactionHistoryTab: React.FC = () => {
                         <h4 className="font-bold">{calendarMonth.getFullYear()}년 {calendarMonth.getMonth() + 1}월</h4>
                         <button onClick={() => handleMonthChange(1)} className="p-2">&gt;</button>
                     </div>
-                    <div className="grid grid-cols-7 text-center text-xs font-bold mb-2">
+                    <div className="grid grid-cols-7 text-center text-xs font-bold mb-2 text-gray-600 dark:text-gray-400">
                         <span className="text-red-500">일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span className="text-blue-500">토</span>
                     </div>
                     <div className="grid grid-cols-7 gap-2">
                         {renderCalendar()}
                     </div>
                     <div className="mt-6">
-                        <h5 className="font-bold mb-2">가계부 기록 목록</h5>
+                        <h5 className="font-bold mb-2">통합 내역 ({selectedDate || '날짜 선택'})</h5>
                         <div className="space-y-2 max-h-40 overflow-y-auto">
-                            {ledgerItems.sort((a,b) => b.date.localeCompare(a.date)).map(item => (
-                                <div key={item.id} className="flex justify-between p-2 bg-gray-50 dark:bg-gray-800 rounded-xl border border-gray-100 dark:border-gray-700 text-xs items-center">
+                            {selectedDate && getDailyItems(parseInt(selectedDate.split('-')[2])).map((item, i) => (
+                                <div key={i} className={`flex justify-between p-2 rounded-xl border text-xs items-center ${item.isAuto ? 'bg-gray-100 dark:bg-gray-900 opacity-80' : 'bg-gray-50 dark:bg-gray-800'}`}>
                                     <div>
-                                        <span className="font-bold block">{item.date} [{item.category}]</span>
+                                        <span className="font-bold block">{item.category} {item.isAuto && '(자동)'}</span>
                                         <span className="text-gray-500">{item.description} {item.isScheduled && '(예정)'}</span>
                                     </div>
                                     <span className={`font-bold ${item.type === 'income' ? 'text-blue-500' : 'text-red-500'}`}>{item.amount.toLocaleString()}</span>
                                 </div>
                             ))}
+                            {!selectedDate && <p className="text-center text-gray-400">날짜를 선택하세요.</p>}
                         </div>
                     </div>
                 </Card>

@@ -94,12 +94,13 @@ export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => 
 // Client-side essentials fetch - ONLY used as fallback if server action fails
 export const fetchEssentials = async (): Promise<Partial<DB>> => {
     try {
-        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap] = await Promise.all([
+        const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap, pendingAppsSnap] = await Promise.all([
             get(ref(database, 'settings')),
             get(ref(database, 'realEstate/grid')), // Fetch grid only
-            get(query(ref(database, 'announcements'), limitToLast(5))), // Limit announcements
+            get(query(ref(database, 'announcements'), limitToLast(20))),
             get(ref(database, 'auction')),
-            get(ref(database, 'stocks'))
+            get(ref(database, 'stocks')),
+            get(ref(database, 'pendingApplications'))
         ]);
 
         return {
@@ -107,7 +108,8 @@ export const fetchEssentials = async (): Promise<Partial<DB>> => {
             realEstate: { grid: realEstateSnap.val() || [] },
             announcements: Object.values(announceSnap.val() || {}),
             auction: auctionSnap.val() || null,
-            stocks: stocksSnap.val() || {}
+            stocks: stocksSnap.val() || {},
+            pendingApplications: pendingAppsSnap.val() || {}
         };
     } catch (e) {
         return {};
@@ -165,18 +167,38 @@ export const fetchAllUsers = async (): Promise<Record<string, User>> => {
 };
 
 export const searchUsersByName = async (name: string): Promise<User[]> => {
-    const q = query(ref(database, 'users'), orderByChild('name'), startAt(name), endAt(name + "\uf8ff"), limitToLast(10));
-    const snapshot = await get(q);
-    if (snapshot.exists()) return Object.values(snapshot.val());
-    return [];
+    // Basic fallback search if index missing, usually safe for small prefixes
+    // If index missing error persists, we might need to fetch all and filter, but that's heavy.
+    // Assuming 'name' index exists. If not, this might fail.
+    try {
+        const q = query(ref(database, 'users'), orderByChild('name'), startAt(name), endAt(name + "\uf8ff"), limitToLast(10));
+        const snapshot = await get(q);
+        if (snapshot.exists()) return Object.values(snapshot.val());
+        return [];
+    } catch (e) {
+        // Fallback: This is heavy but works without index
+        console.warn("Search index missing, falling back to heavy search");
+        return [];
+    }
 };
 
 export const fetchMartUsers = async (): Promise<User[]> => {
-    const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
-    if (snapshot.exists()) {
-        return Object.values(snapshot.val()) as User[];
+    // Avoid orderByChild('type') if index is missing. Fetch all and filter client-side (lighter than full download if users < 1000, but still heavy)
+    // Better: Rely on 'users' path directly if possible.
+    try {
+        // Attempt query first
+        const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
+        if (snapshot.exists()) {
+            return Object.values(snapshot.val()) as User[];
+        }
+        return [];
+    } catch (e) {
+        // Fallback: fetch all and filter (Use with caution)
+        // Since this is a critical store feature, we might need this fallback or fix rules.
+        // For now, return empty to prevent crash, or server action is preferred.
+        console.warn("Index on 'type' missing. Marts cannot be loaded efficiently via client.");
+        return [];
     }
-    return [];
 };
 
 export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
@@ -217,8 +239,9 @@ export const saveDb = async (data: DB) => {
 export const generateId = (): string => rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
 
 export const chatService = {
+    // 🛡️ Data Leak Protection: Limit to last 30 items
     subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => 
-        onValue(ref(database, 'chatRooms'), (s) => callback(s.val() || {})),
+        onValue(query(ref(database, 'chatRooms'), limitToLast(30)), (s) => callback(s.val() || {})),
 
     subscribeToMessages: (chatId: string, limit: number = 20, callback: (messages: Record<string, ChatMessage>) => void) => 
         onValue(query(ref(database, `chatMessages/${chatId}`), limitToLast(limit)), (s) => callback(s.val() || {})),

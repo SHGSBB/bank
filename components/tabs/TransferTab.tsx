@@ -100,18 +100,18 @@ export const TransferTab: React.FC = () => {
 
     return (
         <Card>
-            <div className="flex gap-4 border-b mb-4">
+            <div className="flex gap-4 border-b border-gray-200 dark:border-gray-700 mb-4 pb-2">
                 {[{id:'immediate', l:'즉시 이체'}, {id:'reserved', l:'예약 이체'}, {id:'recurring', l:'정기 이체'}].map(t => (
-                    <button key={t.id} onClick={() => setSubTab(t.id as any)} className={`pb-2 font-bold ${subTab === t.id ? 'border-b-2 border-black dark:border-white' : 'text-gray-400'}`}>{t.l}</button>
+                    <button key={t.id} onClick={() => setSubTab(t.id as any)} className={`pb-2 font-bold ${subTab === t.id ? 'border-b-2 border-black dark:border-white text-black dark:text-white' : 'text-gray-400'}`}>{t.l}</button>
                 ))}
             </div>
 
             <div className="space-y-4">
                 <div className="relative">
-                    <label className="text-xs font-bold block mb-1">받는 사람</label>
+                    <label className="text-xs font-bold block mb-1 text-gray-700 dark:text-gray-300">받는 사람</label>
                     <Input placeholder="이름 검색" value={recipientSearch} onChange={e => handleSearch(e.target.value)} />
                     {recipientSearch && !selectedRecipient && (
-                        <div className="absolute z-10 w-full bg-white dark:bg-gray-800 border rounded max-h-40 overflow-y-auto">
+                        <div className="absolute z-10 w-full bg-white dark:bg-[#252525] border dark:border-gray-700 rounded max-h-40 overflow-y-auto shadow-lg">
                             {searchResults.map(u => (
                                 <div key={u.name} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" onClick={() => { setSelectedRecipient(u.name); setRecipientSearch(u.name); }}>
                                     {u.name} ({u.customJob || u.type})
@@ -120,41 +120,41 @@ export const TransferTab: React.FC = () => {
                         </div>
                     )}
                 </div>
-                <div><label className="text-xs font-bold block mb-1">금액</label><MoneyInput value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="text-right" /></div>
+                <div><label className="text-xs font-bold block mb-1 text-gray-700 dark:text-gray-300">금액</label><MoneyInput value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" className="text-right" /></div>
                 
                 {subTab === 'reserved' && (
                     <div className="flex gap-2">
-                        <div className="flex-1"><label className="text-xs font-bold">날짜</label><input type="date" value={reserveDate} onChange={e => setReserveDate(e.target.value)} className="w-full p-3 rounded-2xl bg-gray-100 dark:bg-[#252525]" /></div>
-                        <div className="flex-1"><label className="text-xs font-bold">시간</label><input type="time" value={reserveTime} onChange={e => setReserveTime(e.target.value)} className="w-full p-3 rounded-2xl bg-gray-100 dark:bg-[#252525]" /></div>
+                        <div className="flex-1"><label className="text-xs font-bold text-gray-700 dark:text-gray-300">날짜</label><input type="date" value={reserveDate} onChange={e => setReserveDate(e.target.value)} className="w-full p-3 rounded-[18px] bg-white dark:bg-[#252525] text-black dark:text-white border border-gray-200 dark:border-gray-700" /></div>
+                        <div className="flex-1"><label className="text-xs font-bold text-gray-700 dark:text-gray-300">시간</label><input type="time" value={reserveTime} onChange={e => setReserveTime(e.target.value)} className="w-full p-3 rounded-[18px] bg-white dark:bg-[#252525] text-black dark:text-white border border-gray-200 dark:border-gray-700" /></div>
                     </div>
                 )}
 
                 {subTab === 'recurring' && (
-                    <div className="space-y-3 p-3 bg-gray-50 dark:bg-gray-800 rounded-xl">
+                    <div className="space-y-3 p-3 bg-gray-50 dark:bg-[#252525] rounded-xl border border-gray-200 dark:border-gray-700">
                         <div className="flex gap-2">
-                            <button onClick={() => setRecurRange('day')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='day' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매일(일간)</button>
-                            <button onClick={() => setRecurRange('week')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='week' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매주</button>
-                            <button onClick={() => setRecurRange('month')} className={`flex-1 py-1 rounded text-xs font-bold ${recurRange==='month' ? 'bg-green-100 text-green-700' : 'bg-white'}`}>매월</button>
+                            <button onClick={() => setRecurRange('day')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${recurRange==='day' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-white dark:bg-[#1E1E1E]'}`}>매일</button>
+                            <button onClick={() => setRecurRange('week')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${recurRange==='week' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-white dark:bg-[#1E1E1E]'}`}>매주</button>
+                            <button onClick={() => setRecurRange('month')} className={`flex-1 py-2 rounded-lg text-xs font-bold ${recurRange==='month' ? 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' : 'bg-white dark:bg-[#1E1E1E]'}`}>매월</button>
                         </div>
                         <div>
-                            <label className="text-xs font-bold block mb-1">
+                            <label className="text-xs font-bold block mb-1 text-gray-700 dark:text-gray-300">
                                 {recurRange === 'day' ? '간격 (일)' : (recurRange === 'week' ? '요일 (0=일 ~ 6=토)' : '날짜 (1~31)')}
                             </label>
                             <Input type="number" value={recurValue} onChange={e => setRecurValue(e.target.value)} placeholder="설정값" />
                         </div>
                         <div className="flex gap-2">
-                            <div className="flex-1"><label className="text-xs font-bold">시작일</label><input type="date" value={recurStart} onChange={e => setRecurStart(e.target.value)} className="w-full p-2 rounded bg-white text-xs" /></div>
-                            <div className="flex-1"><label className="text-xs font-bold">종료일</label><input type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} className="w-full p-2 rounded bg-white text-xs" /></div>
+                            <div className="flex-1"><label className="text-xs font-bold text-gray-700 dark:text-gray-300">시작일</label><input type="date" value={recurStart} onChange={e => setRecurStart(e.target.value)} className="w-full p-3 rounded-[18px] bg-white dark:bg-[#1E1E1E] text-black dark:text-white text-xs border border-gray-200 dark:border-gray-700" /></div>
+                            <div className="flex-1"><label className="text-xs font-bold text-gray-700 dark:text-gray-300">종료일</label><input type="date" value={recurEnd} onChange={e => setRecurEnd(e.target.value)} className="w-full p-3 rounded-[18px] bg-white dark:bg-[#1E1E1E] text-black dark:text-white text-xs border border-gray-200 dark:border-gray-700" /></div>
                         </div>
                     </div>
                 )}
 
                 <div>
-                    <label className="text-xs font-bold block mb-1">받는 분에게 표시</label>
+                    <label className="text-xs font-bold block mb-1 text-gray-700 dark:text-gray-300">받는 분에게 표시</label>
                     <Input value={recipientMemo} onChange={e => setRecipientMemo(e.target.value)} placeholder="받는 통장 표시" />
                 </div>
                 <div>
-                    <label className="text-xs font-bold block mb-1">내 통장 표시</label>
+                    <label className="text-xs font-bold block mb-1 text-gray-700 dark:text-gray-300">내 통장 표시</label>
                     <Input value={senderMemo} onChange={e => setSenderMemo(e.target.value)} placeholder="내 통장 표시" />
                 </div>
                 

@@ -5,7 +5,7 @@ import { Button, Input, Modal, MoneyInput, Card } from '../Shared';
 import { AuctionBid, User } from '../../types';
 
 export const AuctionModal: React.FC = () => {
-    const { db, currentUser, saveDb, notify, respondToAuctionInvite } = useGame();
+    const { db, currentUser, saveDb, notify, respondToAuctionInvite, showModal, showConfirm } = useGame();
     const auction = db.auction;
     
     // View Mode: 'popup' (full modal), 'widget' (floating card), 'minimized' (title bar only)
@@ -18,10 +18,12 @@ export const AuctionModal: React.FC = () => {
     const posStartRef = useRef<{ x: number, y: number } | null>(null);
 
     // Form / Interaction State
-    const [inviteSearch, setInviteSearch] = useState('');
     const [bidAmount, setBidAmount] = useState('');
     const [isSplitModalOpen, setIsSplitModalOpen] = useState(false);
     const [splitShares, setSplitShares] = useState<Record<string, string>>({}); 
+
+    // Admin Controls
+    const [manualPriceInput, setManualPriceInput] = useState('');
 
     // Winner Modal State
     const [showWinnerModal, setShowWinnerModal] = useState(false);
@@ -53,23 +55,15 @@ export const AuctionModal: React.FC = () => {
             const remaining = Math.max(0, Math.ceil((auction.endTime! - now) / 1000));
             setTimeLeft(remaining);
             
-            // Auto End Logic - 5s buffer
-            const startTime = new Date(auction.startTime).getTime();
-            const startBuffer = 5000; 
-
-            if (remaining <= 0 && auction.status === 'active' && (now - startTime > startBuffer)) {
-                // Only admin/host triggers the end to avoid conflicts, or use server-side logic (simulated here)
-                const isHost = currentUser?.type === 'admin' || currentUser?.subType === 'teacher' || currentUser?.type === 'root';
-                // Fallback: any user can trigger if it's way past time (e.g. 10s) to ensure it closes
-                if (isHost || (now - auction.endTime! > 10000)) {
-                    handleAutoEnd();
-                }
+            // Auto End Logic
+            if (remaining <= 0 && auction.status === 'active') {
+                handleAutoEnd();
             }
         }, 1000);
         return () => clearInterval(interval);
-    }, [auction?.endTime, auction?.isActive, auction?.status, auction?.isPaused, auction?.startTime]);
+    }, [auction?.endTime, auction?.isActive, auction?.status, auction?.isPaused]);
 
-    // Show Winner Modal Trigger (Once per auction end per device)
+    // Show Winner Modal Trigger
     useEffect(() => {
         if (auction?.status === 'ended' && auction.winner && auction.id) {
             const seenKey = `seen_auction_winner_${auction.id}`;
@@ -89,6 +83,11 @@ export const AuctionModal: React.FC = () => {
     };
 
     const handleAutoEnd = async () => {
+        // Only one client should trigger database update to avoid race conditions.
+        // Ideally handled by server, but here let's allow host/admin or fallback to anyone.
+        const isHost = currentUser?.type === 'admin' || currentUser?.subType === 'teacher' || currentUser?.type === 'root';
+        if (!isHost) return; 
+
         const newDb = { ...db };
         if (!newDb.auction || newDb.auction.status === 'ended') return;
         
@@ -96,14 +95,14 @@ export const AuctionModal: React.FC = () => {
         newDb.auction.status = 'ended';
         
         const winnerBid = newDb.auction.bids.length > 0 ? newDb.auction.bids[newDb.auction.bids.length - 1] : null;
-        
+        const chatId = 'auction_room';
+
         if (winnerBid) {
             newDb.auction.winner = winnerBid.bidder;
             newDb.auction.winningBid = winnerBid.amount;
             
             // Payment Logic
             if (winnerBid.contributors) {
-                // Team
                 for (const c of winnerBid.contributors) {
                     const user = newDb.users[c.name];
                     if (user) {
@@ -115,9 +114,8 @@ export const AuctionModal: React.FC = () => {
                     }
                 }
             } else {
-                // Single
                 const user = newDb.users[winnerBid.bidder];
-                if (user && user.balanceKRW >= winnerBid.amount) {
+                if (user) {
                     user.balanceKRW -= winnerBid.amount;
                     user.transactions = [...(user.transactions || []), {
                         id: Date.now(), type: 'auction', amount: -winnerBid.amount, currency: 'KRW', description: `경매 낙찰: ${newDb.auction.item.name}`, date: new Date().toISOString()
@@ -130,6 +128,16 @@ export const AuctionModal: React.FC = () => {
             notify('ALL', `경매가 유찰되었습니다.`, true);
         }
         await saveDb(newDb);
+
+        // Schedule Chat Deletion
+        setTimeout(async () => {
+            const dbRef = { ...db };
+            if (dbRef.chatRooms && dbRef.chatRooms[chatId]) {
+                delete dbRef.chatRooms[chatId];
+                if (dbRef.chatMessages) delete dbRef.chatMessages[chatId];
+                await saveDb(dbRef);
+            }
+        }, 10000);
     };
 
     // Drag Handlers
@@ -172,28 +180,6 @@ export const AuctionModal: React.FC = () => {
     const myTeam = currentUser ? (auction?.teams?.[currentUser.name] || []) : [];
     const acceptedMembers = myTeam.filter(m => m.status === 'accepted');
 
-    const handleInvite = async (targetName: string) => {
-        if (targetName === currentUser?.name) return;
-        if (!auction) return;
-        
-        const target = db.users[targetName];
-        if (!target) return notify(currentUser!.name, "존재하지 않는 사용자입니다.");
-        
-        if (myTeam.length >= 2) return notify(currentUser!.name, "최대 2명까지 초대 가능합니다.");
-        if (myTeam.find(m => m.name === targetName)) return notify(currentUser!.name, "이미 초대한 사용자입니다.");
-
-        const newDb = { ...db };
-        if (!newDb.auction) return;
-        if (!newDb.auction.teams) newDb.auction.teams = {};
-        if (!newDb.auction.teams[currentUser!.name]) newDb.auction.teams[currentUser!.name] = [];
-        
-        newDb.auction.teams[currentUser!.name].push({ name: targetName, status: 'pending' });
-        await saveDb(newDb);
-
-        notify(targetName, `${currentUser!.name}님이 경매 팀에 초대했습니다.`, true, 'auction_invite', { from: currentUser!.name });
-        setInviteSearch('');
-    };
-
     const submitBid = async (totalAmount: number, contributors: { name: string, amount: number }[]) => {
         for (const c of contributors) {
             const user = db.users[c.name];
@@ -215,7 +201,10 @@ export const AuctionModal: React.FC = () => {
         newDb.auction.currentPrice = totalAmount;
         
         const resetDuration = (newDb.auction.timerDuration || 10) * 1000;
-        newDb.auction.endTime = Date.now() + resetDuration;
+        // Extend time if low, but don't reduce if it's long
+        if (newDb.auction.endTime && (newDb.auction.endTime - Date.now() < resetDuration)) {
+             newDb.auction.endTime = Date.now() + resetDuration;
+        }
 
         await saveDb(newDb);
         setBidAmount('');
@@ -273,57 +262,42 @@ export const AuctionModal: React.FC = () => {
         }
     };
 
-    const renderBidControls = () => (
-        <div className={`space-y-3 ${auction?.isPaused ? 'opacity-50 pointer-events-none' : ''}`}>
-             <div className="flex gap-2 items-center min-h-[30px]">
-                {myTeam.length > 0 && (
-                    <div className="flex -space-x-2">
-                        <div className="w-8 h-8 rounded-full bg-green-500 text-white text-xs flex items-center justify-center border-2 border-white z-10">
-                            {currentUser?.profilePic ? <img src={currentUser.profilePic} className="w-full h-full object-cover rounded-full"/> : "나"}
-                        </div>
-                        {myTeam.map(m => (
-                            <div key={m.name} className={`w-8 h-8 rounded-full text-white text-xs flex items-center justify-center border-2 border-white ${m.status === 'accepted' ? 'bg-blue-500' : 'bg-gray-400'}`}>
-                                {m.name[0]}
-                            </div>
-                        ))}
-                    </div>
-                )}
-            </div>
+    // Admin Functions
+    const handleSetPrice = async () => {
+        const price = parseInt(manualPriceInput);
+        if (isNaN(price)) return;
+        const newDb = { ...db };
+        if (newDb.auction) {
+            newDb.auction.currentPrice = price;
+            await saveDb(newDb);
+            setManualPriceInput('');
+        }
+    };
 
-            <div className="relative">
-                <Input disabled={auction?.isPaused} placeholder="팀원 초대 (이름)" value={inviteSearch} onChange={e => setInviteSearch(e.target.value)} className="py-2 text-sm w-full" />
-                {inviteSearch && !auction?.isPaused && (
-                    <div className="absolute bottom-full bg-white dark:bg-gray-800 w-full border dark:border-gray-600 shadow-xl z-20 max-h-48 overflow-y-auto rounded-lg">
-                        {(Object.values(db.users) as User[])
-                            .filter(u => u.name.toLowerCase().includes(inviteSearch.toLowerCase()) && u.name !== currentUser?.name && u.type==='citizen')
-                            .map(u => (
-                                <div key={u.name} className="p-3 hover:bg-gray-100 dark:hover:bg-gray-700 flex justify-between items-center border-b dark:border-gray-700 last:border-0">
-                                    <div className="flex items-center gap-2">
-                                        <div className="w-6 h-6 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center text-xs">{u.name[0]}</div>
-                                        <p className="text-sm font-bold">{u.name}</p>
-                                    </div>
-                                    <button onClick={() => handleInvite(u.name)} className="text-xs bg-blue-600 text-white px-2 py-1 rounded">초대</button>
-                                </div>
-                            ))
-                        }
-                    </div>
-                )}
-            </div>
+    const handleForceEnd = async (type: 'nakchal' | 'yuchal') => {
+        if (!await showConfirm(type === 'nakchal' ? "현재 최고가로 낙찰시키겠습니까?" : "유찰시키겠습니까?")) return;
+        
+        const newDb = { ...db };
+        if (!newDb.auction) return;
+        
+        newDb.auction.isActive = false;
+        newDb.auction.status = 'ended';
+        
+        if (type === 'yuchal') {
+            newDb.auction.bids = []; // Clear bids to trigger yuchal logic
+        }
+        // If nakchal, preserve bids so handleAutoEnd picks winner
+        
+        await saveDb(newDb);
+        handleAutoEnd(); // Trigger payment/notification
+    };
 
-            <div className="flex gap-2 items-end">
-                <div className="flex-1">
-                    <div className="flex justify-end gap-1 mb-1">
-                        <button onClick={() => handleAddBidAmount(10000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+1만</button>
-                        <button onClick={() => handleAddBidAmount(50000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+5만</button>
-                    </div>
-                    <MoneyInput value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="py-2 text-sm" placeholder="입찰금 입력" />
-                </div>
-                <Button onClick={handleBidClick} className="h-auto whitespace-nowrap px-4 text-sm font-bold py-3">
-                    {acceptedMembers.length > 0 ? '팀 입찰' : '입찰'}
-                </Button>
-            </div>
-        </div>
-    );
+    const handleDeleteAuction = async () => {
+        if (!await showConfirm("경매를 삭제하시겠습니까? (기록 없이 사라짐)")) return;
+        const newDb = { ...db };
+        newDb.auction = null as any; 
+        await saveDb(newDb);
+    };
 
     // --- RENDER ---
 
@@ -432,14 +406,24 @@ export const AuctionModal: React.FC = () => {
                          <div className={`text-xl font-mono font-bold ${timeLeft <= 5 && !auction.isPaused ? 'text-red-500 animate-pulse' : 'text-gray-700 dark:text-gray-300'}`}>{timeLeft}s</div>
                     </div>
                     
-                    {/* Show last action in widget */}
                     {lastBid && (
                         <div className="text-xs text-gray-500 bg-gray-50 dark:bg-gray-800 p-2 rounded">
                             마지막: <span className="font-bold">{lastBid.bidder}</span> (₩{(lastBid.amount || 0).toLocaleString()})
                         </div>
                     )}
 
-                    {renderBidControls()}
+                    <div className={`space-y-3 ${auction?.isPaused ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <div className="flex gap-2 items-end">
+                            <div className="flex-1">
+                                <div className="flex justify-end gap-1 mb-1">
+                                    <button onClick={() => handleAddBidAmount(10000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+1만</button>
+                                    <button onClick={() => handleAddBidAmount(50000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+5만</button>
+                                </div>
+                                <MoneyInput value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="py-2 text-sm" placeholder="입찰금 입력" />
+                            </div>
+                            <Button onClick={handleBidClick} className="h-auto whitespace-nowrap px-4 text-sm font-bold py-3">입찰</Button>
+                        </div>
+                    </div>
                 </div>
             </div>
         );
@@ -472,18 +456,30 @@ export const AuctionModal: React.FC = () => {
                     <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl border border-red-100 dark:border-red-900">
                          <div className="flex justify-between items-end">
                             <div>
-                                <p className="text-sm text-red-600 font-bold mb-1">현재 최고가</p>
+                                <p className="text-sm text-red-600 font-bold mb-1">시작가: ₩{auction.startingPrice.toLocaleString()}</p>
+                                <p className="text-sm text-gray-500 font-bold mb-1">현재 최고가</p>
                                 <div className="text-4xl font-bold text-red-600">₩{(auction.currentPrice || 0).toLocaleString()}</div>
                             </div>
                             <div className={`text-4xl font-mono font-bold ${timeLeft <= 10 && !auction.isPaused ? 'text-red-500 animate-pulse' : 'text-gray-700'}`}>{timeLeft}s</div>
                          </div>
                     </div>
 
+                    {/* Admin Controls */}
                     {isHost && (
-                         <div className="bg-yellow-50 dark:bg-yellow-900/10 p-3 rounded flex items-center justify-between relative z-20">
-                            <span className="font-bold text-sm">시간 연장</span>
+                         <div className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg border border-gray-300 dark:border-gray-700 relative z-20">
+                            <p className="text-xs font-bold mb-2 text-gray-500">관리자 제어 패널</p>
+                            <div className="flex flex-wrap gap-2 mb-2">
+                                <span className="text-xs font-bold self-center">시간:</span>
+                                {[5, 10, 20, 60].map(s => <Button key={s} onClick={() => extendTime(s)} className="text-xs px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white">+{s}s</Button>)}
+                            </div>
+                            <div className="flex gap-2 mb-2">
+                                <Input placeholder="가격 조정" value={manualPriceInput} onChange={e => setManualPriceInput(e.target.value)} className="py-1 text-xs" />
+                                <Button onClick={handleSetPrice} className="text-xs whitespace-nowrap bg-blue-600 hover:bg-blue-500">가격 변경</Button>
+                            </div>
                             <div className="flex gap-2">
-                                {[1, 3, 5, 10].map(s => <Button key={s} onClick={() => extendTime(s)} className="text-xs px-3 py-1">+{s}s</Button>)}
+                                <Button onContextMenu={() => handleForceEnd('nakchal')} onClick={() => alert("우클릭(PC) 또는 롱프레스(모바일)하여 낙찰")} className="text-xs flex-1 bg-green-600 hover:bg-green-500">낙찰(Hold)</Button>
+                                <Button onContextMenu={() => handleForceEnd('yuchal')} onClick={() => alert("우클릭(PC) 또는 롱프레스(모바일)하여 유찰")} className="text-xs flex-1 bg-orange-600 hover:bg-orange-500">유찰(Hold)</Button>
+                                <Button onClick={handleDeleteAuction} className="text-xs flex-1 bg-red-600 hover:bg-red-500">삭제</Button>
                             </div>
                         </div>
                     )}
@@ -502,7 +498,18 @@ export const AuctionModal: React.FC = () => {
                         ))}
                     </div>
                     
-                    {renderBidControls()}
+                    <div className={`space-y-3 ${auction?.isPaused ? 'opacity-50 pointer-events-none' : ''}`}>
+                        <div className="flex gap-2 items-end">
+                            <div className="flex-1">
+                                <div className="flex justify-end gap-1 mb-1">
+                                    <button onClick={() => handleAddBidAmount(10000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+1만</button>
+                                    <button onClick={() => handleAddBidAmount(50000)} className="text-[10px] bg-gray-200 dark:bg-gray-700 px-2 rounded">+5만</button>
+                                </div>
+                                <MoneyInput value={bidAmount} onChange={e => setBidAmount(e.target.value)} className="py-2 text-sm" placeholder="입찰금 입력" />
+                            </div>
+                            <Button onClick={handleBidClick} className="h-auto whitespace-nowrap px-4 text-sm font-bold py-3">입찰</Button>
+                        </div>
+                    </div>
                     <Button variant="secondary" onClick={() => setViewMode('widget')} className="w-full">창 줄이기</Button>
                 </div>
             </Modal>

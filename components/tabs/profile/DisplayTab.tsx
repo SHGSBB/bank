@@ -9,8 +9,10 @@ export const DisplayTab: React.FC = () => {
     const preferences = currentUser?.preferences || {};
 
     const handleUpdatePrefs = (key: keyof UserPreferences, value: any) => {
+        // Deep merge preferences to avoid overwriting other keys if update is shallow
         const newPrefs = { ...preferences, [key]: value };
-        updateUser(currentUser!.name, { preferences: newPrefs });
+        // IMPORTANT: Use ID or Email as key to ensure optimistic update works in GameContext
+        updateUser(currentUser!.id || currentUser!.email!, { preferences: newPrefs });
     };
 
     return (

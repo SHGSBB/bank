@@ -8,54 +8,78 @@ const CreditsOverlay: React.FC<{ onClose: () => void, data: any }> = ({ onClose,
     return (
         <div className="fixed inset-0 z-[7000] bg-black text-white flex flex-col items-center overflow-hidden">
             <div className="absolute top-10 right-10 z-[7001]">
-                <button onClick={onClose} className="text-white text-2xl font-bold p-4">✕</button>
+                <button onClick={onClose} className="text-white text-2xl font-bold p-4 opacity-50 hover:opacity-100">✕</button>
             </div>
             <div className="flex-1 w-full animate-credits py-[100vh]">
-                <div className="flex flex-col items-center gap-20 text-center px-10">
-                    <div className="space-y-4">
-                        <h1 className="text-6xl font-black mb-10 tracking-tighter">성화 은행</h1>
-                        <p className="text-xl opacity-50">디지털 뱅킹 시뮬레이션 플랫폼</p>
+                <div className="flex flex-col items-center gap-24 text-center px-10 max-w-4xl mx-auto">
+                    <div className="space-y-6">
+                        <div className="w-24 h-24 bg-green-500 rounded-3xl flex items-center justify-center text-white shadow-2xl mx-auto mb-6">
+                            <LineIcon icon="finance" className="w-12 h-12" />
+                        </div>
+                        <h1 className="text-7xl font-black mb-4 tracking-tighter">성화 은행</h1>
+                        <p className="text-2xl opacity-50 font-light tracking-widest">SUNGHWA BANK</p>
+                        <p className="text-lg opacity-40">Digital Banking Simulation Platform</p>
                     </div>
 
-                    <div className="space-y-10">
-                        <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">총괄 개발자</p>
-                            <p className="text-3xl font-bold">{data.developer}</p>
+                    <div className="space-y-16 w-full">
+                        <div className="space-y-4">
+                            <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em] mb-2">CREATED BY</p>
+                            <p className="text-4xl font-bold">{data.developer}</p>
                         </div>
-                        <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">플랫폼 버전</p>
-                            <p className="text-3xl font-bold">v{data.version}</p>
+
+                        <div className="grid grid-cols-2 gap-10 w-full">
+                            <div className="text-right space-y-2">
+                                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">SYSTEM VERSION</p>
+                                <p className="text-2xl font-bold font-mono">v{data.version}</p>
+                            </div>
+                            <div className="text-left space-y-2">
+                                <p className="text-xs text-gray-500 font-bold uppercase tracking-widest">LAST UPDATE</p>
+                                <p className="text-2xl font-bold font-mono">{new Date(data.lastUpdate).toLocaleDateString()}</p>
+                            </div>
                         </div>
-                        <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">시스템 아키텍처</p>
+
+                        <div className="space-y-4">
+                            <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em]">ARCHITECTURE</p>
                             <p className="text-3xl font-bold">{data.program}</p>
-                        </div>
-                        <div className="space-y-2">
-                            <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">최종 인프라 업데이트</p>
-                            <p className="text-xl font-bold">{new Date(data.lastUpdate).toLocaleDateString()}</p>
                         </div>
                         
                         {(data.customFields || []).map((f: any, i: number) => (
-                            <div key={i} className="space-y-2">
-                                <p className="text-sm text-gray-500 font-bold uppercase tracking-widest">{f.label}</p>
+                            <div key={i} className="space-y-4">
+                                <p className="text-xs text-gray-500 font-bold uppercase tracking-[0.3em]">{f.label}</p>
                                 <p className="text-3xl font-bold">{f.value}</p>
                             </div>
                         ))}
                     </div>
 
-                    <div className="mt-40 space-y-4">
-                        <p className="text-2xl font-bold italic">모든 성화국 시민 여러분께 감사의 말씀을 전합니다</p>
-                        <p className="opacity-30 text-sm">© 2025 SungHwa Bank Team. All rights reserved.</p>
+                    {/* Filler Content for Richness */}
+                    <div className="space-y-12 w-full mt-20 opacity-80">
+                        <p className="text-sm font-bold uppercase tracking-widest mb-10">Special Thanks</p>
+                        <div className="grid grid-cols-3 gap-8 text-sm">
+                            <p>Core Infrastructure</p><p>Security Module</p><p>Database Systems</p>
+                            <p>React</p><p>Firebase</p><p>Tailwind CSS</p>
+                            <p>Vercel</p><p>Google GenAI</p><p>SimpleWebAuthn</p>
+                        </div>
+                    </div>
+
+                    <div className="mt-40 space-y-8">
+                        <p className="text-3xl font-bold italic font-serif">" 금융의 미래를 시뮬레이션하다 "</p>
+                        <div className="w-20 h-1 bg-white/20 mx-auto rounded-full"></div>
+                        <p className="opacity-60 text-base leading-relaxed max-w-lg mx-auto">
+                            이 시스템은 교육 및 시뮬레이션 목적으로 제작되었습니다.<br/>
+                            참여해주신 모든 시민 여러분, 그리고 시스템 발전을 위해 노력해주신<br/>
+                            관리자 및 관계자 여러분께 진심으로 감사의 말씀을 전합니다.
+                        </p>
+                        <p className="opacity-30 text-xs mt-10">© 2025 SungHwa Bank Team. All rights reserved.</p>
                     </div>
                 </div>
             </div>
             <style>{`
                 @keyframes credits {
                     0% { transform: translateY(0); }
-                    100% { transform: translateY(-300%); }
+                    100% { transform: translateY(-100%); }
                 }
                 .animate-credits {
-                    animation: credits 25s linear infinite;
+                    animation: credits 90s linear infinite; /* Slowed down to 90s */
                 }
             `}</style>
         </div>

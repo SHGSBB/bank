@@ -1,12 +1,12 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Button, Input, LineIcon, Modal, formatName } from '../Shared';
+import { Button, Input, LineIcon, Modal, formatName, RichText } from '../Shared';
 import { UserSubType, GovtBranch, User } from '../../types';
-import { auth, findUserEmailForRecovery, findUserIdByInfo, resetUserPassword } from '../../services/firebase';
+import { auth, findUserIdByInfo, resetUserPassword } from '../../services/firebase';
 import { sendEmailVerification } from 'firebase/auth';
 
-type ViewMode = 'login' | 'signup' | 'find_account' | 'notif_setup';
+type ViewMode = 'login' | 'signup' | 'find_id' | 'reset_pw' | 'notif_setup';
 
 const GOVT_STRUCTURE = {
     '행정부': ['대통령', '한국은행장', '법무부장관', '검사', '검찰총장'],
@@ -15,7 +15,7 @@ const GOVT_STRUCTURE = {
 };
 
 export const AuthView: React.FC = () => {
-    const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, highQualityGraphics } = useGame();
+    const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, highQualityGraphics, requestPasswordReset } = useGame();
     const [view, setView] = useState<ViewMode>('login');
     const [history, setHistory] = useState<ViewMode[]>([]);
 
@@ -54,21 +54,29 @@ export const AuthView: React.FC = () => {
     // Recovery Info
     const [findName, setFindName] = useState('');
     const [findBirth, setFindBirth] = useState('');
-    const [findId, setFindId] = useState('');
-    const [recoveryMode, setRecoveryMode] = useState<'id' | 'pw'>('id');
+    const [resetEmail, setResetEmail] = useState('');
     
     const [agreedTerms, setAgreedTerms] = useState<Record<string, boolean>>({});
-    const [currentTermIndex, setCurrentTermIndex] = useState(0);
     
+    // General Provisions States
+    const [showTotalTerms, setShowTotalTerms] = useState(false);
+    const [generalTermsTimer, setGeneralTermsTimer] = useState(30);
+    const [hasReadGeneralTerms, setHasReadGeneralTerms] = useState(false);
+    const [canAgreeGeneral, setCanAgreeGeneral] = useState(false);
+    const generalTermsScrollRef = useRef<HTMLDivElement>(null);
+    const timerInterval = useRef<any>(null);
+
     // Login History State
     const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
     const consents = useMemo(() => {
         const raw = db.settings.consents || {};
-        return Object.entries(raw).map(([key, val]) => ({ key, ...(val as any) }));
+        return Object.entries(raw).filter(([k]) => k !== 'general').map(([key, val]) => ({ key, ...(val as any) }));
     }, [db.settings.consents]);
 
-    const allMandatoryAgreed = consents.every(c => c.isMandatory === false || agreedTerms[c.key]);
+    const generalProvisions = db.settings.consents?.['general'];
+
+    const allMandatoryAgreed = consents.every(c => c.isMandatory === false || agreedTerms[c.key]) && (!generalProvisions || hasReadGeneralTerms);
     const verificationInterval = useRef<any>(null);
 
     useEffect(() => {
@@ -76,8 +84,33 @@ export const AuthView: React.FC = () => {
             const hist = JSON.parse(localStorage.getItem('sh_login_history') || '[]');
             setLoginHistory(hist);
         } catch (e) {}
-        return () => { if (verificationInterval.current) clearInterval(verificationInterval.current); };
+        return () => { 
+            if (verificationInterval.current) clearInterval(verificationInterval.current); 
+            if (timerInterval.current) clearInterval(timerInterval.current);
+        };
     }, []);
+
+    // General Terms Timer Logic
+    useEffect(() => {
+        if (showTotalTerms && !hasReadGeneralTerms) {
+            setGeneralTermsTimer(30);
+            setCanAgreeGeneral(false);
+            
+            timerInterval.current = setInterval(() => {
+                setGeneralTermsTimer((prev) => {
+                    if (prev <= 1) {
+                        clearInterval(timerInterval.current);
+                        setCanAgreeGeneral(true);
+                        return 0;
+                    }
+                    return prev - 1;
+                });
+            }, 1000);
+        } else {
+            if (timerInterval.current) clearInterval(timerInterval.current);
+        }
+        return () => { if (timerInterval.current) clearInterval(timerInterval.current); };
+    }, [showTotalTerms, hasReadGeneralTerms]);
 
     const handleLogin = async () => {
         if (!loginId || !password) return showModal("정보를 입력하세요.");
@@ -117,6 +150,26 @@ export const AuthView: React.FC = () => {
         }
     };
 
+    const handleResetPassword = async () => {
+        if (!resetEmail || !resetEmail.includes('@')) {
+            return showModal("올바른 이메일 주소를 입력하세요.");
+        }
+        setIsProcessing(true);
+        try {
+            const result = await requestPasswordReset(resetEmail);
+            if(result) {
+                showModal(`[${resetEmail}]로 비밀번호 재설정 링크를 발송했습니다.`);
+                setView('login');
+            } else {
+                showModal("메일 발송 실패. 가입된 이메일인지 확인하세요.");
+            }
+        } catch(e) {
+            showModal("오류가 발생했습니다.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
     const startEmailCheck = (targetView: ViewMode = 'login') => {
         if (verificationInterval.current) clearInterval(verificationInterval.current);
         verificationInterval.current = setInterval(async () => {
@@ -134,6 +187,7 @@ export const AuthView: React.FC = () => {
     const handleSignupNext = async () => {
         if (isProcessing) return;
         if (step === 1) {
+            if (generalProvisions && !hasReadGeneralTerms) return showModal("총칙을 읽고 동의해야 합니다.");
             if (!allMandatoryAgreed) return showModal("필수 약관에 모두 동의해야 합니다.");
             setStep(2);
         } else if (step === 2) {
@@ -151,7 +205,8 @@ export const AuthView: React.FC = () => {
             try {
                 let finalType: User['type'] = 'citizen';
                 let branches: GovtBranch[] = [];
-                let status: User['approvalStatus'] = 'pending';
+                const requireApproval = db.settings.requireSignupApproval !== false;
+                let status: User['approvalStatus'] = requireApproval ? 'pending' : 'approved';
                 let isPresident = false;
 
                 if (subType === 'personal') finalType = 'citizen';
@@ -189,25 +244,13 @@ export const AuthView: React.FC = () => {
         }
     };
 
-    const handleRecovery = async () => {
+    const handleFindId = async () => {
         setIsProcessing(true);
         try {
-            if (recoveryMode === 'id') {
-                if (!findName || !findBirth) throw new Error("이름과 생년월일을 입력하세요.");
-                const foundId = await findUserIdByInfo(findName, findBirth);
-                if (foundId) showModal(`회원님의 아이디는 [ ${foundId} ] 입니다.`);
-                else showModal("일치하는 정보를 찾을 수 없습니다.");
-            } else {
-                if (!findId || !findName || !findBirth) throw new Error("모든 정보를 입력하세요.");
-                const foundEmail = await findUserEmailForRecovery(findId, findName, findBirth);
-                if (foundEmail) {
-                    await resetUserPassword(foundEmail);
-                    showModal(`[${foundEmail}]로 비밀번호 재설정 링크를 발송했습니다.`);
-                    setView('login');
-                } else {
-                    showModal("일치하는 계정 정보를 찾을 수 없습니다.");
-                }
-            }
+            if (!findName || !findBirth) throw new Error("이름과 생년월일을 입력하세요.");
+            const foundId = await findUserIdByInfo(findName, findBirth);
+            if (foundId) showModal(`회원님의 아이디는 [ ${foundId} ] 입니다.`);
+            else showModal("일치하는 정보를 찾을 수 없습니다.");
         } catch (e: any) {
             showModal(e.message || "오류가 발생했습니다.");
         } finally {
@@ -218,7 +261,8 @@ export const AuthView: React.FC = () => {
     const getInfo = () => {
         if (view === 'login') return { title: "성화 은행", desc: "서비스 이용을 위해\n로그인해주세요." };
         if (view === 'notif_setup') return { title: "알림 설정", desc: "더 빠른 소식을 위해\n알림 방식을 선택하세요." };
-        if (view === 'find_account') return { title: "계정 찾기", desc: "아이디 또는 비밀번호를\n찾을 수 있습니다." };
+        if (view === 'find_id') return { title: "아이디 찾기", desc: "가입 시 입력한 정보로\n아이디를 찾습니다." };
+        if (view === 'reset_pw') return { title: "비밀번호 재설정", desc: "가입한 이메일로\n재설정 링크를 발송합니다." };
         if (view === 'signup') {
             switch(step) {
                 case 1: return { title: "약관 동의", desc: "관리자가 등록한\n이용 약관입니다." };
@@ -235,16 +279,7 @@ export const AuthView: React.FC = () => {
 
     return (
         <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F2F2F7] dark:bg-[#050505]">
-            {/* Enhanced Ambient Background Orbs */}
-            {highQualityGraphics && (
-                <>
-                    <div className="absolute top-[-20%] left-[-10%] w-[60vw] h-[60vw] rounded-full bg-green-500/20 blur-[150px] animate-blob mix-blend-screen"></div>
-                    <div className="absolute bottom-[-20%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-blue-500/20 blur-[150px] animate-blob animation-delay-2000 mix-blend-screen"></div>
-                    <div className="absolute top-[30%] left-[30%] w-[40vw] h-[40vw] rounded-full bg-purple-500/15 blur-[120px] animate-blob animation-delay-4000 mix-blend-screen"></div>
-                </>
-            )}
-
-            <div className={`w-full max-w-5xl h-full sm:h-[720px] flex flex-col sm:flex-row overflow-hidden relative z-10 transition-all duration-500 sm:rounded-[40px] shadow-2xl ${highQualityGraphics ? 'bg-white/10 dark:bg-black/40 backdrop-blur-3xl border border-white/20 shadow-[0_0_40px_rgba(0,0,0,0.1)]' : 'bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-gray-800'}`}>
+            <div className={`w-full max-w-5xl h-full sm:h-[85vh] flex flex-col sm:flex-row overflow-hidden relative z-10 transition-all duration-500 sm:rounded-[40px] shadow-2xl ${highQualityGraphics ? 'bg-white/10 dark:bg-black/40 backdrop-blur-3xl border border-white/20 shadow-[0_0_40px_rgba(0,0,0,0.1)]' : 'bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-gray-800'}`}>
                 
                 {/* Mobile Header */}
                 <div className="sm:hidden w-full px-6 pt-8 pb-4 flex items-center justify-between shrink-0">
@@ -305,9 +340,14 @@ export const AuthView: React.FC = () => {
                                     <Input type="password" placeholder="비밀번호" value={password} onChange={e => setPassword(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md border-white/20 focus:border-green-500" />
                                 </div>
                                 <Button onClick={handleLogin} className="w-full h-14 text-lg rounded-2xl bg-green-600 hover:bg-green-500 shadow-lg shadow-green-600/30 backdrop-blur-sm">접속하기</Button>
+                                
                                 <div className="flex justify-between items-center px-1 pt-4 border-t border-gray-200/50 dark:border-white/10">
-                                    <button onClick={() => navigateTo('signup')} className="text-sm font-bold text-gray-500 hover:text-green-600 transition-colors">회원가입</button>
-                                    <button onClick={() => navigateTo('find_account')} className="text-xs text-gray-400 hover:text-gray-600 transition-colors">아이디/비번 찾기</button>
+                                    <button onClick={() => navigateTo('signup')} className="text-sm font-bold text-green-600 hover:underline transition-colors">회원가입</button>
+                                    <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
+                                        <button onClick={() => navigateTo('find_id')} className="hover:text-gray-600 dark:hover:text-gray-300">아이디 찾기</button>
+                                        <span className="w-px h-3 bg-gray-300 dark:bg-gray-700"></span>
+                                        <button onClick={() => navigateTo('reset_pw')} className="hover:text-gray-600 dark:hover:text-gray-300">비밀번호 찾기</button>
+                                    </div>
                                 </div>
                             </div>
                         )}
@@ -330,18 +370,34 @@ export const AuthView: React.FC = () => {
                                 </div>
                                 {step === 1 && (
                                     <div className="space-y-3 animate-fade-in">
+                                        {generalProvisions && (
+                                            <div 
+                                                onClick={() => setShowTotalTerms(true)}
+                                                className={`mb-4 p-6 border-2 rounded-2xl cursor-pointer transition-all flex flex-col items-center justify-center text-center gap-2 shadow-sm active:scale-95 ${hasReadGeneralTerms ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 hover:shadow-lg'}`}
+                                            >
+                                                <span className="font-black text-xl text-blue-800 dark:text-blue-300">📜 서비스 이용 약관 (총칙)</span>
+                                                <div className="flex items-center gap-2 mt-1">
+                                                    {hasReadGeneralTerms ? (
+                                                        <span className="text-green-600 font-bold flex items-center gap-1"><LineIcon icon="check" className="w-5 h-5"/> 확인 완료</span>
+                                                    ) : (
+                                                        <span className="text-xs bg-red-600 text-white px-3 py-1 rounded-full font-bold animate-pulse">필수 확인</span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-gray-500 mt-1">클릭하여 전체 약관을 확인해주세요.</p>
+                                            </div>
+                                        )}
                                         <div className="space-y-2 max-h-80 overflow-y-auto pr-1 scrollbar-hide">
                                             {consents.map((c, idx) => (
-                                                <div key={c.key} className={`border rounded-2xl transition-all duration-300 overflow-hidden ${currentTermIndex === idx ? 'border-green-500 bg-green-50/20 dark:bg-green-900/20 shadow-sm' : 'border-gray-200 dark:border-white/10 bg-white/40 dark:bg-white/5'}`}>
-                                                    <button onClick={() => setCurrentTermIndex(idx)} className="w-full p-4 flex justify-between items-center text-left">
-                                                        <span className="font-bold text-sm dark:text-white">{idx + 1}. {c.title} {c.isMandatory !== false && <span className="text-red-500 ml-1">(필수)</span>}</span>
-                                                    </button>
-                                                    {currentTermIndex === idx && (
-                                                        <div className="px-4 pb-4 animate-slide-up">
-                                                            <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed mb-4 p-3 bg-white/50 dark:bg-black/20 rounded-xl" dangerouslySetInnerHTML={{ __html: c.content }} />
-                                                            <label className="flex items-center gap-3 cursor-pointer p-2 hover:bg-white/10 rounded-lg transition-colors"><input type="checkbox" checked={!!agreedTerms[c.key]} onChange={e => setAgreedTerms({ ...agreedTerms, [c.key]: e.target.checked })} className="accent-green-600 w-5 h-5" /><span className="text-sm font-bold dark:text-white">동의합니다.</span></label>
+                                                <div key={c.key} className={`border rounded-2xl transition-all duration-300 overflow-hidden ${agreedTerms[c.key] ? 'border-green-500 bg-green-50/20 dark:bg-green-900/20 shadow-sm' : 'border-gray-200 dark:border-white/10 bg-white/40 dark:bg-white/5'}`}>
+                                                    <div className="p-4">
+                                                        <div className="flex justify-between items-center mb-2">
+                                                            <span className="font-bold text-base dark:text-white">{idx + 1}. {c.title} {c.isMandatory !== false && <span className="text-red-500 ml-1">(필수)</span>}</span>
+                                                            <input type="checkbox" checked={!!agreedTerms[c.key]} onChange={e => setAgreedTerms({ ...agreedTerms, [c.key]: e.target.checked })} className="accent-green-600 w-6 h-6" />
                                                         </div>
-                                                    )}
+                                                        <div className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed bg-white/50 dark:bg-black/20 rounded-xl p-3 border border-gray-100 dark:border-white/5">
+                                                            <RichText text={c.content.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '')} />
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>
@@ -414,25 +470,69 @@ export const AuthView: React.FC = () => {
                             </div>
                         )}
                         
-                        {view === 'find_account' && (
+                        {view === 'find_id' && (
                             <div className="space-y-6 animate-slide-up">
-                                <div className="flex p-1 bg-gray-200 dark:bg-white/10 rounded-xl">
-                                    <button onClick={() => setRecoveryMode('id')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${recoveryMode === 'id' ? 'bg-white dark:bg-black/50 shadow text-black dark:text-white' : 'text-gray-500'}`}>아이디 찾기</button>
-                                    <button onClick={() => setRecoveryMode('pw')} className={`flex-1 py-2 rounded-lg text-sm font-bold transition-all ${recoveryMode === 'pw' ? 'bg-white dark:bg-black/50 shadow text-black dark:text-white' : 'text-gray-500'}`}>비밀번호 찾기</button>
-                                </div>
+                                <h3 className="text-center font-bold text-lg mb-2 dark:text-white">아이디 찾기</h3>
                                 <div className="space-y-3">
                                     <Input placeholder="이름" value={findName} onChange={e => setFindName(e.target.value)} className="h-12 bg-white/50 dark:bg-black/30" />
                                     <Input placeholder="생년월일 (6자리)" value={findBirth} onChange={e => setFindBirth(e.target.value)} maxLength={6} className="h-12 bg-white/50 dark:bg-black/30" />
-                                    {recoveryMode === 'pw' && <Input placeholder="아이디" value={findId} onChange={e => setFindId(e.target.value)} className="h-12 bg-white/50 dark:bg-black/30" />}
                                 </div>
-                                <Button onClick={handleRecovery} className="w-full h-12 bg-blue-600 hover:bg-blue-500">
-                                    {recoveryMode === 'id' ? '아이디 찾기' : '재설정 이메일 발송'}
-                                </Button>
+                                <Button onClick={handleFindId} className="w-full h-12 bg-blue-600 hover:bg-blue-500">아이디 확인</Button>
+                            </div>
+                        )}
+
+                        {view === 'reset_pw' && (
+                            <div className="space-y-6 animate-slide-up">
+                                <h3 className="text-center font-bold text-lg mb-2 dark:text-white">비밀번호 재설정</h3>
+                                <div className="space-y-3">
+                                    <p className="text-xs text-gray-500 text-center">가입 시 입력한 이메일 주소를 입력하세요.<br/>비밀번호 재설정 링크가 발송됩니다.</p>
+                                    <Input placeholder="이메일 주소" value={resetEmail} onChange={e => setResetEmail(e.target.value)} className="h-12 bg-white/50 dark:bg-black/30" />
+                                </div>
+                                <Button onClick={handleResetPassword} className="w-full h-12 bg-red-600 hover:bg-red-500">재설정 링크 발송</Button>
                             </div>
                         )}
                     </div>
                 </div>
             </div>
+            
+            {/* General Provisions Modal */}
+            {showTotalTerms && generalProvisions && (
+                <div className="fixed inset-0 z-[8000] bg-white dark:bg-black flex flex-col animate-fade-in">
+                    <div className="p-6 border-b dark:border-white/10 flex justify-between items-center shrink-0">
+                        <h2 className="text-2xl font-black text-center w-full">서비스 이용 약관 (총칙)</h2>
+                        {/* No close button, must agree */}
+                    </div>
+                    
+                    {/* Fixed floating timer */}
+                    <div className="absolute top-20 right-6 z-50 bg-red-600 text-white font-bold px-4 py-2 rounded-full shadow-lg animate-bounce">
+                        {generalTermsTimer > 0 ? `${generalTermsTimer}초 남음` : '확인 완료'}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-8 text-lg leading-loose whitespace-pre-wrap dark:text-gray-200" ref={generalTermsScrollRef}>
+                        <RichText text={generalProvisions.content.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '')} />
+                        <div className="h-20"></div> {/* Bottom padding to ensure scrollability */}
+                    </div>
+                    <div className="p-6 border-t dark:border-white/10 shrink-0 bg-white dark:bg-[#121212]">
+                        <Button 
+                            disabled={!canAgreeGeneral} 
+                            onClick={() => {
+                                if (generalTermsScrollRef.current) {
+                                    const { scrollTop, scrollHeight, clientHeight } = generalTermsScrollRef.current;
+                                    // Allow a small buffer for scrolling, force users to scroll to bottom-ish
+                                    if (scrollHeight - scrollTop - clientHeight > 300) { 
+                                        return alert("약관을 끝까지 읽어주세요 (스크롤을 내려주세요).");
+                                    }
+                                }
+                                setHasReadGeneralTerms(true);
+                                setShowTotalTerms(false);
+                            }} 
+                            className="w-full py-4 text-lg font-black shadow-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
+                        >
+                            {canAgreeGeneral ? "위 약관에 동의합니다" : `약관을 읽어주세요 (${generalTermsTimer}s)`}
+                        </Button>
+                    </div>
+                </div>
+            )}
             
             <style>{`
                 @keyframes blob {

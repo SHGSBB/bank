@@ -11,15 +11,25 @@ import { FeedbackTab } from './profile/FeedbackTab';
 import { InfoTab } from './profile/InfoTab';
 
 export const ProfileSettingsTab: React.FC = () => {
-    const { showPinModal, currentUser } = useGame();
+    const { showPinModal, currentUser, showModal } = useGame();
     const [subTab, setSubTab] = useState<'profile' | 'account' | 'security' | 'display' | 'features' | 'feedback' | 'info'>('profile');
 
     const handleTabChange = async (tab: 'profile' | 'account' | 'security' | 'display' | 'features' | 'feedback' | 'info') => {
         if (tab === 'security') {
-            const pin = await showPinModal("보안 설정 인증", currentUser?.pin!, (currentUser?.pinLength as any) || 4);
-            if (pin !== currentUser?.pin) return;
+            try {
+                const pin = await showPinModal("보안 설정 인증", currentUser?.pin!, (currentUser?.pinLength as any) || 4);
+                // Only change if PIN matched
+                if (pin === currentUser?.pin) {
+                    setSubTab(tab);
+                }
+            } catch(e) {
+                // Handle cancellation or error silently or with modal
+                // showModal("인증에 실패했습니다."); 
+            }
+        } else {
+            // Instant switch for non-security tabs
+            setSubTab(tab);
         }
-        setSubTab(tab);
     };
 
     const renderContent = () => {

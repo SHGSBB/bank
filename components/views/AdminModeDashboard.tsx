@@ -151,9 +151,9 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
     };
 
     return (
-        <div className="w-full relative min-h-screen">
+        <div className="h-full w-full relative min-h-screen overflow-y-auto pb-24 scrollbar-hide">
             <div 
-                className="transition-all duration-300 ease-in-out"
+                className="transition-all duration-300 ease-in-out p-4"
                 style={{ marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' }}
             >
                 <div className="bg-[#1C1C1E] text-white p-6 rounded-[28px] mb-6 shadow-2xl border border-white/5 flex justify-between items-center relative overflow-hidden">
@@ -204,7 +204,7 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
                     ))}
                 </div>
                 
-                <div className="min-h-[600px] animate-fade-in pb-20">
+                <div className="min-h-[600px] animate-fade-in">
                     {renderTabContent()}
                 </div>
             </div>

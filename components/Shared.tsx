@@ -72,16 +72,64 @@ export const Spinner: React.FC = () => (
     </div>
 );
 
+export const RichText: React.FC<{ text: string, className?: string }> = ({ text, className = '' }) => {
+    if (!text) return null;
+    
+    const lines = text.split('\n');
+    
+    const processLine = (line: string) => {
+        // Regex handles **bold**, -strike-, _italic_, +highlight+
+        const regex = /(\*\*.*?\*\*|\-.*?\-|_.*?_|\+.*?\+)/g;
+        const parts = line.split(regex);
+        
+        return parts.map((part, index) => {
+            if (!part) return null;
+            if (part.startsWith('**') && part.endsWith('**')) {
+                return <strong key={index} className="font-black text-inherit">{part.slice(2, -2)}</strong>;
+            }
+            if (part.startsWith('-') && part.endsWith('-')) {
+                return <del key={index} className="text-gray-400 decoration-gray-500 decoration-2">{part.slice(1, -1)}</del>;
+            }
+            if (part.startsWith('_') && part.endsWith('_')) {
+                return <em key={index} className="italic opacity-90">{part.slice(1, -1)}</em>;
+            }
+            if (part.startsWith('+') && part.endsWith('+')) {
+                return <span key={index} className="bg-yellow-200 dark:bg-yellow-600/60 text-black dark:text-white px-1 rounded mx-0.5 box-decoration-clone font-bold shadow-sm">{part.slice(1, -1)}</span>;
+            }
+            
+            // Link parsing
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            const urlParts = part.split(urlRegex);
+            if (urlParts.length > 1) {
+                 return <React.Fragment key={index}>
+                    {urlParts.map((p, i) => p.match(urlRegex) ? <a key={i} href={p} target="_blank" rel="noopener noreferrer" className="text-blue-500 underline break-all hover:text-blue-400 font-medium">{p}</a> : p)}
+                 </React.Fragment>;
+            }
+            return part;
+        });
+    };
+
+    return (
+        <div className={className}>
+            {lines.map((line, i) => (
+                <p key={i} className="min-h-[1em] break-words whitespace-pre-wrap leading-relaxed mb-1">
+                    {processLine(line)}
+                </p>
+            ))}
+        </div>
+    );
+};
+
 export const Button: React.FC<React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'danger' | 'secondary' }> = ({ className = '', variant = 'primary', onClick, ...props }) => {
     const { triggerHaptic } = useGame();
     const handleClick = (e: React.MouseEvent<HTMLButtonElement>) => {
         triggerHaptic();
         if (onClick) onClick(e);
     };
-    const baseClass = "px-6 py-3 rounded-[18px] font-bold transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base active:scale-95 shadow-sm flex items-center justify-center gap-2";
+    const baseClass = "px-6 py-3 rounded-[18px] font-bold transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base active:scale-95 shadow-sm flex items-center justify-center gap-2 select-none touch-manipulation";
     const variants = {
-        primary: "bg-green-600 text-white hover:bg-green-500",
-        danger: "bg-red-600 text-white hover:bg-red-500",
+        primary: "bg-green-600 text-white hover:bg-green-500 active:bg-green-700",
+        danger: "bg-red-600 text-white hover:bg-red-500 active:bg-red-700",
         secondary: "bg-gray-200 text-gray-800 dark:bg-gray-800 dark:text-gray-200 hover:opacity-80"
     };
     return <button className={`${baseClass} ${variants[variant]} ${className}`} onClick={handleClick} {...props} />;
@@ -94,16 +142,16 @@ export const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement>> = ({ c
     const inputType = isPassword && showPassword ? 'text' : type;
     
     return (
-        <div className={`relative w-full transition-all duration-300 ${isFocused ? 'scale-[1.02]' : 'scale-100'}`}>
+        <div className={`relative w-full transition-all duration-300 ${isFocused ? 'scale-[1.01]' : 'scale-100'}`}>
             <input 
                 type={inputType}
-                className={`w-full p-4 rounded-[18px] bg-gray-100 text-black dark:bg-[#252525] dark:text-white outline-none border border-transparent dark:border-gray-700 focus:ring-2 focus:ring-green-500 transition-all font-medium text-left ${className}`} 
+                className={`w-full p-4 rounded-[18px] bg-white dark:bg-[#252525] text-black dark:text-white outline-none border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-green-500 transition-all font-medium text-left ${className}`} 
                 onFocus={(e) => { setIsFocused(true); props.onFocus?.(e); }}
                 onBlur={(e) => { setIsFocused(false); props.onBlur?.(e); }}
                 {...props} 
             />
             {isPassword && (
-                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xs font-bold" tabIndex={-1}>
+                <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xs font-bold px-2 py-1" tabIndex={-1}>
                     {showPassword ? "숨김" : "보기"}
                 </button>
             )}
@@ -204,12 +252,14 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     const [isError, setIsError] = useState(false);
     const [isSuccess, setIsSuccess] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const isCheckingRef = useRef(false); // Fix: Add guard ref to prevent double execution
+    
+    // State for dynamic length (defaults to resolver provided length, or 4)
+    const [targetLength, setTargetLength] = useState<number>(resolver.pinLength || 4);
 
-    const handleComplete = useCallback((finalPin: string) => {
-        if (isProcessing || isCheckingRef.current) return;
-        isCheckingRef.current = true;
-        setIsProcessing(true);
+    // Secure completion handler to ensure promise resolves correctly before unmounting
+    const handleComplete = useCallback(async (finalPin: string) => {
+        if (isProcessing) return;
+        setIsProcessing(true); // Lock immediately
 
         if (resolver.expectedPin && finalPin !== resolver.expectedPin) {
             setIsError(true);
@@ -218,26 +268,25 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
             setTimeout(() => { 
                 setPin(''); 
                 setIsError(false);
-                setIsProcessing(false);
-                isCheckingRef.current = false;
+                setIsProcessing(false); // Unlock for retry
             }, 500);
         } else {
             setIsSuccess(true);
             if (navigator.vibrate) navigator.vibrate(50);
             
+            // Wait for visual feedback, then resolve
             setTimeout(() => {
                 resolver.resolve(finalPin);
-                setResolver(null); 
-                isCheckingRef.current = false;
+                setResolver(null); // Close modal
             }, 300);
         }
-    }, [isProcessing, resolver, setResolver]);
+    }, [resolver, setResolver, isProcessing]);
 
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (isProcessing) return;
             if (/^[0-9]$/.test(e.key)) {
-                if (pin.length < (resolver.pinLength || 4)) {
+                if (pin.length < targetLength) {
                     setPin(p => p + e.key);
                 }
             } else if (e.key === 'Backspace') {
@@ -249,25 +298,62 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [pin, isProcessing, resolver, setResolver]);
+    }, [pin, resolver, setResolver, isProcessing, targetLength]);
 
+    // Effect to trigger completion when pin length is reached
     useEffect(() => {
-        const requiredLen = resolver.pinLength || 4;
-        if (pin.length === requiredLen && !isProcessing && !isError && !isSuccess) {
+        if (pin.length === targetLength && !isProcessing && !isError && !isSuccess) {
             handleComplete(pin);
         }
-    }, [pin, isProcessing, isError, isSuccess, resolver.pinLength, handleComplete]);
+    }, [pin, targetLength, handleComplete, isProcessing, isError, isSuccess]);
+
+    const handleNumClick = (num: string) => {
+        if(isProcessing) return;
+        if (pin.length < targetLength) {
+            setPin(p => p + num);
+        }
+    };
+
+    const toggleLength = () => {
+        if (resolver.expectedPin) return; // Cannot change length if verifying
+        setPin('');
+        setTargetLength(prev => prev === 4 ? 6 : 4);
+    };
 
     return (
-        <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4">
+        <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4 touch-none">
             <div className={`bg-white dark:bg-[#1C1C1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake' : ''}`}>
-                <button onClick={() => { if(!isProcessing) { resolver.resolve(null); setResolver(null); } }} className="absolute top-4 right-4 text-gray-400 p-2" disabled={isProcessing}>✕</button>
-                <h3 className="text-xl font-bold text-center mb-2">간편 비밀번호 입력</h3>
-                <p className={`text-sm text-center mb-8 ${isError ? 'text-red-500 font-bold' : (isSuccess ? 'text-green-500 font-bold' : 'text-gray-500')}`}>
+                <button 
+                    onClick={() => { if(!isProcessing) { resolver.resolve(null); setResolver(null); } }} 
+                    className="absolute top-4 right-4 text-gray-400 p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors" 
+                    disabled={isProcessing}
+                >✕</button>
+                <h3 className="text-xl font-bold text-center mb-2 text-black dark:text-white">간편 비밀번호 입력</h3>
+                <p className={`text-sm text-center mb-6 ${isError ? 'text-red-500 font-bold' : (isSuccess ? 'text-green-500 font-bold' : 'text-gray-500')}`}>
                     {isError ? "비밀번호가 일치하지 않습니다" : (isSuccess ? "확인되었습니다" : (resolver.message || "비밀번호를 입력하세요"))}
                 </p>
+                
+                {!resolver.expectedPin && (
+                    <div className="flex justify-center mb-6">
+                        <div className="bg-gray-100 dark:bg-gray-800 p-1 rounded-xl flex">
+                            <button 
+                                onClick={() => { setPin(''); setTargetLength(4); }}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${targetLength === 4 ? 'bg-white dark:bg-gray-600 shadow text-black dark:text-white' : 'text-gray-400'}`}
+                            >
+                                4자리
+                            </button>
+                            <button 
+                                onClick={() => { setPin(''); setTargetLength(6); }}
+                                className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${targetLength === 6 ? 'bg-white dark:bg-gray-600 shadow text-black dark:text-white' : 'text-gray-400'}`}
+                            >
+                                6자리
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 <div className="flex justify-center gap-4 mb-8">
-                    {Array.from({ length: resolver.pinLength || 4 }).map((_, i) => (
+                    {Array.from({ length: targetLength }).map((_, i) => (
                         <div key={i} className={`w-4 h-4 rounded-full transition-all duration-200 ${
                             isError ? 'bg-red-500' : 
                             isSuccess ? 'bg-green-500 scale-125' : 
@@ -277,14 +363,14 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                     {[1, 2, 3, 4, 5, 6, 7, 8, 9].map(num => (
-                        <button key={num} onClick={() => !isProcessing && !isCheckingRef.current && setPin(p => p + num)} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
+                        <button key={num} onClick={() => handleNumClick(num.toString())} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 disabled:opacity-50 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-black dark:text-white">
                             {num}
                         </button>
                     ))}
                     <div className="flex items-center justify-center">
                         {resolver.allowBiometric && <button onClick={async () => { if(!isProcessing && await loginBiometrics('temp') && resolver.expectedPin) handleComplete(resolver.expectedPin); }} className="p-4 rounded-full text-green-600 hover:bg-green-50 dark:hover:bg-green-900/20 transition-colors" disabled={isProcessing}><LineIcon icon="fingerprint" className="w-8 h-8" /></button>}
                     </div>
-                    <button onClick={() => !isProcessing && !isCheckingRef.current && setPin(p => p + '0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">0</button>
+                    <button onClick={() => handleNumClick('0')} disabled={isProcessing} className="h-16 rounded-[18px] bg-gray-100 dark:bg-gray-800 text-2xl font-bold active:scale-95 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-black dark:text-white">0</button>
                     <button onClick={() => !isProcessing && setPin(p => p.slice(0, -1))} disabled={isProcessing} className="h-16 rounded-[18px] flex items-center justify-center text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors active:scale-95">
                         <LineIcon icon="arrow-left" className="w-6 h-6" />
                     </button>
