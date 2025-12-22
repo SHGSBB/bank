@@ -39,7 +39,13 @@ export const WeeklyPayTab: React.FC = () => {
         if (selectedUsers.size === 0) return showModal('지급할 시민을 선택하세요.');
 
         const totalPayment = amount * selectedUsers.size;
-        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
+        
+        // Robust Bank Lookup
+        const bank = (Object.values(db.users) as User[]).find(u => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
 
         if ((bank?.balanceKRW || 0) < totalPayment) return showModal('은행 잔고가 부족합니다.');
 

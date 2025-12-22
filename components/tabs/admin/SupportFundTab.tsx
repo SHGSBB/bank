@@ -24,28 +24,33 @@ export const SupportFundTab: React.FC = () => {
         if (citizens.length === 0) return showModal('지급할 시민이 없습니다. (잠시 후 다시 시도하세요)');
 
         const totalAmount = valAmount * citizens.length;
-        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
+        
+        // Dynamic Bank Lookup
+        const newDb = { ...db };
+        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
 
-        if (!bank) return showModal("한국은행 계정을 찾을 수 없습니다.");
-        if (bank.balanceKRW < totalAmount) return showModal('은행 잔고가 부족합니다.');
+        if (!newBankEntry) return showModal("한국은행(관리자) 계정을 찾을 수 없습니다.");
+        const newBankUser = newBankEntry[1];
+
+        if (newBankUser.balanceKRW < totalAmount) return showModal('은행 잔고가 부족합니다.');
 
         const confirmed = await showConfirm(`모든 시민(${citizens.length}명)에게 '${title}' ₩${valAmount.toLocaleString()}을 지급하시겠습니까? (총액: ₩${totalAmount.toLocaleString()})`);
         if (!confirmed) return;
-
-        const newDb = { ...db };
-        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === '한국은행');
-        if (!newBankEntry) return; 
-        const newBankUser = newBankEntry[1];
 
         newBankUser.balanceKRW -= totalAmount;
         const description = restriction ? `${title} (${restriction})` : title;
         const date = new Date().toISOString();
 
         citizens.forEach(c => {
-            // Find citizen safely
-            const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === c.name);
-            if (userEntry) {
-                const user = userEntry[1];
+            // Find citizen safely using safe ID
+            const cKey = toSafeId(c.email || c.id!);
+            const user = newDb.users[cKey];
+            
+            if (user) {
                 user.balanceKRW += valAmount;
                 
                 user.transactions = [...(user.transactions || []), {

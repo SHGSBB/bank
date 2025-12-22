@@ -1,4 +1,5 @@
 
+// ... existing imports ...
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Button, Input, LineIcon, Modal, formatName, RichText } from '../Shared';
@@ -15,6 +16,7 @@ const GOVT_STRUCTURE = {
 };
 
 export const AuthView: React.FC = () => {
+    // ... existing state and logic ...
     const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, highQualityGraphics, requestPasswordReset } = useGame();
     const [view, setView] = useState<ViewMode>('login');
     const [history, setHistory] = useState<ViewMode[]>([]);
@@ -36,7 +38,6 @@ export const AuthView: React.FC = () => {
         }
     };
 
-    // Form States
     const [loginId, setLoginId] = useState('');
     const [password, setPassword] = useState('');
     const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -58,16 +59,13 @@ export const AuthView: React.FC = () => {
     
     const [agreedTerms, setAgreedTerms] = useState<Record<string, boolean>>({});
     
-    // General Provisions States
     const [showTotalTerms, setShowTotalTerms] = useState(false);
     const [generalTermsTimer, setGeneralTermsTimer] = useState(30);
     const [hasReadGeneralTerms, setHasReadGeneralTerms] = useState(false);
     const [canAgreeGeneral, setCanAgreeGeneral] = useState(false);
-    const [isScrolledToBottom, setIsScrolledToBottom] = useState(false);
     const generalTermsScrollRef = useRef<HTMLDivElement>(null);
     const timerInterval = useRef<any>(null);
 
-    // Login History State
     const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
     const consents = useMemo(() => {
@@ -80,6 +78,7 @@ export const AuthView: React.FC = () => {
     const allMandatoryAgreed = consents.every(c => c.isMandatory === false || agreedTerms[c.key]) && (!generalProvisions || hasReadGeneralTerms);
     const verificationInterval = useRef<any>(null);
 
+    // ... useEffects ...
     useEffect(() => {
         try {
             const hist = JSON.parse(localStorage.getItem('sh_login_history') || '[]');
@@ -91,17 +90,16 @@ export const AuthView: React.FC = () => {
         };
     }, []);
 
-    // General Terms Timer Logic
     useEffect(() => {
         if (showTotalTerms && !hasReadGeneralTerms) {
             setGeneralTermsTimer(30);
             setCanAgreeGeneral(false);
-            setIsScrolledToBottom(false);
             
             timerInterval.current = setInterval(() => {
                 setGeneralTermsTimer((prev) => {
                     if (prev <= 1) {
                         clearInterval(timerInterval.current);
+                        setCanAgreeGeneral(true);
                         return 0;
                     }
                     return prev - 1;
@@ -112,21 +110,6 @@ export const AuthView: React.FC = () => {
         }
         return () => { if (timerInterval.current) clearInterval(timerInterval.current); };
     }, [showTotalTerms, hasReadGeneralTerms]);
-
-    useEffect(() => {
-        if (generalTermsTimer === 0 && isScrolledToBottom) {
-            setCanAgreeGeneral(true);
-        }
-    }, [generalTermsTimer, isScrolledToBottom]);
-
-    const handleScroll = () => {
-        if (generalTermsScrollRef.current) {
-            const { scrollTop, scrollHeight, clientHeight } = generalTermsScrollRef.current;
-            if (scrollHeight - scrollTop - clientHeight < 50) {
-                setIsScrolledToBottom(true);
-            }
-        }
-    };
 
     const handleLogin = async () => {
         if (!loginId || !password) return showModal("정보를 입력하세요.");
@@ -220,21 +203,32 @@ export const AuthView: React.FC = () => {
             setIsProcessing(true);
             try {
                 let finalType: User['type'] = 'citizen';
+                let finalSubType: UserSubType = subType === 'teacher' ? 'personal' : subType; // Fix subtype logic
+                if (subType === 'teacher') finalType = 'teacher';
+                
                 let branches: GovtBranch[] = [];
                 const requireApproval = db.settings.requireSignupApproval !== false;
                 let status: User['approvalStatus'] = requireApproval ? 'pending' : 'approved';
                 let isPresident = false;
 
-                if (subType === 'personal') finalType = 'citizen';
-                else if (subType === 'business') finalType = 'mart';
-                else if (subType === 'teacher') finalType = 'teacher';
-                else if (subType === 'govt') {
-                    finalType = 'government';
+                if (subType === 'business') {
+                    finalType = 'mart';
+                    finalSubType = 'business';
+                } else if (subType === 'govt') {
+                    finalType = 'government'; // Default for officials
+                    finalSubType = 'govt';
+                    
                     if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
                     else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
                     else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
+                    
                     if (govtRole === '대통령') isPresident = true;
-                    if (govtRole === '한국은행장' || sName.trim() === '한국은행') status = 'approved';
+                    
+                    // 한국은행장 특수 로직: 바로 관리자(Admin) 권한 부여
+                    if (govtRole === '한국은행장' || sName.trim() === '한국은행') {
+                        status = 'approved';
+                        finalType = 'admin';
+                    }
                 }
 
                 await registerUser({
@@ -242,13 +236,13 @@ export const AuthView: React.FC = () => {
                     id: signupId.trim(),
                     name: sName.trim(), 
                     type: finalType, 
-                    subType: subType === 'teacher' ? 'teacher' : subType,
+                    subType: finalSubType,
                     birthDate: sBirth.trim(), 
                     govtBranch: branches, 
                     govtRole,
                     isPresident,
                     approvalStatus: status,
-                    balanceKRW: 0,
+                    balanceKRW: (finalType === 'admin') ? 1000000000000 : 0, // Bank gets startup funds
                     balanceUSD: 0
                 }, password);
 
@@ -291,11 +285,12 @@ export const AuthView: React.FC = () => {
         return { title: "성화 은행", desc: "" };
     };
 
+    // ... Rest of the component (rendering) ...
     const info = getInfo();
 
     return (
         <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F0F0F0] dark:bg-[#121212]">
-            {/* Animated Blobs - Lower Saturation & Opacity */}
+            {/* Animated Blobs */}
             <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] bg-green-200/30 dark:bg-green-900/10 rounded-full blur-[120px] animate-blob mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
             <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-blue-200/30 dark:bg-blue-900/10 rounded-full blur-[120px] animate-blob animation-delay-2000 mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
             <div className="absolute top-[40%] left-[50%] transform -translate-x-1/2 w-[500px] h-[500px] bg-purple-200/30 dark:bg-purple-900/10 rounded-full blur-[120px] animate-blob animation-delay-4000 mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
@@ -354,6 +349,7 @@ export const AuthView: React.FC = () => {
                 {/* Right Panel (Content) */}
                 <div className="flex-1 p-6 sm:p-16 flex flex-col justify-center items-center relative z-10 overflow-y-auto w-full">
                     <div className="w-full max-w-sm space-y-6 animate-fade-in relative">
+                        {/* Login View */}
                         {view === 'login' && (
                             <div className="space-y-6 animate-slide-up">
                                 <div className="space-y-3">
@@ -384,6 +380,7 @@ export const AuthView: React.FC = () => {
                             </div>
                         )}
 
+                        {/* Signup View */}
                         {view === 'signup' && (
                             <div className="space-y-6 animate-slide-up">
                                 <div className="flex gap-1.5 mb-2">
@@ -521,23 +518,33 @@ export const AuthView: React.FC = () => {
                 <div className="fixed inset-0 z-[8000] bg-white dark:bg-black flex flex-col animate-fade-in">
                     <div className="p-6 border-b dark:border-white/10 flex justify-between items-center shrink-0">
                         <h2 className="text-2xl font-black text-center w-full">서비스 이용 약관 (총칙)</h2>
-                        {/* No close button, must agree */}
+                        
                     </div>
                     
-                    <div className="flex-1 overflow-y-auto p-8 text-lg leading-loose whitespace-pre-wrap dark:text-gray-200" ref={generalTermsScrollRef} onScroll={handleScroll}>
+                    <div className="absolute top-20 right-6 z-50 bg-red-600 text-white font-bold px-4 py-2 rounded-full shadow-lg animate-bounce">
+                        {generalTermsTimer > 0 ? `${generalTermsTimer}초 남음` : '확인 완료'}
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto p-8 text-lg leading-loose whitespace-pre-wrap dark:text-gray-200" ref={generalTermsScrollRef}>
                         <RichText text={generalProvisions.content.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '')} />
-                        <div className="h-20"></div> {/* Bottom padding to ensure scrollability */}
+                        <div className="h-20"></div>
                     </div>
                     <div className="p-6 border-t dark:border-white/10 shrink-0 bg-white dark:bg-[#121212]">
                         <Button 
                             disabled={!canAgreeGeneral} 
                             onClick={() => {
+                                if (generalTermsScrollRef.current) {
+                                    const { scrollTop, scrollHeight, clientHeight } = generalTermsScrollRef.current;
+                                    if (scrollHeight - scrollTop - clientHeight > 300) { 
+                                        return alert("약관을 끝까지 읽어주세요 (스크롤을 내려주세요).");
+                                    }
+                                }
                                 setHasReadGeneralTerms(true);
                                 setShowTotalTerms(false);
                             }} 
                             className="w-full py-4 text-lg font-black shadow-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
                         >
-                            {canAgreeGeneral ? "위 약관에 동의합니다" : "약관을 끝까지 읽고 잠시 기다려주세요"}
+                            {canAgreeGeneral ? "위 약관에 동의합니다" : `약관을 읽어주세요 (${generalTermsTimer}s)`}
                         </Button>
                     </div>
                 </div>

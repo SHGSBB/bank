@@ -22,7 +22,13 @@ export const WelfareTab: React.FC = () => {
     };
 
     const handlePayWelfare = async (user: User, amount: number) => {
-        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
+        // Robust Bank Lookup
+        const bank = (Object.values(db.users) as User[]).find(u => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
+
         if ((bank?.balanceKRW || 0) < amount) return showModal('은행 잔고가 부족합니다.');
 
         const confirmed = await showConfirm(`${user.name}님에게 복지금 ₩${amount.toLocaleString()}을 지급하시겠습니까?`);

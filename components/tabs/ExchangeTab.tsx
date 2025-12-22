@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput } from '../Shared';
+import { User } from '../../types';
 
 type Currency = 'KRW' | 'USD';
 
@@ -71,8 +72,18 @@ export const ExchangeTab: React.FC = () => {
     const handleExchange = async () => {
         if (db.settings.isFrozen) return showModal('현재 모든 금융 거래가 중지되었습니다.');
         
-        const bank = db.users['한국은행'];
-        if (config.isAutoStopEnabled && toCurrency === 'USD' && (bank.balanceUSD || 0) < (config.autoStopThresholdUSD || 100)) return showModal("은행 외화 보유량 부족으로 환전이 일시 중지되었습니다.");
+        // Dynamic Bank Lookup
+        const bank = (Object.values(db.users) as User[]).find(u => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
+
+        if (config.isAutoStopEnabled && toCurrency === 'USD') {
+            if (!bank || (bank.balanceUSD || 0) < (config.autoStopThresholdUSD || 100)) {
+                return showModal("은행 외화 보유량 부족으로 환전이 일시 중지되었습니다.");
+            }
+        }
 
         const amount = parseFloat(fromAmount);
         if (isNaN(amount) || amount <= 0) return showModal('올바른 금액을 입력하세요.');

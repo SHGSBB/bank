@@ -1,4 +1,5 @@
 
+// ... imports ...
 import React, { useState, useMemo, useEffect, useRef, Suspense, lazy } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Button, formatSmartMoney, formatName, LineIcon, PieChart, Spinner, Modal, RichText, Input } from '../Shared';
@@ -27,7 +28,9 @@ const ChatSystem = lazy(() => import('../ChatSystem').then(module => ({ default:
 const AuctionModal = lazy(() => import('../tabs/AuctionModal').then(module => ({ default: module.AuctionModal })));
 const AdminModeDashboard = lazy(() => import('./AdminModeDashboard').then(module => ({ default: module.AdminModeDashboard })));
 
+// ... Wallet Component (unchanged) ...
 const Wallet: React.FC = () => {
+    // ... existing wallet code ...
     const { currentUser, db } = useGame();
     const [expandedCard, setExpandedCard] = useState<string | null>(null);
     const fmt = (num: number) => formatSmartMoney(num, currentUser?.preferences?.assetDisplayMode === 'rounded');
@@ -84,6 +87,7 @@ const Wallet: React.FC = () => {
 export const Dashboard: React.FC = () => {
     const { currentUser, db, isAdminMode, setAdminMode, saveDb, notify, showModal, showConfirm, clearPaidTax, logout, triggerHaptic, loadAssetHistory, currentAssetHistory, requestNotificationPermission, updateUser, payTax, dismissTax, setupPin, activeTab, setActiveTab, serverAction, refreshData } = useGame();
     
+    // ... existing states ...
     const [isProfileOpen, setIsProfileOpen] = useState(false);
     const [isChatOpen, setIsChatOpen] = useState(false);
     const [showAllTabsModal, setShowAllTabsModal] = useState(false);
@@ -95,24 +99,24 @@ export const Dashboard: React.FC = () => {
     const [showTermsUpdate, setShowTermsUpdate] = useState(false);
     const [mockOldTerms, setMockOldTerms] = useState("");
     const [mockNewTerms, setMockNewTerms] = useState("");
-    const [viewingOld, setViewingOld] = useState(false); // For hover effect
+    const [viewingOld, setViewingOld] = useState(false);
     
-    // Announce Hidden List State
     const [hiddenAnnouncements, setHiddenAnnouncements] = useState<number[]>(() => {
         try { return JSON.parse(localStorage.getItem('hidden_announcements') || '[]'); } catch { return []; }
     });
 
-    const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
+    // Check Roles Logic - Dynamic
+    const isBOK = currentUser?.govtRole === '한국은행장' || (currentUser?.type === 'admin' && currentUser?.subType === 'govt') || currentUser?.type === 'root';
     const isTeacher = currentUser?.subType === 'teacher' || currentUser?.type === 'root';
     const isPresident = currentUser?.isPresident;
     const isEasyMode = currentUser?.preferences?.isEasyMode && currentUser?.type === 'citizen';
     
+    // If user has a govtRole, treat as Government even if type is 'citizen' (Automatic switch)
+    const isGovernment = currentUser?.type === 'government' || !!currentUser?.govtRole;
+
     const myTaxes = useMemo(() => currentUser?.pendingTaxes || [], [currentUser?.pendingTaxes]);
     const now = new Date();
     
-    // Tax Logic Update:
-    // Actionable = Pending AND Not Overdue. Also Paid (for review).
-    // Overdue = Pending AND Overdue. (Shows as warning, not red banner)
     const actionableTaxes = myTaxes.filter(t => { 
         const isPending = t.status === 'pending'; 
         const isPaid = t.status === 'paid'; 
@@ -133,13 +137,12 @@ export const Dashboard: React.FC = () => {
         }); 
     }, [db.announcements, hiddenAnnouncements]);
 
-    // Check for Terms Update Announcement
+    // ... useEffects for terms update ...
     useEffect(() => {
         const termsUpdate = db.announcements?.find(a => a.category === 'terms_update');
         if (termsUpdate) {
             const hasSeen = localStorage.getItem(`seen_terms_update_${termsUpdate.id}`);
             if (!hasSeen) {
-                // Content Format: OLD|||NEW
                 const parts = termsUpdate.content.split('|||');
                 if (parts.length === 2) {
                     setMockOldTerms(parts[0]);
@@ -173,17 +176,19 @@ export const Dashboard: React.FC = () => {
     useEffect(() => { if (actionableTaxes.length > 1) { const timer = setInterval(() => { setBannerIndex(prev => (prev + 1) % actionableTaxes.length); }, 5000); return () => clearInterval(timer); } }, [actionableTaxes.length]);
 
     const tabs = useMemo(() => {
-        if (isBOK) return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
-        if (isEasyMode) return ['이체', '구매', '저금', '대출', '고지서', '환전']; 
+        if (isBOK || currentUser?.type === 'admin') return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
         if (isTeacher) return ['교사', '운영 관리', '이체', '거래 내역'];
+        
+        // Auto-switch based on role presence
         if (isPresident) return ['국정 운영', '정부', '이체', '거래 내역'];
-        if (currentUser?.type === 'government') return ['정부', '이체', '거래 내역', '고지서'];
-        if (currentUser?.type === 'citizen') return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역', '기준표'];
+        if (isGovernment) return ['정부', '이체', '거래 내역', '고지서'];
         if (currentUser?.type === 'mart') return ['물품관리', '가게설정', '이체', '주식', '고지서', '거래 내역'];
-        if (currentUser?.type === 'admin') return ['재정 관리', '신청 관리', '운영 관리', '기준표', '거래 내역', '환전'];
-        return ['이체', '거래 내역'];
-    }, [currentUser, isTeacher, isPresident, isEasyMode, isBOK]);
+        
+        if (isEasyMode) return ['이체', '구매', '저금', '대출', '고지서', '환전']; 
+        return ['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역', '기준표'];
+    }, [currentUser, isTeacher, isPresident, isEasyMode, isBOK, isGovernment]);
 
+    // ... Rest of the component (useEffect, rendering) remains mostly same ...
     useEffect(() => {
         requestNotificationPermission();
         const handleOpenChat = () => setIsChatOpen(true);
@@ -224,7 +229,7 @@ export const Dashboard: React.FC = () => {
                         )}
                     </div>
                     
-                    {/* Overdue Tax Warning (Fixed Yellow Banner) */}
+                    {/* Overdue Tax Warning */}
                     {overdueTaxes.length > 0 && (
                         <div className="mb-4 bg-yellow-100 dark:bg-yellow-900/40 border-l-4 border-yellow-500 text-yellow-800 dark:text-yellow-200 p-4 rounded-r shadow-sm flex justify-between items-center animate-pulse">
                             <div>
@@ -282,6 +287,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                     )}
 
+                    {/* Tax Banner */}
                     <div className="space-y-2 mb-6">
                         {currentBannerTax && (
                             <div className={`p-4 rounded-xl shadow-lg flex items-center justify-between transition-all duration-500 relative overflow-hidden ${currentBannerTax.status === 'paid' ? 'bg-gray-600 text-gray-200' : 'bg-red-600 text-white animate-pulse'}`}>
@@ -355,6 +361,7 @@ export const Dashboard: React.FC = () => {
                 </div>
             </div>
 
+            {/* Mobile Bottom Nav */}
             <div className="fixed bottom-0 left-0 right-0 h-20 bg-white/80 dark:bg-[#121212]/80 backdrop-blur-lg border-t border-gray-200 dark:border-gray-800 flex justify-around items-center px-2 pb-4 z-[50] sm:hidden">
                 {[
                     { id: '이체', icon: 'finance', label: '홈' },
@@ -404,8 +411,8 @@ export const Dashboard: React.FC = () => {
                 <Suspense fallback={<Spinner />}><ProfileSettingsTab /></Suspense>
             </Modal>
 
-            {/* Terms Update Modal (Diff View) */}
             <Modal isOpen={showTermsUpdate} onClose={() => {}} title="약관 변경 안내">
+                {/* Terms update content */}
                 <div className="space-y-4">
                     <p className="text-sm font-bold text-red-600">이용 약관이 변경되었습니다.</p>
                     <p className="text-xs text-gray-500">

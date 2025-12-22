@@ -2,7 +2,8 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Modal, Input, formatShortPrice } from '../Shared';
-import { RealEstateCell } from '../../types';
+import { RealEstateCell, User } from '../../types';
+import { toSafeId } from '../../services/firebase';
 
 export const RealEstateTab: React.FC = () => {
     const { db, currentUser, saveDb, showModal, showConfirm, serverAction, createChat, sendMessage } = useGame();
@@ -44,8 +45,19 @@ export const RealEstateTab: React.FC = () => {
         if (!await showConfirm(`집 #${selectedCell.id}를 ₩${price.toLocaleString()}에 구매하시겠습니까?`)) return;
 
         const newDb = { ...db };
-        const user = newDb.users[currentUser!.name];
-        const bank = newDb.users['한국은행'];
+        const userKey = toSafeId(currentUser!.email || currentUser!.id!);
+        const user = newDb.users[userKey];
+        
+        // Find Real Bank Admin
+        const bankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
+        
+        if (!bankEntry) return showModal("한국은행(관리자) 계정을 찾을 수 없어 구매를 진행할 수 없습니다.");
+        const bank = bankEntry[1];
+
         const prop = newDb.realEstate.grid.find(p => p.id === selectedCell.id);
 
         if (!prop || prop.owner) return showModal("이미 소유주가 있는 부동산입니다.");

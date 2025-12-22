@@ -47,8 +47,9 @@ export const TransferTab: React.FC = () => {
 
         if (subTab === 'immediate') {
             await serverAction('transfer', {
-                senderId: currentUser!.name,
-                receiverId: selectedRecipient,
+                // Use email/ID for safe lookup, fallback to name if missing (but email is preferred)
+                senderId: currentUser!.email || currentUser!.id, 
+                receiverId: selectedRecipient, // Search returns name usually, but API can resolve name too. 
                 amount: valAmount,
                 senderMemo, 
                 receiverMemo: recipientMemo
@@ -68,7 +69,8 @@ export const TransferTab: React.FC = () => {
                 scheduledTime
             };
             const newAuto = { ...(currentUser?.autoTransfers || {}), [newItem.id]: newItem };
-            await updateUser(currentUser!.name, { autoTransfers: newAuto });
+            // Note: updateUser uses local currentUser key which handles email correctly in GameContext
+            await updateUser(currentUser!.id || currentUser!.email!, { autoTransfers: newAuto });
             showModal("예약 이체가 등록되었습니다.");
         } else {
             // Recurring
@@ -90,7 +92,7 @@ export const TransferTab: React.FC = () => {
                 }
             };
             const newAuto = { ...(currentUser?.autoTransfers || {}), [newItem.id]: newItem };
-            await updateUser(currentUser!.name, { autoTransfers: newAuto });
+            await updateUser(currentUser!.id || currentUser!.email!, { autoTransfers: newAuto });
             showModal("정기 이체가 등록되었습니다.");
         }
         

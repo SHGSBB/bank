@@ -4,7 +4,7 @@ import { useGame } from '../../../context/GameContext';
 import { Card, Button } from '../../Shared';
 
 export const DatabaseTab: React.FC = () => {
-    const { db, saveDb, showModal, showConfirm } = useGame();
+    const { db, saveDb, showModal, showConfirm, serverAction } = useGame();
     const [jsonInput, setJsonInput] = useState('');
 
     const handleDownload = () => {
@@ -31,6 +31,16 @@ export const DatabaseTab: React.FC = () => {
         }
     };
 
+    const handleFixDatabase = async () => {
+        if (!await showConfirm("DB 구조를 복구하시겠습니까? (계정 통합 및 잔고 합산)")) return;
+        try {
+            const res = await serverAction('fix_database_structure', {});
+            showModal(res.message || "DB 복구가 완료되었습니다.");
+        } catch (e) {
+            showModal("복구 실패");
+        }
+    };
+
     return (
         <Card>
             <h3 className="text-2xl font-bold mb-6">데이터베이스 관리</h3>
@@ -40,6 +50,13 @@ export const DatabaseTab: React.FC = () => {
                     <p className="text-sm text-gray-500 mb-2">현재 데이터베이스 상태를 JSON 파일로 다운로드합니다.</p>
                     <Button onClick={handleDownload}>DB 다운로드</Button>
                 </div>
+                
+                <div className="border-t pt-4">
+                    <h4 className="font-bold mb-2 text-blue-600">DB 구조 복구 (계정 통합)</h4>
+                    <p className="text-sm text-gray-500 mb-2">분리된 계정(bok, _1 등)을 로그인 이메일 계정으로 통합합니다. 잔고가 합산됩니다.</p>
+                    <Button onClick={handleFixDatabase} className="bg-blue-600 hover:bg-blue-500">데이터 구조 복구</Button>
+                </div>
+
                 <div className="border-t pt-4">
                     <h4 className="font-bold mb-2 text-red-600">복원 (가져오기)</h4>
                     <p className="text-sm text-gray-500 mb-2">JSON 데이터를 붙여넣어 데이터베이스를 덮어씁니다.</p>

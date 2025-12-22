@@ -36,9 +36,11 @@ export const LoanManagementTab: React.FC = () => {
         if (!userEntry) return showModal("사용자를 찾을 수 없습니다.");
         const [userKey, user] = userEntry;
 
-        // Find Bank - Robust Lookup
+        // Find Bank - Dynamic Lookup
         const bankUser = (Object.values(newDb.users) as User[]).find(u => 
-            u.name === '한국은행' || u.id === 'bok' || u.govtRole === '한국은행장'
+            u.govtRole === '한국은행장' ||
+            (u.type === 'admin' && u.subType === 'govt') ||
+            u.name === '한국은행'
         );
         
         if (!bankUser) return showModal("한국은행 계정을 찾을 수 없습니다. (관리자에게 문의)");

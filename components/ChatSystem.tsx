@@ -743,9 +743,9 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                     <div className="space-y-4">
                         <Input placeholder="이름 검색" className="w-full mb-2" onChange={e => { /* Local filter logic could be added here */ }} />
                         <div className="max-h-80 overflow-y-auto space-y-2 grid grid-cols-1">
-                            {Object.values(userCache)
+                            {(Object.values(userCache) as User[])
                                 .filter((u: User) => u.name !== currentUser?.name && u.type !== 'admin' && u.type !== 'root' && u.subType !== 'teacher')
-                                .sort((a,b) => (a.name || '').localeCompare(b.name || ''))
+                                .sort((a: User, b: User) => (a.name || '').localeCompare(b.name || ''))
                                 .map((u: User) => (
                                 <div key={u.name} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${selectedUsersForChat.includes(u.name) ? 'bg-green-50 border-green-500 dark:bg-green-900/30' : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 hover:shadow-md'}`} 
                                     onClick={() => {

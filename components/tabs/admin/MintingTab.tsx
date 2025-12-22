@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Button, Input } from '../../Shared';
@@ -8,13 +9,9 @@ export const MintingTab: React.FC = () => {
     const [amount, setAmount] = useState('');
     const [currency, setCurrency] = useState<'KRW'|'USD'>('KRW');
 
-    // Safe Lookup for Bank User
-    const bankUser = useMemo(() => {
-        return (Object.values(db.users) as User[]).find(u => u.name === '한국은행') as User | undefined;
-    }, [db.users]);
-
-    const bankBalanceKRW = bankUser?.balanceKRW || 0;
-    const bankBalanceUSD = bankUser?.balanceUSD || 0;
+    // Display Logic: Show Current User's balance (Assuming Current User IS the Admin)
+    const bankBalanceKRW = currentUser?.balanceKRW || 0;
+    const bankBalanceUSD = currentUser?.balanceUSD || 0;
 
     const handleMint = async () => {
         const valAmount = parseFloat(amount);
@@ -26,9 +23,11 @@ export const MintingTab: React.FC = () => {
         try {
             await serverAction('mint_currency', {
                 amount: valAmount,
-                currency
+                currency,
+                // Send ID if available, otherwise email. API will handle lookup.
+                userId: currentUser?.id || currentUser?.email 
             });
-            await refreshData(); // Refresh to show new balance
+            await refreshData(); 
             showModal(`${valAmount.toLocaleString()} ${currency} 발권이 완료되었습니다.`);
             setAmount('');
         } catch(e) {
@@ -42,18 +41,18 @@ export const MintingTab: React.FC = () => {
             
             <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-2xl text-center">
-                    <p className="text-xs text-blue-400 font-bold uppercase mb-1">현재 한국은행 잔고 (KRW)</p>
+                    <p className="text-xs text-blue-400 font-bold uppercase mb-1">현재 내(한국은행) 잔고 (KRW)</p>
                     <p className="text-2xl font-black text-white">₩ {bankBalanceKRW.toLocaleString()}</p>
                 </div>
                 <div className="p-4 bg-green-900/20 border border-green-500/30 rounded-2xl text-center">
-                    <p className="text-xs text-green-400 font-bold uppercase mb-1">현재 한국은행 잔고 (USD)</p>
+                    <p className="text-xs text-green-400 font-bold uppercase mb-1">현재 내(한국은행) 잔고 (USD)</p>
                     <p className="text-2xl font-black text-white">$ {bankBalanceUSD.toLocaleString()}</p>
                 </div>
             </div>
 
             <div className="p-6 bg-[#252525] rounded-2xl border border-blue-500/30">
                 <p className="text-sm text-gray-400 mb-6 leading-relaxed">
-                    한국은행의 권한으로 화폐를 신규 발행하여 은행 잔고에 추가합니다.
+                    한국은행(관리자)의 권한으로 화폐를 신규 발행하여 <b>현재 접속 중인 관리자 계정</b>의 잔고에 추가합니다.
                 </p>
                 
                 <div className="space-y-4 mb-6">

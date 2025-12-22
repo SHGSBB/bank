@@ -19,7 +19,6 @@ export const AdminRequestTab: React.FC = () => {
         currentUser?.type === 'admin' || 
         currentUser?.govtRole === '한국은행장' || 
         currentUser?.name === '한국은행' || 
-        currentUser?.id === 'bok' ||
         currentUser?.type === 'root';
 
     if (!hasBankAuthority) {

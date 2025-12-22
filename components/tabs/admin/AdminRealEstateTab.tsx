@@ -2,6 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
+import { User } from '../../../types';
 
 export const AdminRealEstateTab: React.FC = () => {
     const { db, saveDb, showModal, showConfirm } = useGame();
@@ -64,10 +65,19 @@ export const AdminRealEstateTab: React.FC = () => {
         }
 
         const ownerName = editOwner.trim();
-        if (ownerName && !db.users[ownerName]) return showModal('존재하지 않는 소유주입니다.');
-        
         const tenantName = editTenant.trim();
-        if (tenantName && !db.users[tenantName]) return showModal('존재하지 않는 임대인입니다.');
+
+        // Validate Owner (search by name in values, as key is ID)
+        if (ownerName) {
+            const ownerExists = Object.values(db.users).some((u: User) => u.name === ownerName);
+            if (!ownerExists) return showModal(`존재하지 않는 소유주 이름입니다: ${ownerName}`);
+        }
+        
+        // Validate Tenant
+        if (tenantName) {
+            const tenantExists = Object.values(db.users).some((u: User) => u.name === tenantName);
+            if (!tenantExists) return showModal(`존재하지 않는 임대인 이름입니다: ${tenantName}`);
+        }
 
         const price = parseInt(editPrice);
         if (isNaN(price) || price <= 0) return showModal('올바른 가격을 입력하세요.');

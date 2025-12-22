@@ -1,7 +1,9 @@
+
 import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Input } from '../../Shared';
 import { User } from '../../../types';
+import { toSafeId } from '../../../services/firebase';
 
 export const BudgetDistributionTab: React.FC = () => {
     const { db, saveDb, showModal, showConfirm, notify } = useGame();
@@ -12,9 +14,18 @@ export const BudgetDistributionTab: React.FC = () => {
         const valAmount = parseInt(amount);
         if (isNaN(valAmount) || valAmount <= 0) return showModal("올바른 금액을 입력하세요.");
 
-        const bank = (Object.values(db.users) as User[]).find(u => u.name === '한국은행');
-        if (!bank) return showModal("한국은행 계정을 찾을 수 없습니다.");
-        if (bank.balanceKRW < valAmount) return showModal("은행 잔고가 부족합니다.");
+        // Dynamic Bank Lookup
+        const newDb = { ...db };
+        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => 
+            u.govtRole === '한국은행장' || 
+            (u.type === 'admin' && u.subType === 'govt') || 
+            u.name === '한국은행'
+        );
+
+        if (!newBankEntry) return showModal("한국은행(관리자) 계정을 찾을 수 없습니다.");
+        const newBank = newBankEntry[1];
+
+        if (newBank.balanceKRW < valAmount) return showModal("은행 잔고가 부족합니다.");
 
         const branchMembers = (Object.values(db.users) as User[]).filter(u => u.govtBranch?.includes(targetBranch));
         
@@ -23,18 +34,14 @@ export const BudgetDistributionTab: React.FC = () => {
         if (!await showConfirm(`${targetBranch === 'executive' ? '행정부' : (targetBranch === 'legislative' ? '입법부' : '사법부')} 소속 ${branchMembers.length}명에게 총 ₩${valAmount.toLocaleString()} 예산을 배분하시겠습니까?`)) return;
 
         const perPerson = Math.floor(valAmount / branchMembers.length);
-        const newDb = { ...db };
-        const newBankEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === '한국은행');
-        if (!newBankEntry) return;
-        const newBank = newBankEntry[1];
         
         newBank.balanceKRW -= (perPerson * branchMembers.length);
         const date = new Date().toISOString();
 
         branchMembers.forEach(m => {
-            const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === m.name);
-            if (userEntry) {
-                const user = userEntry[1];
+            const safeKey = toSafeId(m.email || m.id!);
+            const user = newDb.users[safeKey];
+            if (user) {
                 user.balanceKRW += perPerson;
                 user.transactions = [...(user.transactions || []), {
                     id: Date.now() + Math.random(), type: 'income', amount: perPerson, currency: 'KRW', description: '부처 예산 배분', date
