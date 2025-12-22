@@ -26,7 +26,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
     if (!action) return res.status(400).json({ error: "MISSING_ACTION" });
 
     try {
-        // [1] 초기 데이터 조회 (최적화됨)
+        // [1] 초기 데이터 조회
         if (action === 'fetch_initial_data') {
             const [settings, grid, announce, ads, stocks, auction, countries, pendingApps, bonds] = await Promise.all([
                 db.ref('settings').once('value'),
@@ -37,7 +37,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                 db.ref('auction').once('value'),
                 db.ref('countries').once('value'),
                 db.ref('pendingApplications').once('value'),
-                db.ref('bonds').once('value') // 국채 목록 추가
+                db.ref('bonds').once('value')
             ]);
 
             const annVal = announce.val();
@@ -62,27 +62,51 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             const u = (await db.ref(`users/${safeKey}`).once('value')).val();
             if (!u) return res.status(404).json({});
 
-            // 무거운 데이터 제거
             delete u.transactions;
             delete u.notifications;
             if (u.profilePic?.startsWith('data:')) u.profilePic = null;
             return res.status(200).json(u);
         }
 
-        // [3] 재정 관리 통합 (주급, 복지, 세금징수, 지원금)
-        // grant_support 추가됨, collect_tax 로직 분리됨
+        // 🔴 [3] 복구된 기능: 전체 사용자 조회 (관리자용)
+        if (action === 'fetch_all_users_light') {
+            const snapshot = await db.ref('users').once('value');
+            const users = snapshot.val() || {};
+            const lightweightUsers: Record<string, any> = {};
+            
+            Object.keys(users).forEach(key => {
+                const u = users[key];
+                // 관리자 목록에 필요한 정보만 골라서 전송
+                lightweightUsers[key] = {
+                    name: u.name,
+                    id: u.id,
+                    email: u.email,
+                    type: u.type,
+                    subType: u.subType,
+                    balanceKRW: u.balanceKRW || 0,
+                    balanceUSD: u.balanceUSD || 0,
+                    loans: u.loans || {}, 
+                    approvalStatus: u.approvalStatus,
+                    govtRole: u.govtRole,
+                    customJob: u.customJob,
+                    products: u.products // 마트 상품 관리 위해 필요
+                };
+            });
+            return res.status(200).json({ users: lightweightUsers });
+        }
+
+        // [4] 재정 관리 통합 (주급, 복지, 세금징수, 지원금)
         if (['distribute_weekly_pay', 'weekly_pay', 'distribute_welfare', 'grant_support'].includes(action) || 
-           (action === 'collect_tax' && !payload.taxSessionId)) { // 즉시 징수일 때만
+           (action === 'collect_tax' && !payload.taxSessionId)) { 
              
-             const { type, userIds } = payload;
-             const amount = Number(payload.amount || 0); // 🚨 숫자 변환 필수!
+             const { userIds } = payload;
+             const amount = Number(payload.amount || 0);
              
              const usersSnap = await db.ref('users').once('value');
              const users = usersSnap.val() || {};
              const updates: any = {};
              let count = 0;
 
-             // 특정 대상 없으면 전체 대상
              const targetKeys = userIds ? userIds.map((id: string) => toSafeId(id)) : Object.keys(users);
 
              targetKeys.forEach((key: string) => {
@@ -92,23 +116,19 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                  let shouldUpdate = false;
 
                  if (action === 'distribute_weekly_pay' || action === 'weekly_pay') {
-                     // 공무원/교사 지급
                      if (userIds || ['government', 'teacher', 'president', 'judge', 'prosecutor'].includes(user.type) || user.subType === 'teacher') {
                          newBalance += amount;
                          shouldUpdate = true;
                      }
                  } else if (action === 'distribute_welfare') {
-                     // 시민 복지
                      if (user.type === 'citizen') {
                          newBalance += amount;
                          shouldUpdate = true;
                      }
                  } else if (action === 'grant_support') {
-                     // 🔥 [추가] 지원금 (조건 없이 대상자에게 지급)
                      newBalance += amount;
                      shouldUpdate = true;
                  } else if (action === 'collect_tax') {
-                     // 세금 징수 (관리자 제외, 퍼센트 차감)
                      if (user.type !== 'admin' && user.type !== 'root') {
                          const tax = Math.floor(newBalance * (amount / 100));
                          if (tax > 0) {
@@ -128,7 +148,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
              return res.status(200).json({ success: true, count });
         }
 
-        // [4] 세금 고지서 발송 (세션 방식)
+        // [5] 세금 고지서 발송
         if (action === 'collect_tax' && payload.taxSessionId) {
             const { taxSessionId, taxes, dueDate } = payload;
             const updates: any = {};
@@ -155,7 +175,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     status: 'pending',
                     breakdown: tax.breakdown
                 };
-                // 알림
                 const notifId = `n_${Date.now()}_${Math.random().toString(36).substr(2,5)}`;
                 updates[`users/${safeKey}/notifications/${notifId}`] = {
                     id: notifId,
@@ -169,7 +188,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // [5] 🔥 [추가] 국채 발행 (Issue Bond)
+        // [6] 국채 발행
         if (action === 'issue_bond') {
             const { name, principal, rate, maturityDate, totalAmount } = payload;
             const bondId = `bond_${Date.now()}`;
@@ -187,21 +206,19 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // [6] 🔥 [추가] 상품 등록 (Mart Product)
+        // [7] 상품 등록
         if (action === 'register_product') {
             const { userId, product } = payload;
             const safeKey = toSafeId(userId);
-            // user.products 안에 저장
             await db.ref(`users/${safeKey}/products/${product.id}`).set(product);
             return res.status(200).json({ success: true });
         }
 
-        // [7] 화폐 발행 (Minting) - 로직 최적화
+        // [8] 화폐 발행 (한국은행)
         if (action === 'mint_currency') {
             const amount = Number(payload.amount || 0);
             const currency = payload.currency || 'KRW';
             
-            // 한국은행 찾기 (ID로 바로 접근)
             let bankKey = 'bok';
             let bankSnap = await db.ref(`users/${bankKey}`).once('value');
             
@@ -211,14 +228,12 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             }
 
             if (!bankSnap.exists()) {
-                // 없으면 새로 생성
                 await db.ref(`users/bok`).set({
                     id: 'bok', name: '한국은행', type: 'admin', email: 'bok@bank.sh', 
                     balanceKRW: currency === 'KRW' ? amount : 0, 
                     balanceUSD: currency === 'USD' ? amount : 0
                 });
             } else {
-                // 있으면 업데이트
                 const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
                 const current = Number(bankSnap.val()[field] || 0);
                 await db.ref(`users/${bankKey}/${field}`).set(current + amount);
@@ -226,7 +241,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // [8] 사용자 승인/거절
+        // [9] 사용자 승인/거절
         if (action === 'approve_user') {
             await db.ref(`users/${toSafeId(payload.targetId)}`).update({ approvalStatus: 'approved' });
             return res.status(200).json({ success: true });
@@ -236,22 +251,20 @@ export default async (req: VercelRequest, res: VercelResponse) => {
              return res.status(200).json({ success: true });
         }
 
-        // [9] 설정 업데이트
+        // [10] 설정 업데이트
         if (action === 'update_settings') {
             await db.ref('settings').update(payload.settings);
             return res.status(200).json({ success: true });
         }
 
-        // [10] 송금 (Transfer)
+        // [11] 송금
         if (action === 'transfer') {
             const { senderId, receiverId, amount, senderMemo, receiverMemo, currency = 'KRW' } = payload;
             const numAmount = Number(amount);
             
-            // ID 찾는 헬퍼 함수
             const findKey = async (id: string) => {
                 const s = toSafeId(id);
                 if ((await db.ref(`users/${s}`).once('value')).exists()) return s;
-                // 이메일이나 이름으로 찾기 (느림, 최후의 수단)
                 const all = (await db.ref('users').once('value')).val() || {};
                 return Object.keys(all).find(k => all[k].id === id || all[k].email === id || all[k].name === id);
             };
@@ -271,7 +284,6 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             updates[`users/${sKey}/${balField}`] = Number(sVal[balField]) - numAmount;
             updates[`users/${rKey}/${balField}`] = Number(rVal[balField]) + numAmount;
             
-            // 거래내역 (최근 50개 유지)
             const now = new Date().toISOString();
             const txId = Date.now();
             let sTx = sVal.transactions || [];
@@ -289,7 +301,7 @@ export default async (req: VercelRequest, res: VercelResponse) => {
             return res.status(200).json({ success: true });
         }
 
-        // [11] 경매 입찰
+        // [12] 경매 입찰
         if (action === 'place_bid') {
              const { amount, bidder } = payload;
              const numAmount = Number(amount);
@@ -299,16 +311,62 @@ export default async (req: VercelRequest, res: VercelResponse) => {
              if (!auc || !auc.isActive || auc.status !== 'active') return res.status(400).json({ error: "CLOSED" });
              if (numAmount <= auc.currentPrice) return res.status(400).json({ error: "LOW_BID" });
              
-             // 입찰자 잔액 확인 필요 (생략 가능하나 안전 위해 권장)
              const updates: any = {};
              const now = Date.now();
              updates['auction/currentPrice'] = numAmount;
              updates['auction/bids'] = [...(auc.bids || []), { bidder, amount: numAmount, timestamp: now }];
-             // 마감 직전 입찰 시 연장
              if (auc.endTime - now < 30000) updates['auction/endTime'] = now + 30000;
              
              await db.ref().update(updates);
              return res.status(200).json({ success: true });
+        }
+
+        // [13] 계정 연동 (복구됨)
+        if (action === 'fetch_linked_accounts') { 
+            const { linkedIds } = payload || {};
+            if (!linkedIds || !Array.isArray(linkedIds) || linkedIds.length === 0) return res.status(200).json({ accounts: [] });
+            const accounts = [];
+            for (const id of linkedIds) {
+                try {
+                    const safeKey = toSafeId(id);
+                    const user = (await db.ref(`users/${safeKey}`).once('value')).val();
+                    if (user) accounts.push({ id: user.id, email: user.email, name: user.name, profilePic: user.profilePic });
+                } catch(e) {}
+            }
+            return res.status(200).json({ accounts });
+        }
+        
+        if (action === 'link_account') { 
+            const { myEmail, targetId } = payload;
+            const myKey = toSafeId(myEmail);
+            const targetKey = toSafeId(targetId);
+            
+            const targetUser = (await db.ref(`users/${targetKey}`).once('value')).val();
+            if (!targetUser) return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
+            
+            const myRef = db.ref(`users/${myKey}`);
+            const me = (await myRef.once('value')).val();
+            const currentLinks = me.linkedAccounts || [];
+            
+            if (currentLinks.includes(targetUser.email)) return res.status(400).json({ error: "이미 연동된 계정입니다." });
+            await myRef.update({ linkedAccounts: [...currentLinks, targetUser.email] });
+            return res.status(200).json({ success: true });
+        }
+
+        if (action === 'unlink_account') { 
+            const { myEmail, targetName } = payload;
+            const myRef = db.ref(`users/${toSafeId(myEmail)}`);
+            const me = (await myRef.once('value')).val();
+            
+            // 이름으로 찾아서 삭제하는 복잡한 로직은 생략하고, 이메일 기반이 정확하나 요청대로 유지
+            // (실제로는 이메일로 지우는게 안전합니다)
+            const safeLinks = [];
+            for (const link of (me.linkedAccounts || [])) {
+                 const u = (await db.ref(`users/${toSafeId(link)}`).once('value')).val();
+                 if (u && u.name !== targetName) safeLinks.push(link);
+            }
+            await myRef.update({ linkedAccounts: safeLinks });
+            return res.status(200).json({ success: true }); 
         }
 
         return res.status(200).json({ success: true });
