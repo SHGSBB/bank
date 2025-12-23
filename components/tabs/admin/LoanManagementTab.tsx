@@ -1,13 +1,21 @@
 
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
-import { Card, Button, Input, Modal } from '../../Shared';
+import { Card, Button, Input, Modal, MoneyInput } from '../../Shared';
 import { User, Loan, Application } from '../../../types';
 import { toSafeId } from '../../../services/firebase';
 
 export const LoanManagementTab: React.FC = () => {
     const { db, saveDb, notify, showConfirm, showModal, wait } = useGame();
     const [subTab, setSubTab] = useState<'pending' | 'active' | 'completed'>('pending');
+    
+    // Manual Creation State
+    const [showCreateModal, setShowCreateModal] = useState(false);
+    const [targetUser, setTargetUser] = useState('');
+    const [createAmount, setCreateAmount] = useState('');
+    const [createRate, setCreateRate] = useState('5');
+    const [createPeriod, setCreatePeriod] = useState('4');
+    const [createCollateral, setCreateCollateral] = useState('');
 
     const allLoans = useMemo(() => {
         return (Object.values(db.users) as User[]).flatMap(user => {
@@ -31,19 +39,13 @@ export const LoanManagementTab: React.FC = () => {
         await wait('heavy');
         const newDb = { ...db };
         
-        // Find applicant
         const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === app.applicantName);
         if (!userEntry) return showModal("사용자를 찾을 수 없습니다.");
         const [userKey, user] = userEntry;
 
-        // Find Bank - Dynamic Lookup
-        const bankUser = (Object.values(newDb.users) as User[]).find(u => 
-            u.govtRole === '한국은행장' ||
-            (u.type === 'admin' && u.subType === 'govt') ||
-            u.name === '한국은행'
-        );
+        const bankUser = (Object.values(newDb.users) as User[]).find(u => u.govtRole === '한국은행장' || u.name === '한국은행');
         
-        if (!bankUser) return showModal("한국은행 계정을 찾을 수 없습니다. (관리자에게 문의)");
+        if (!bankUser) return showModal("한국은행 계정 오류");
 
         const newLoan: Loan = {
             id: app.loanId || app.id,
@@ -70,7 +72,6 @@ export const LoanManagementTab: React.FC = () => {
 
         if (newDb.pendingApplications) delete newDb.pendingApplications[app.id];
         
-        // Deduct from Bank
         bankUser.balanceKRW -= app.amount;
 
         await saveDb(newDb);
@@ -87,9 +88,51 @@ export const LoanManagementTab: React.FC = () => {
         notify(app.applicantName, `대출 신청이 거절되었습니다.`);
     };
 
+    const handleManualCreate = async () => {
+        const amount = parseInt(createAmount);
+        const rate = parseFloat(createRate);
+        const weeks = parseInt(createPeriod);
+        
+        if (!targetUser || isNaN(amount) || isNaN(rate) || isNaN(weeks)) return showModal("모든 정보를 올바르게 입력하세요.");
+
+        const newDb = { ...db };
+        const userEntry = (Object.entries(newDb.users) as [string, User][]).find(([k, u]) => u.name === targetUser);
+        if (!userEntry) return showModal("사용자를 찾을 수 없습니다.");
+        const [_, user] = userEntry;
+
+        const newLoan: Loan = {
+            id: `manual_loan_${Date.now()}`,
+            amount: amount,
+            interestRate: { rate, periodWeeks: weeks },
+            applyDate: new Date().toISOString(),
+            repaymentDate: new Date(Date.now() + weeks * 7 * 24 * 60 * 60 * 1000).toISOString(),
+            status: 'approved',
+            collateral: createCollateral || null
+        };
+
+        if (!user.loans) user.loans = {};
+        if (Array.isArray(user.loans)) {
+             const loanObj: Record<string, Loan> = {};
+             user.loans.forEach(l => loanObj[l.id] = l);
+             user.loans = loanObj;
+        }
+        (user.loans as Record<string, Loan>)[newLoan.id] = newLoan;
+        
+        // Transfer money logic optional for manual admin override, assuming just recording?
+        // Let's assume actual transfer happens
+        user.balanceKRW += amount;
+        
+        await saveDb(newDb);
+        showModal("대출이 수동 생성되었습니다.");
+        setShowCreateModal(false);
+    };
+
     return (
         <Card>
-            <h3 className="text-2xl font-bold mb-6">대출 관리</h3>
+            <div className="flex justify-between items-center mb-6">
+                <h3 className="text-2xl font-bold">대출 관리</h3>
+                <Button onClick={() => setShowCreateModal(true)} className="text-xs">+ 수동 생성</Button>
+            </div>
             
             <div className="flex gap-2 mb-4 border-b border-gray-200 dark:border-gray-700 pb-1">
                 <button onClick={() => setSubTab('pending')} className={`px-4 py-2 border-b-2 ${subTab === 'pending' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>승인 대기</button>
@@ -147,6 +190,19 @@ export const LoanManagementTab: React.FC = () => {
                     ))}
                 </div>
             )}
+
+            <Modal isOpen={showCreateModal} onClose={() => setShowCreateModal(false)} title="대출 수동 생성">
+                <div className="space-y-4">
+                    <Input placeholder="대상 유저 이름" value={targetUser} onChange={e => setTargetUser(e.target.value)} />
+                    <MoneyInput placeholder="대출 금액" value={createAmount} onChange={e => setCreateAmount(e.target.value)} />
+                    <div className="flex gap-2">
+                        <Input placeholder="이자율 (%)" type="number" value={createRate} onChange={e => setCreateRate(e.target.value)} className="flex-1" />
+                        <Input placeholder="기간 (주)" type="number" value={createPeriod} onChange={e => setCreatePeriod(e.target.value)} className="flex-1" />
+                    </div>
+                    <Input placeholder="담보 내용 (선택)" value={createCollateral} onChange={e => setCreateCollateral(e.target.value)} />
+                    <Button onClick={handleManualCreate} className="w-full">생성하기</Button>
+                </div>
+            </Modal>
         </Card>
     );
 };

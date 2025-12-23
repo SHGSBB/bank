@@ -14,6 +14,7 @@ export interface ChatPreferences {
     isPinned?: boolean;
     isMuted?: boolean;
     backgroundImage?: string;
+    isInputLocked?: boolean; // 입력창 잠금
 }
 
 export interface IDCard {
@@ -24,7 +25,7 @@ export interface IDCard {
 
 export interface Transaction {
     id: number | string;
-    type: 'income' | 'expense' | 'transfer' | 'exchange' | 'tax' | 'loan' | 'savings' | 'vat' | 'seize' | 'auction' | 'stock_buy' | 'stock_sell' | 'dividend' | 'fine' | 'cashback';
+    type: 'income' | 'expense' | 'transfer' | 'exchange' | 'tax' | 'loan' | 'savings' | 'vat' | 'seize' | 'auction' | 'stock_buy' | 'stock_sell' | 'dividend' | 'fine' | 'cashback' | 'ad_fee';
     amount: number;
     currency: 'KRW' | 'USD';
     description: string;
@@ -38,9 +39,9 @@ export interface LedgerItem {
     category: string;
     description: string;
     amount: number;
-    isScheduled: boolean; // 예정 내역 여부
-    isCompleted?: boolean; // 실제 실행 여부
-    isAuto?: boolean; // 자동 생성된 내역 여부
+    isScheduled: boolean;
+    isCompleted?: boolean;
+    isAuto?: boolean;
 }
 
 export interface ScheduledTransfer {
@@ -51,16 +52,12 @@ export interface ScheduledTransfer {
     amount: number;
     description?: string;
     status: 'active' | 'completed' | 'cancelled';
-    
-    // For Reserved
-    scheduledTime?: string; // ISO String
-    
-    // For Recurring
+    scheduledTime?: string;
     recurringConfig?: {
         startDate: string;
         endDate: string;
         frequencyType: 'daily' | 'weekly' | 'monthly';
-        frequencyValue: number; // e.g., every 3 days, or day of week (0-6), or day of month (1-31)
+        frequencyValue: number;
         nextRunTime: string;
     };
 }
@@ -151,10 +148,10 @@ export interface User {
     birthDate?: string;
     idCard?: IDCard;
     preferences?: UserPreferences;
-    chatPreferences?: Record<string, ChatPreferences>; // chatId -> prefs
+    chatPreferences?: Record<string, ChatPreferences>; 
     transactions?: Transaction[];
-    ledger?: Record<string, LedgerItem>; // 가계부
-    autoTransfers?: Record<string, ScheduledTransfer>; // 자동이체
+    ledger?: Record<string, LedgerItem>;
+    autoTransfers?: Record<string, ScheduledTransfer>;
     notifications?: ToastNotification[] | Record<string, ToastNotification>;
     pendingTaxes?: PendingTax[];
     pendingTax?: PendingTax;
@@ -224,13 +221,24 @@ export interface StickyNote {
 export interface Ad {
     id: string;
     businessName: string;
+    imageUrl: string;
     content: string;
-    imageUrl?: string;
+    status: 'pending' | 'active' | 'rejected' | 'ended';
     fee: number;
-    status: 'pending' | 'active' | 'ended';
-    type?: 'banner' | 'popup';
-    owner?: string;
-    startDate?: number;
+    durationDays: number;
+    requestDate: string;
+    startDate?: string;
+}
+
+export interface ExchangeLimitOrder {
+    id: string;
+    userId: string;
+    type: 'buy_usd' | 'sell_usd';
+    targetRate: number;
+    amountUSD: number; // For sell: USD amount, For buy: Target USD amount
+    amountKRW: number; // For sell: Expected KRW, For buy: KRW cost
+    status: 'pending' | 'completed' | 'cancelled';
+    date: string;
 }
 
 export interface PolicyRequest {
@@ -463,18 +471,27 @@ export interface ChatAttachment {
     data?: any;
 }
 
+export interface ChatReaction {
+    userId: string;
+    type: 'heart' | 'like' | 'check' | 'laugh' | 'surprise' | 'cry';
+}
+
 export interface ChatMessage {
     id: string;
     sender: string;
     text: string;
     timestamp: number;
     attachment?: ChatAttachment;
-    threadId?: string; // Links to parent message
-    replyTo?: { sender: string; text: string; id: string }; // For explicit UI quote
+    threadId?: string; 
+    replyTo?: { sender: string; text: string; id: string }; 
     type?: 'system' | 'user' | 'thread_root' | 'conclusion' | 'notice' | 'auction_bid';
-    reactions?: Record<string, string>; // user: emoji
-    isNotice?: boolean;
+    reactions?: Record<string, string>; // userId -> emoji
+    isEdited?: boolean;
+    editedAt?: number;
+    isUnsent?: boolean; // 회수됨 (데이터베이스상 내용 삭제)
+    hiddenFor?: string[]; // 나에게만 삭제 (유저 ID 목록)
     negotiationStatus?: 'pending' | 'accepted' | 'rejected' | 'closed';
+    isWinningBid?: boolean; // 낙찰된 메시지 표시
 }
 
 export interface ChatNotice {
@@ -483,6 +500,8 @@ export interface ChatNotice {
     text: string;
     author: string;
     timestamp: number;
+    likes?: string[]; // userIds
+    comments?: { author: string, text: string, timestamp: number }[];
 }
 
 export interface Chat {
@@ -494,11 +513,8 @@ export interface Chat {
     lastTimestamp?: number;
     messages?: Record<string, ChatMessage>;
     category?: string;
-    // These are legacy global props, prefer User.chatPreferences for local state
-    isPinned?: boolean; 
-    isMuted?: boolean;
     coverImage?: string;
-    notices?: ChatNotice[];
+    notice?: ChatNotice | null; // Current active notice
 }
 
 export interface DB {
@@ -519,6 +535,7 @@ export interface DB {
         exchangeRate: { KRW_USD: number };
         exchangeRateHistory?: { date: string, rate: number }[];
         exchangeConfig?: ExchangeConfig;
+        exchangeOrders?: Record<string, ExchangeLimitOrder>;
         loanInterestRate: { periodWeeks: number, rate: number };
         savingsInterest: SavingsConfig;
         vat?: { rate: number, targetMarts: string[] };

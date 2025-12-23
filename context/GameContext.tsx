@@ -34,7 +34,6 @@ interface GameContextType {
     logout: () => Promise<void>;
     updateUser: (key: string, data: Partial<User>) => Promise<void>;
     registerUser: (userData: Partial<User>, password: string) => Promise<void>;
-    createSubAccount: (parentUser: User, subData: Partial<User>) => Promise<void>;
     isLoading: boolean;
     showPinModal: (message: string, expectedPin?: string, length?: 4 | 6, allowBiometric?: boolean) => Promise<string | null>;
     showConfirm: (message: string) => Promise<boolean>;
@@ -112,7 +111,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('/api/game-action', {
+            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -131,14 +130,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
             const essentials = await fetchEssentials();
             setDb(prev => ({ ...prev, ...essentials }));
-            
-            // Refresh current user if logged in
-            if (currentUser) {
-                const updatedUser = await fetchUser(currentUser.id || currentUser.email!);
-                if (updatedUser) setCurrentUser(updatedUser);
-            }
         } catch(e) { console.error("Data Fetch Error:", e); }
-    }, [currentUser?.id]);
+    }, []);
 
     // BOK Auto-Lock Logic
     const isBOKUser = (user: User | null) => {
@@ -151,10 +144,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             if (document.hidden) {
                 lastVisibilityChange.current = Date.now();
             } else {
-                // If BOK user and hidden for more than 1 second, lock
-                if (currentUser && isBOKUser(currentUser)) {
+                if (isBOKUser(currentUser)) {
                     const diff = Date.now() - lastVisibilityChange.current;
-                    if (diff > 1000) { 
+                    if (diff > 1000) { // 1 second threshold
                         setIsScreenLocked(true);
                     }
                 }
@@ -254,6 +246,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         serverAction('fetch_initial_data', {}).then((data) => {
             if(isMount) {
                 setDb(prev => ({ ...prev, ...data }));
+                // Trigger auth init only after basic settings are loaded (to check service status)
                 initAuth();
             }
         }).catch(() => {
@@ -264,7 +257,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
 
         return () => { isMount = false; };
-    }, []);
+    }, []); // Empty dependency to run once
 
     const findUserKeyByName = (name: string): string | undefined => {
         const entry = Object.entries(db.users).find(([k, u]) => (u as User).name === name);
@@ -288,6 +281,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const login = async (id: string, pass: string, remember = false) => {
         setSimulatedLoading(true);
         try {
+            // Service Status Check (Ended)
+            if (db.settings.serviceStatus === 'ended') {
+                // We need to check if user is admin BEFORE logging in fully, 
+                // but we can't know without fetching. 
+                // So we allow fetch, then check.
+            }
+
             const inputId = id.trim();
             let userData = await fetchUserByLoginId(inputId);
             if (!userData && inputId.includes('@')) {
@@ -299,15 +299,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
-            // Service Status Check (Maintenance/Ended)
-            const isBOK = isBOKUser(userData);
-            if (db.settings.serviceStatus === 'ended' && !isBOK) {
+            if (db.settings.serviceStatus === 'ended' && !isBOKUser(userData)) {
                 setAlertMessage("서비스가 종료되었습니다.");
                 return false;
             }
-            
-            // Maintenance mode allows login but UI is blocked in Dashboard
-            
+
             if (userData.isSuspended) {
                 setAlertMessage("정지된 계정입니다. 관리자에게 문의하세요.");
                 return false;
@@ -315,21 +311,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
             let actualEmail = userData.email;
             if (!actualEmail) {
-                // If it's a sub-account without direct email login, reject (Sub accounts must switch from main)
-                // But if we allow login via ID/PW if they share PW? 
-                // Requirement: "이 계정으로 바로 로그인할 수는 없지". 
-                // So if it's a linked account (subType govt/business) without separate auth, we might block.
-                // However, current implementation puts 'email' even on sub accounts as dummy.
-                // Let's assume only Main accounts (citizen/teacher) have real auth credentials.
-                // But for simplicity, we allow login if credentials match.
-                
-                // If ID matches a sub-account, we must find the PARENT email to auth against? 
-                // No, requirement says "Sub-account... shares info".
-                // Let's assume direct login is blocked for sub-accounts as per prompt.
-                if (userData.type === 'mart' || userData.type === 'government') {
-                     setAlertMessage("부계정(공무원/마트)은 직접 로그인할 수 없습니다. 본계정(시민)으로 로그인 후 모드를 전환하세요.");
-                     return false;
-                }
                 setAlertMessage("계정 데이터 오류: 이메일 정보가 없습니다.");
                 return false;
             }
@@ -337,12 +318,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await loginWithEmail(actualEmail, pass);
             
             const requireApproval = db.settings.requireSignupApproval !== false;
-            if (requireApproval && userData.approvalStatus !== 'approved' && !isBOK) {
+            if (requireApproval && userData.approvalStatus !== 'approved' && !isBOKUser(userData)) {
                 await logoutFirebase();
                 setAlertMessage("가입 승인 대기 중입니다. 관리자에게 문의하세요.");
                 return false;
             }
 
+            // PIN Setup Logic
             if (!userData.pin) {
                 setSimulatedLoading(false);
                 const newPin = await showPinModal("보안을 위해 PIN(간편비밀번호)을 설정해주세요.", undefined, 6, false);
@@ -399,7 +381,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         
         localStorage.removeItem('sh_user_id');
-        setCachedLinkedUsers([]); // Clear cache on logout
         
         try {
             await logoutFirebase();
@@ -416,23 +397,39 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const registerUser = async (userData: Partial<User>, password: string) => {
         setSimulatedLoading(true);
         try {
+            // For Sub Accounts (Govt/Business linked to Citizen), we don't create Firebase Auth
+            // We just create a DB entry.
+            // But 'registerUser' here is mostly for the *Main* account or if we stick to the old flow.
+            // If the user already has a Firebase Auth (because they linked), we just create the node.
+            
+            // However, the standard flow in Auth.tsx creates Firebase User first.
+            // If the user is creating a *Sub Account* via the new flow, we might skip Firebase Auth creation
+            // if we reuse the parent's auth? No, the requirement says "Sub accounts have separate ID/PW but share parent info".
+            // Actually, "Sub accounts... linked... switch mode".
+            // Let's stick to: Create standard account, but link it.
+            
             const fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
             const userEmail = fUser.email!.toLowerCase();
             const dbKey = toSafeId(userData.id!.trim()); 
             
             const isKoreaBank = userData.name === '한국은행' || userData.govtRole === '한국은행장';
             const initialBalance = isKoreaBank ? 1000000000000000 : 0;
+            const finalType = isKoreaBank ? 'admin' : (userData.type || 'citizen');
+            const subType = isKoreaBank ? 'govt' : (userData.subType || 'personal');
             
+            const requireApproval = db.settings.requireSignupApproval !== false;
+            const approvalStatus = (!requireApproval || isKoreaBank || userData.approvalStatus === 'approved') ? 'approved' : 'pending';
+
             const newUser: User = {
                 id: userData.id!.trim(), 
                 email: userEmail,
                 name: userData.name || '',
                 password: password, 
-                type: userData.type || 'citizen',
-                subType: userData.subType || 'personal',
+                type: finalType,
+                subType: subType,
                 govtRole: userData.govtRole || '',
                 govtBranch: userData.govtBranch || [],
-                approvalStatus: userData.approvalStatus || 'pending',
+                approvalStatus,
                 balanceKRW: initialBalance,
                 balanceUSD: 0,
                 birthDate: userData.birthDate || '',
@@ -457,54 +454,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await set(ref(database, `users/${dbKey}`), sanitize(newUser));
         } catch (e: any) {
             console.error("registerUser Error:", e);
-            throw e;
-        } finally {
-            setSimulatedLoading(false);
-        }
-    };
-
-    // New: Create Sub Account (without Firebase Auth)
-    const createSubAccount = async (parentUser: User, subData: Partial<User>) => {
-        setSimulatedLoading(true);
-        try {
-            const subId = subData.id!;
-            const subKey = toSafeId(subId);
-            
-            // Sub account shares password logic conceptually (mode switch)
-            const newUser: User = {
-                id: subId,
-                email: `${subId}@sunghwa.bank`, // Dummy email
-                name: parentUser.name, // Same name
-                type: subData.type || 'citizen',
-                subType: subData.subType || 'personal',
-                govtRole: subData.govtRole || '',
-                govtBranch: subData.govtBranch || [],
-                approvalStatus: subData.approvalStatus || 'pending',
-                balanceKRW: 0,
-                balanceUSD: 0,
-                birthDate: parentUser.birthDate,
-                phoneNumber: parentUser.phoneNumber,
-                customJob: subData.customJob || '',
-                profilePic: parentUser.profilePic,
-                pin: parentUser.pin, // Share PIN
-                pinLength: parentUser.pinLength,
-                linkedAccounts: [parentUser.id || parentUser.email!], // Link back to parent
-                preferences: parentUser.preferences,
-                transactions: [], notifications: [], pendingTaxes: [], loans: [], stockHoldings: {}
-            };
-
-            await set(ref(database, `users/${subKey}`), sanitize(newUser));
-            
-            // Link Parent to Sub
-            const parentKey = toSafeId(parentUser.email || parentUser.id!);
-            const currentLinks = parentUser.linkedAccounts || [];
-            if (!currentLinks.includes(subId)) {
-                await update(ref(database, `users/${parentKey}`), { 
-                    linkedAccounts: [...currentLinks, subId] 
-                });
-            }
-        } catch(e) {
-            console.error(e);
             throw e;
         } finally {
             setSimulatedLoading(false);
@@ -545,8 +494,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => {
+        // PIN Bypass Check
         if (db.settings.bypassPin) {
-            return Promise.resolve(e || "0000"); 
+            return Promise.resolve(e || "0000"); // Return expected PIN directly
         }
         return new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
     };
@@ -659,6 +609,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const switchAccount = async (targetEmail: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
+            // Find user by email or ID
             let userData = await fetchUserByEmail(targetEmail);
             if (!userData) userData = await fetchUserByLoginId(targetEmail);
 
@@ -764,7 +715,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return (
         <GameContext.Provider value={{
-            db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, createSubAccount, isLoading,
+            db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
             showPinModal, showConfirm, showModal, notify, saveDb, refreshData, loadAllUsers,
             serverAction, pinResolver, setPinResolver, confirmResolver, setConfirmResolver, alertMessage, setAlertMessage,
             currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, 
@@ -779,13 +730,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }}>
             {children}
             {isScreenLocked && (
-                <div className="fixed inset-0 z-[9999] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center text-white">
-                    <div className="w-24 h-24 bg-gray-800 rounded-3xl flex items-center justify-center mb-8 animate-bounce shadow-2xl border border-gray-700">
-                        <span className="text-5xl">🔒</span>
+                <div className="fixed inset-0 z-[9999] bg-black/90 backdrop-blur-xl flex flex-col items-center justify-center text-white">
+                    <div className="w-20 h-20 bg-gray-800 rounded-full flex items-center justify-center mb-6 animate-pulse">
+                        <span className="text-4xl">🔒</span>
                     </div>
-                    <h2 className="text-3xl font-black mb-2 tracking-tight">보안 잠금</h2>
-                    <p className="text-gray-400 mb-10 text-sm font-medium">관리자/한국은행 계정 보안 정책에 의해 자동 잠금되었습니다.</p>
-                    <button onClick={unlockScreen} className="px-10 py-4 bg-green-600 rounded-2xl font-bold hover:bg-green-500 transition-all hover:scale-105 shadow-lg shadow-green-600/30">잠금 해제 (PIN)</button>
+                    <h2 className="text-2xl font-bold mb-2">보안 잠금</h2>
+                    <p className="text-gray-400 mb-8">한국은행(관리자) 보안 정책에 의해 잠겼습니다.</p>
+                    <button onClick={unlockScreen} className="px-8 py-3 bg-green-600 rounded-xl font-bold hover:bg-green-500 transition-colors">잠금 해제</button>
                 </div>
             )}
             {simulatedLoading && (

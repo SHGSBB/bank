@@ -81,7 +81,7 @@ export const UserManagementTab: React.FC = () => {
             await updateUser(user.id || user.email!, { approvalStatus: 'approved' });
             notify(user.name, '회원가입이 승인되었습니다.', true);
         } else {
-            const safeKey = toSafeId(user.email || user.id!);
+            const safeKey = user.email ? toSafeId(user.email) : user.name;
             await remove(ref(database, `users/${safeKey}`));
         }
         showModal('처리되었습니다.');
@@ -89,10 +89,10 @@ export const UserManagementTab: React.FC = () => {
     };
 
     const handleDeleteUser = async (user: User) => {
-        if (!await showConfirm(`정말 ${user.name} (${user.id}) 님을 영구 삭제하시겠습니까?`)) return;
+        if (!await showConfirm(`정말 ${user.name} 님을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.`)) return;
         const safeKey = toSafeId(user.email || user.id!);
         await remove(ref(database, `users/${safeKey}`));
-        showModal("사용자가 삭제되었습니다.");
+        showModal("삭제되었습니다.");
         loadAllUsers();
     };
 
@@ -100,7 +100,7 @@ export const UserManagementTab: React.FC = () => {
         const isSuspended = user.isSuspended;
         if (!await showConfirm(`${user.name} 님을 ${isSuspended ? '정지 해제' : '계정 정지'} 하시겠습니까?`)) return;
         await updateUser(user.id || user.email!, { isSuspended: !isSuspended });
-        showModal(isSuspended ? "정지가 해제되었습니다." : "계정이 정지되었습니다.");
+        showModal("처리되었습니다.");
         loadAllUsers();
     };
 
@@ -170,12 +170,14 @@ export const UserManagementTab: React.FC = () => {
             </div>
 
             <Modal isOpen={!!selectedUser} onClose={() => setSelectedUser(null)} title={`${selectedUser?.name} 관리`} wide>
+                {/* ... (Existing modal content unchanged for brevity, but reusing existing components) ... */}
                 {selectedUser && (
                     <div className="space-y-6">
                         <div className="grid grid-cols-2 gap-4 bg-gray-50 dark:bg-gray-800 p-4 rounded-xl">
                             <div><label className="text-xs font-bold block mb-1">원화 잔고 (KRW)</label><MoneyInput value={editBalanceKRW} onChange={e => setEditBalanceKRW(e.target.value)} /></div>
                             <div><label className="text-xs font-bold block mb-1">달러 잔고 (USD)</label><Input type="number" value={editBalanceUSD} onChange={e => setEditBalanceUSD(e.target.value)} /></div>
                         </div>
+                        {/* ... Deposits & Loans section same as before ... */}
                         <div className="flex gap-2">
                             <Button onClick={handleSaveUser} className="flex-1">저장하기</Button>
                         </div>

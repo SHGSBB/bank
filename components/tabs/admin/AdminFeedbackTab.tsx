@@ -1,3 +1,4 @@
+
 import React, { useMemo } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button } from '../../Shared';
@@ -9,7 +10,7 @@ export const AdminFeedbackTab: React.FC = () => {
     const feedbacks = useMemo(() => {
         const chats = Object.values(db.chats || {}) as Chat[];
         // Filter chats that are explicitly 'feedback' type or sent to '한국은행' with specific tag
-        const feedbackChats = chats.filter(c => c.type === 'feedback' && c.participants.includes('한국은행'));
+        const feedbackChats = chats.filter(c => c.type === 'feedback' && (c.participants || []).includes('한국은행'));
         
         const allMessages: { msg: ChatMessage, chat: Chat }[] = [];
         

@@ -1,10 +1,9 @@
 
-// ... existing imports ...
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Button, Input, LineIcon, Modal, formatName, RichText } from '../Shared';
 import { UserSubType, GovtBranch, User } from '../../types';
-import { auth, findUserIdByInfo, resetUserPassword } from '../../services/firebase';
+import { auth, findUserIdByInfo, resetUserPassword, loginWithEmail, fetchUserByLoginId } from '../../services/firebase';
 import { sendEmailVerification } from 'firebase/auth';
 
 type ViewMode = 'login' | 'signup' | 'find_id' | 'reset_pw' | 'notif_setup';
@@ -16,8 +15,7 @@ const GOVT_STRUCTURE = {
 };
 
 export const AuthView: React.FC = () => {
-    // ... existing state and logic ...
-    const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, highQualityGraphics, requestPasswordReset } = useGame();
+    const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, serverAction, requestPasswordReset, highQualityGraphics, switchAccount } = useGame();
     const [view, setView] = useState<ViewMode>('login');
     const [history, setHistory] = useState<ViewMode[]>([]);
 
@@ -25,6 +23,7 @@ export const AuthView: React.FC = () => {
         setHistory(prev => [...prev, view]);
         setView(v);
         setStep(1);
+        setSubType('personal'); 
     };
 
     const goBack = () => {
@@ -52,6 +51,10 @@ export const AuthView: React.FC = () => {
     const [sBirth, setSBirth] = useState('');
     const [govtRole, setGovtRole] = useState('');
     
+    // Sub Account Verification
+    const [parentId, setParentId] = useState('');
+    const [parentPw, setParentPw] = useState('');
+    
     // Recovery Info
     const [findName, setFindName] = useState('');
     const [findBirth, setFindBirth] = useState('');
@@ -60,11 +63,9 @@ export const AuthView: React.FC = () => {
     const [agreedTerms, setAgreedTerms] = useState<Record<string, boolean>>({});
     
     const [showTotalTerms, setShowTotalTerms] = useState(false);
-    const [generalTermsTimer, setGeneralTermsTimer] = useState(30);
     const [hasReadGeneralTerms, setHasReadGeneralTerms] = useState(false);
     const [canAgreeGeneral, setCanAgreeGeneral] = useState(false);
     const generalTermsScrollRef = useRef<HTMLDivElement>(null);
-    const timerInterval = useRef<any>(null);
 
     const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
@@ -78,7 +79,6 @@ export const AuthView: React.FC = () => {
     const allMandatoryAgreed = consents.every(c => c.isMandatory === false || agreedTerms[c.key]) && (!generalProvisions || hasReadGeneralTerms);
     const verificationInterval = useRef<any>(null);
 
-    // ... useEffects ...
     useEffect(() => {
         try {
             const hist = JSON.parse(localStorage.getItem('sh_login_history') || '[]');
@@ -86,30 +86,18 @@ export const AuthView: React.FC = () => {
         } catch (e) {}
         return () => { 
             if (verificationInterval.current) clearInterval(verificationInterval.current); 
-            if (timerInterval.current) clearInterval(timerInterval.current);
         };
     }, []);
 
-    useEffect(() => {
-        if (showTotalTerms && !hasReadGeneralTerms) {
-            setGeneralTermsTimer(30);
-            setCanAgreeGeneral(false);
-            
-            timerInterval.current = setInterval(() => {
-                setGeneralTermsTimer((prev) => {
-                    if (prev <= 1) {
-                        clearInterval(timerInterval.current);
-                        setCanAgreeGeneral(true);
-                        return 0;
-                    }
-                    return prev - 1;
-                });
-            }, 1000);
-        } else {
-            if (timerInterval.current) clearInterval(timerInterval.current);
+    // Remove timer, only check scroll for General Terms
+    const handleScrollTerms = () => {
+        if (generalTermsScrollRef.current) {
+            const { scrollTop, scrollHeight, clientHeight } = generalTermsScrollRef.current;
+            if (scrollHeight - scrollTop - clientHeight < 50) { 
+                setCanAgreeGeneral(true);
+            }
         }
-        return () => { if (timerInterval.current) clearInterval(timerInterval.current); };
-    }, [showTotalTerms, hasReadGeneralTerms]);
+    };
 
     const handleLogin = async () => {
         if (!loginId || !password) return showModal("정보를 입력하세요.");
@@ -125,7 +113,6 @@ export const AuthView: React.FC = () => {
             setLoginId(targetId);
             return;
         }
-        
         const pin = await showPinModal(`${user.name}님 로그인`, user.pin, (user.pin.length as any) || 4);
         if (pin === user.pin) {
             try {
@@ -183,18 +170,88 @@ export const AuthView: React.FC = () => {
         }, 3000);
     };
 
+    const handleCreateSubAccount = async () => {
+        if (!parentId || !parentPw) return showModal("본계정 아이디와 비밀번호를 입력하세요.");
+        if (subType === 'govt' && !govtRole) return showModal("공무원 직책을 선택하세요.");
+        if (db.settings.signupRestricted) return showModal("현재 신규 회원가입이 제한되어 있습니다.");
+
+        setIsProcessing(true);
+        try {
+            let parentUser = await fetchUserByLoginId(parentId);
+            if (!parentUser && parentId.includes('@')) { /* fallback handled in fetch */ }
+            if (!parentUser) throw new Error("계정을 찾을 수 없습니다.");
+            
+            const userCredential = await loginWithEmail(parentUser.email!, parentPw);
+            if (!userCredential) throw new Error("비밀번호가 일치하지 않습니다.");
+
+            let finalType: User['type'] = subType === 'business' ? 'mart' : 'government';
+            let branches: GovtBranch[] = [];
+            let isPresident = false;
+            let approvalStatus: User['approvalStatus'] = (db.settings.requireSignupApproval !== false) ? 'pending' : 'approved';
+
+            if (subType === 'govt') {
+                if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
+                else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
+                else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
+                if (govtRole === '대통령') isPresident = true;
+                
+                if (govtRole === '한국은행장' || parentUser.name === '한국은행') {
+                    finalType = 'admin';
+                    approvalStatus = 'approved';
+                }
+            }
+
+            const subId = `${parentUser.id}_${subType === 'business' ? 'biz' : 'gov'}_${Date.now().toString().slice(-4)}`;
+            
+            await registerUser({
+                id: subId,
+                email: `${subId}@sunghwa.bank`,
+                name: parentUser.name,
+                type: finalType,
+                subType: subType === 'govt' ? 'govt' : 'business',
+                govtRole,
+                govtBranch: branches,
+                isPresident,
+                approvalStatus,
+                linkedAccounts: [parentUser.id!, parentUser.email!], 
+                customJob: subType === 'business' ? '새 가게' : govtRole
+            }, "shared_password"); 
+
+            await serverAction('link_account', { myEmail: parentUser.email, targetId: subId });
+            
+            showModal("인증 및 부계정 생성이 완료되었습니다.");
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+
+        } catch (e: any) {
+            showModal(e.message || "인증 실패");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
     const handleSignupNext = async () => {
         if (isProcessing) return;
+        
         if (step === 1) {
             if (generalProvisions && !hasReadGeneralTerms) return showModal("총칙을 읽고 동의해야 합니다.");
             if (!allMandatoryAgreed) return showModal("필수 약관에 모두 동의해야 합니다.");
             setStep(2);
-        } else if (step === 2) {
+            return;
+        } 
+
+        if (step === 2) {
+            if (subType === 'govt' || subType === 'business') {
+                return;
+            }
             if (!sName.trim() || !sBirth.trim()) return showModal("이름과 생년월일을 입력하세요.");
             if (sBirth.length !== 6) return showModal("생년월일 6자리를 입력하세요 (YYMMDD).");
-            if (subType === 'govt' && !govtRole) return showModal("공무원 직책을 선택하세요.");
             setStep(3);
-        } else if (step === 3) {
+            return;
+        }
+        
+        if (step === 3) {
             if (!signupId.trim()) return showModal("사용할 아이디를 입력하세요.");
             if (!email.includes('@')) return showModal("유효한 이메일을 입력하세요.");
             if (password.length < 8) return showModal("비밀번호는 8자리 이상이어야 합니다.");
@@ -202,47 +259,15 @@ export const AuthView: React.FC = () => {
             
             setIsProcessing(true);
             try {
-                let finalType: User['type'] = 'citizen';
-                let finalSubType: UserSubType = subType === 'teacher' ? 'personal' : subType; // Fix subtype logic
-                if (subType === 'teacher') finalType = 'teacher';
-                
-                let branches: GovtBranch[] = [];
-                const requireApproval = db.settings.requireSignupApproval !== false;
-                let status: User['approvalStatus'] = requireApproval ? 'pending' : 'approved';
-                let isPresident = false;
-
-                if (subType === 'business') {
-                    finalType = 'mart';
-                    finalSubType = 'business';
-                } else if (subType === 'govt') {
-                    finalType = 'government'; // Default for officials
-                    finalSubType = 'govt';
-                    
-                    if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
-                    else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
-                    else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
-                    
-                    if (govtRole === '대통령') isPresident = true;
-                    
-                    // 한국은행장 특수 로직: 바로 관리자(Admin) 권한 부여
-                    if (govtRole === '한국은행장' || sName.trim() === '한국은행') {
-                        status = 'approved';
-                        finalType = 'admin';
-                    }
-                }
-
                 await registerUser({
                     email: email.trim(), 
                     id: signupId.trim(),
                     name: sName.trim(), 
-                    type: finalType, 
-                    subType: finalSubType,
+                    type: subType === 'teacher' ? 'teacher' : 'citizen', 
+                    subType: subType === 'teacher' ? 'teacher' : 'personal',
                     birthDate: sBirth.trim(), 
-                    govtBranch: branches, 
-                    govtRole,
-                    isPresident,
-                    approvalStatus: status,
-                    balanceKRW: (finalType === 'admin') ? 1000000000000 : 0, // Bank gets startup funds
+                    approvalStatus: (db.settings.requireSignupApproval !== false) ? 'pending' : 'approved',
+                    balanceKRW: 0, 
                     balanceUSD: 0
                 }, password);
 
@@ -274,6 +299,10 @@ export const AuthView: React.FC = () => {
         if (view === 'find_id') return { title: "아이디 찾기", desc: "가입 시 입력한 정보로\n아이디를 찾습니다." };
         if (view === 'reset_pw') return { title: "비밀번호 재설정", desc: "가입한 이메일로\n재설정 링크를 발송합니다." };
         if (view === 'signup') {
+            if (step === 5) return { title: "가입 완료", desc: "가입을 축하합니다!" };
+            if (subType === 'govt' || subType === 'business') {
+                return { title: "부계정 생성", desc: "기존 계정을 인증하여\n새로운 역할을 추가합니다." };
+            }
             switch(step) {
                 case 1: return { title: "약관 동의", desc: "관리자가 등록한\n이용 약관입니다." };
                 case 2: return { title: "정보 입력", desc: "사용하실 실명과\n역할을 선택하세요." };
@@ -285,17 +314,11 @@ export const AuthView: React.FC = () => {
         return { title: "성화 은행", desc: "" };
     };
 
-    // ... Rest of the component (rendering) ...
     const info = getInfo();
 
     return (
-        <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F0F0F0] dark:bg-[#121212]">
-            {/* Animated Blobs */}
-            <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] bg-green-200/30 dark:bg-green-900/10 rounded-full blur-[120px] animate-blob mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
-            <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] bg-blue-200/30 dark:bg-blue-900/10 rounded-full blur-[120px] animate-blob animation-delay-2000 mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
-            <div className="absolute top-[40%] left-[50%] transform -translate-x-1/2 w-[500px] h-[500px] bg-purple-200/30 dark:bg-purple-900/10 rounded-full blur-[120px] animate-blob animation-delay-4000 mix-blend-multiply dark:mix-blend-normal pointer-events-none"></div>
-
-            <div className={`w-full max-w-5xl h-full sm:h-[85vh] flex flex-col sm:flex-row overflow-hidden relative z-10 transition-all duration-500 sm:rounded-[40px] shadow-2xl bg-white/60 dark:bg-[#1C1C1E]/60 backdrop-blur-xl border border-white/40 dark:border-white/5`}>
+        <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F2F2F7] dark:bg-[#050505]">
+            <div className={`w-full max-w-5xl h-full sm:h-[85vh] flex flex-col sm:flex-row overflow-hidden relative z-10 transition-all duration-500 sm:rounded-[40px] shadow-2xl ${highQualityGraphics ? 'bg-white/10 dark:bg-black/40 backdrop-blur-3xl border border-white/20 shadow-[0_0_40px_rgba(0,0,0,0.1)]' : 'bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-gray-800'}`}>
                 
                 {/* Mobile Header */}
                 <div className="sm:hidden w-full px-6 pt-8 pb-4 flex items-center justify-between shrink-0">
@@ -334,7 +357,7 @@ export const AuthView: React.FC = () => {
                                         </div>
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-sm truncate dark:text-white">{formatName(user.name)}</p>
-                                            <p className="text-[10px] text-gray-400 truncate">{user.id}</p>
+                                            <p className="text-xs text-gray-400 truncate">{user.id}</p>
                                         </div>
                                         <div className="w-8 h-8 rounded-full bg-green-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg shadow-green-500/30">
                                             <LineIcon icon="arrow-right" className="w-4 h-4" />
@@ -349,7 +372,6 @@ export const AuthView: React.FC = () => {
                 {/* Right Panel (Content) */}
                 <div className="flex-1 p-6 sm:p-16 flex flex-col justify-center items-center relative z-10 overflow-y-auto w-full">
                     <div className="w-full max-w-sm space-y-6 animate-fade-in relative">
-                        {/* Login View */}
                         {view === 'login' && (
                             <div className="space-y-6 animate-slide-up">
                                 <div className="space-y-3">
@@ -359,7 +381,18 @@ export const AuthView: React.FC = () => {
                                 <Button onClick={handleLogin} className="w-full h-14 text-lg rounded-2xl bg-green-600 hover:bg-green-500 shadow-lg shadow-green-600/30 backdrop-blur-sm">접속하기</Button>
                                 
                                 <div className="flex justify-between items-center px-1 pt-4 border-t border-gray-200/50 dark:border-white/10">
-                                    <button onClick={() => navigateTo('signup')} className="text-sm font-bold text-green-600 hover:underline transition-colors">회원가입</button>
+                                    <button 
+                                        onClick={() => {
+                                            if (db.settings.signupRestricted) {
+                                                showModal("현재 신규 회원가입이 제한되어 있습니다.");
+                                            } else {
+                                                navigateTo('signup');
+                                            }
+                                        }} 
+                                        className={`text-sm font-bold ${db.settings.signupRestricted ? 'text-gray-400 cursor-not-allowed' : 'text-green-600 hover:underline'} transition-colors`}
+                                    >
+                                        회원가입
+                                    </button>
                                     <div className="flex items-center gap-3 text-xs text-gray-400 dark:text-gray-500">
                                         <button onClick={() => navigateTo('find_id')} className="hover:text-gray-600 dark:hover:text-gray-300">아이디 찾기</button>
                                         <span className="w-px h-3 bg-gray-300 dark:bg-gray-700"></span>
@@ -423,19 +456,40 @@ export const AuthView: React.FC = () => {
                                 )}
                                 {step === 2 && (
                                     <div className="space-y-4 animate-fade-in">
-                                        <Input placeholder="실명" value={sName} onChange={e => setSName(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                        <Input placeholder="생년월일 (YYMMDD)" value={sBirth} onChange={e => setSBirth(e.target.value)} maxLength={6} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                        <div className="grid grid-cols-2 gap-2">
-                                            {[{ id: 'personal', label: '개인' }, { id: 'business', label: '사업자' }, { id: 'govt', label: '공무원' }, { id: 'teacher', label: '교사' }].map(t => (
+                                        <div className="grid grid-cols-2 gap-2 mb-4">
+                                            {[{ id: 'personal', label: '개인 (시민)' }, { id: 'teacher', label: '교사' }, { id: 'business', label: '사업자 (마트)' }, { id: 'govt', label: '공무원' }].map(t => (
                                                 <button 
                                                     key={t.id} 
-                                                    onClick={() => { setSubType(t.id as any); setGovtRole(''); }} 
+                                                    onClick={() => { setSubType(t.id as any); setGovtRole(''); setParentId(''); setParentPw(''); }} 
                                                     className={`py-3 rounded-xl font-bold border transition-all duration-200 active:scale-95 ${subType === t.id ? 'bg-green-600 text-white shadow-lg shadow-green-600/20 border-green-600' : 'bg-white/50 dark:bg-white/5 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-white/10 hover:bg-white/80 dark:hover:bg-white/10'}`}
                                                 >
                                                     {t.label}
                                                 </button>
                                             ))}
                                         </div>
+
+                                        {(subType === 'personal' || subType === 'teacher') ? (
+                                            <>
+                                                <Input placeholder="실명" value={sName} onChange={e => setSName(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                                <Input placeholder="생년월일 (YYMMDD)" value={sBirth} onChange={e => setSBirth(e.target.value)} maxLength={6} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                            </>
+                                        ) : (
+                                            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 animate-fade-in">
+                                                <p className="text-sm font-bold text-blue-700 dark:text-blue-300 mb-2">🔗 부계정(모드) 생성 - 본계정 인증</p>
+                                                <p className="text-xs text-gray-500 mb-3">
+                                                    사업자 및 공무원 계정은 기존 시민 계정과 연동되어 생성됩니다.<br/>
+                                                    본인 명의의 개인 계정으로 인증해주세요.
+                                                </p>
+                                                <div className="space-y-3">
+                                                    <Input placeholder="본계정 아이디 (ID)" value={parentId} onChange={e => setParentId(e.target.value)} className="h-10 text-sm" />
+                                                    <Input type="password" placeholder="본계정 비밀번호" value={parentPw} onChange={e => setParentPw(e.target.value)} className="h-10 text-sm" />
+                                                    <Button onClick={handleCreateSubAccount} className="w-full h-10 text-sm bg-blue-600 hover:bg-blue-500" disabled={isProcessing}>
+                                                        {isProcessing ? '인증 및 생성 중...' : '인증하고 계정 생성하기'}
+                                                    </Button>
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {subType === 'govt' && (
                                             <div className="mt-2 space-y-3 bg-white/50 dark:bg-white/5 p-3 rounded-xl border border-gray-200 dark:border-white/10 max-h-60 overflow-y-auto animate-fade-in backdrop-blur-sm">
                                                 <p className="text-xs font-bold text-gray-500 dark:text-gray-400">공무원 직책 선택</p>
@@ -478,12 +532,20 @@ export const AuthView: React.FC = () => {
                                 {step === 5 && (
                                     <div className="text-center py-6 animate-scale-in">
                                         <div className="w-20 h-20 bg-green-500/10 rounded-full flex items-center justify-center mx-auto mb-6"><LineIcon icon="check" className="text-green-500 w-10 h-10" /></div>
-                                        <p className="text-xl font-bold dark:text-white">가입 처리 완료!</p>
+                                        <p className="text-xl font-bold dark:text-white">
+                                            {(subType === 'govt' || subType === 'business') ? '부계정 생성 완료!' : '가입 처리 완료!'}
+                                        </p>
                                     </div>
                                 )}
                                 <div className="flex gap-2">
                                     {step > 1 && step < 4 && <button onClick={() => setStep(step-1)} className="flex-1 h-14 bg-gray-100 dark:bg-white/5 text-gray-500 font-bold rounded-2xl hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">이전</button>}
-                                    {step < 4 && <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl shadow-lg shadow-green-600/30 hover:bg-green-500">{step === 3 ? '가입 신청' : '다음'}</Button>}
+                                    {step < 4 && (
+                                        (step === 2 && (subType === 'govt' || subType === 'business')) ? null : (
+                                            <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl shadow-lg shadow-green-600/30 hover:bg-green-500">
+                                                {step === 3 ? '가입 신청' : '다음'}
+                                            </Button>
+                                        )
+                                    )}
                                 </div>
                             </div>
                         )}
@@ -518,14 +580,9 @@ export const AuthView: React.FC = () => {
                 <div className="fixed inset-0 z-[8000] bg-white dark:bg-black flex flex-col animate-fade-in">
                     <div className="p-6 border-b dark:border-white/10 flex justify-between items-center shrink-0">
                         <h2 className="text-2xl font-black text-center w-full">서비스 이용 약관 (총칙)</h2>
-                        
                     </div>
                     
-                    <div className="absolute top-20 right-6 z-50 bg-red-600 text-white font-bold px-4 py-2 rounded-full shadow-lg animate-bounce">
-                        {generalTermsTimer > 0 ? `${generalTermsTimer}초 남음` : '확인 완료'}
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto p-8 text-lg leading-loose whitespace-pre-wrap dark:text-gray-200" ref={generalTermsScrollRef}>
+                    <div className="flex-1 overflow-y-auto p-8 text-lg leading-loose whitespace-pre-wrap dark:text-gray-200" onScroll={handleScrollTerms} ref={generalTermsScrollRef}>
                         <RichText text={generalProvisions.content.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '')} />
                         <div className="h-20"></div>
                     </div>
@@ -533,18 +590,12 @@ export const AuthView: React.FC = () => {
                         <Button 
                             disabled={!canAgreeGeneral} 
                             onClick={() => {
-                                if (generalTermsScrollRef.current) {
-                                    const { scrollTop, scrollHeight, clientHeight } = generalTermsScrollRef.current;
-                                    if (scrollHeight - scrollTop - clientHeight > 300) { 
-                                        return alert("약관을 끝까지 읽어주세요 (스크롤을 내려주세요).");
-                                    }
-                                }
                                 setHasReadGeneralTerms(true);
                                 setShowTotalTerms(false);
                             }} 
                             className="w-full py-4 text-lg font-black shadow-xl disabled:bg-gray-400 disabled:cursor-not-allowed"
                         >
-                            {canAgreeGeneral ? "위 약관에 동의합니다" : `약관을 읽어주세요 (${generalTermsTimer}s)`}
+                            {canAgreeGeneral ? "위 약관에 동의합니다" : "약관을 끝까지 읽어주세요 (스크롤)"}
                         </Button>
                     </div>
                 </div>

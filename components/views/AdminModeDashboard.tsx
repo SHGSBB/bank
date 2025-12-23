@@ -1,7 +1,7 @@
 
 import React, { useState, Suspense, lazy, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
-import { Card, Spinner, LineIcon } from '../Shared';
+import { Card, Spinner, LineIcon, Modal, Button } from '../Shared';
 
 // Admin Specific Tabs
 const TeacherDashboard = lazy(() => import('../tabs/teacher/TeacherDashboard').then(module => ({ default: module.TeacherDashboard })));
@@ -32,6 +32,13 @@ const GovDashboard = lazy(() => import('../tabs/government/GovDashboard').then(m
 const StockTab = lazy(() => import('../tabs/StockTab').then(module => ({ default: module.StockTab })));
 const BillTab = lazy(() => import('../tabs/BillTab').then(module => ({ default: module.BillTab })));
 
+// Specific Govt Roles
+const PresidentDashboard = lazy(() => import('../tabs/government/President/PresidentDashboard').then(module => ({ default: module.PresidentDashboard })));
+const MinisterDashboard = lazy(() => import('../tabs/government/JusticeMinister/MinisterDashboard').then(module => ({ default: module.MinisterDashboard })));
+const ProsecutorDashboard = lazy(() => import('../tabs/government/Prosecutor/ProsecutorDashboard').then(module => ({ default: module.ProsecutorDashboard })));
+const JudgeDashboard = lazy(() => import('../tabs/government/Judge/JudgeDashboard').then(module => ({ default: module.JudgeDashboard })));
+const CongressmanDashboard = lazy(() => import('../tabs/government/Congressman/CongressmanDashboard').then(module => ({ default: module.CongressmanDashboard })));
+
 export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesignMode }) => {
     const { currentUser, db, saveDb, loadAllUsers } = useGame();
     const [isChatOpen, setIsChatOpen] = useState(false);
@@ -39,16 +46,16 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
     // Level 1 Tabs
     const [mainTab, setMainTab] = useState<'bank' | 'system' | 'citizen' | 'mart' | 'gov' | 'teacher'>('bank');
     
-    // Sub Tabs for System Admin
+    // Sub Tabs
     const [systemSubTab, setSystemSubTab] = useState('사용자 관리');
-    
-    // Citizen Sub Tabs for Admin
     const [citizenSubTab, setCitizenSubTab] = useState('이체');
+    const [bankSubTab, setBankSubTab] = useState('재정 관리');
+    
+    // Govt Role Selector
+    const [selectedGovtRole, setSelectedGovtRole] = useState<'president' | 'minister' | 'prosecutor' | 'judge' | 'congressman'>('president');
 
-    // Force load all users on mount to ensure admin panels are populated
     useEffect(() => {
         loadAllUsers();
-        
         const handleOpenChat = () => setIsChatOpen(true);
         window.addEventListener('open-chat', handleOpenChat);
         return () => window.removeEventListener('open-chat', handleOpenChat);
@@ -61,95 +68,6 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
         await saveDb(newDb);
     };
 
-    const renderTabContent = () => {
-        return (
-            <Suspense fallback={<Spinner />}>
-                {/* 1. CENTRAL BANK CONTROL (Default Admin View) */}
-                {mainTab === 'bank' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <AdminFinanceTab />
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <AdminRequestTab />
-                            <AdminRealEstateTab />
-                        </div>
-                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                            <BusinessManagementTab />
-                            <StandardTableTab />
-                        </div>
-                        <AdminOperationTab />
-                    </div>
-                )}
-
-                {/* 2. SYSTEM MANAGEMENT */}
-                {mainTab === 'system' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
-                            {['사용자 관리', '공지사항 관리', '약관 관리', '시스템 정보', '피드백'].map(t => (
-                                <button key={t} onClick={() => setSystemSubTab(t)} className={`px-4 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${systemSubTab === t ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>
-                                    {t}
-                                </button>
-                            ))}
-                        </div>
-                        {systemSubTab === '사용자 관리' && <UserManagementTab />}
-                        {systemSubTab === '공지사항 관리' && <AnnouncementsTab />}
-                        {systemSubTab === '약관 관리' && <ConsentsTab />}
-                        {systemSubTab === '시스템 정보' && <SystemInfoEditorTab />}
-                        {systemSubTab === '피드백' && <AdminFeedbackTab />}
-                    </div>
-                )}
-
-                {/* 3. CITIZEN SIMULATION (Super User Mode) */}
-                {mainTab === 'citizen' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <div className="bg-blue-50 dark:bg-blue-900/10 p-3 rounded-lg text-xs text-blue-600 mb-2 border border-blue-100">
-                            * 관리자 권한으로 일반 시민 기능을 수행합니다. 본인 계정(관리자) 기준입니다.
-                        </div>
-                        <div className="flex overflow-x-auto gap-4 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
-                            {['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역'].map(t => (
-                                <button key={t} onClick={() => setCitizenSubTab(t)} className={`px-3 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${citizenSubTab === t ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>
-                                    {t}
-                                </button>
-                            ))}
-                        </div>
-                        
-                        {citizenSubTab === '이체' && <TransferTab />}
-                        {citizenSubTab === '구매' && <PurchaseTab />}
-                        {citizenSubTab === '환전' && <ExchangeTab />}
-                        {citizenSubTab === '주식' && <StockTab />}
-                        {citizenSubTab === '저금' && <SavingsTab />}
-                        {citizenSubTab === '대출' && <LoanTab />}
-                        {citizenSubTab === '부동산' && <RealEstateTab />}
-                        {citizenSubTab === '고지서' && <BillTab />}
-                        {citizenSubTab === '거래 내역' && <TransactionHistoryTab />}
-                    </div>
-                )}
-
-                {/* 4. MART SIMULATION */}
-                {mainTab === 'mart' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <Card>
-                            <h4 className="font-bold mb-4 text-orange-600">마트 기능 테스트</h4>
-                            <MartProductTab />
-                            <div className="h-8 border-t my-4"></div>
-                            <MartSettingsTab />
-                        </Card>
-                    </div>
-                )}
-
-                {/* 5. GOVERNMENT SIMULATION */}
-                {mainTab === 'gov' && (
-                    <div className="space-y-6 animate-fade-in">
-                        <GovDashboard />
-                    </div>
-                )}
-
-                {/* 6. TEACHER/GOD MODE */}
-                {mainTab === 'teacher' && <TeacherDashboard />}
-            </Suspense>
-        );
-    };
-
-    // Fixed Height Container with Overflow Auto for Scrolling
     return (
         <div className="h-screen w-full flex flex-col overflow-hidden bg-[#E9E9EB] dark:bg-[#121212]">
             <div className="flex-1 overflow-y-auto pb-24 scrollbar-hide p-4" style={{ marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' }}>
@@ -202,11 +120,107 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
                 </div>
                 
                 <div className="min-h-[600px] animate-fade-in">
-                    {renderTabContent()}
+                    <Suspense fallback={<Spinner />}>
+                        {mainTab === 'bank' && (
+                            <div className="space-y-6">
+                                <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
+                                    {['재정 관리', '신청 관리', '운영 관리', '기준표', '이체(한국은행)'].map(t => (
+                                        <button key={t} onClick={() => setBankSubTab(t)} className={`px-4 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${bankSubTab === t ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>
+                                            {t}
+                                        </button>
+                                    ))}
+                                </div>
+                                {bankSubTab === '재정 관리' && <AdminFinanceTab />}
+                                {bankSubTab === '신청 관리' && <AdminRequestTab />}
+                                {bankSubTab === '운영 관리' && <AdminOperationTab />}
+                                {bankSubTab === '기준표' && <StandardTableTab />}
+                                {bankSubTab === '이체(한국은행)' && <TransferTab />}
+                            </div>
+                        )}
+
+                        {mainTab === 'system' && (
+                            <div className="space-y-6">
+                                <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
+                                    {['사용자 관리', '공지사항 관리', '약관 관리', '시스템 정보', '피드백'].map(t => (
+                                        <button key={t} onClick={() => setSystemSubTab(t)} className={`px-4 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${systemSubTab === t ? 'border-green-500 text-green-600' : 'border-transparent text-gray-500'}`}>
+                                            {t}
+                                        </button>
+                                    ))}
+                                </div>
+                                {systemSubTab === '사용자 관리' && <UserManagementTab />}
+                                {systemSubTab === '공지사항 관리' && <AnnouncementsTab />}
+                                {systemSubTab === '약관 관리' && <ConsentsTab />}
+                                {systemSubTab === '시스템 정보' && <SystemInfoEditorTab />}
+                                {systemSubTab === '피드백' && <AdminFeedbackTab />}
+                            </div>
+                        )}
+
+                        {mainTab === 'citizen' && (
+                            <div className="space-y-6">
+                                <div className="flex overflow-x-auto gap-4 mb-4 scrollbar-hide border-b border-gray-200 dark:border-gray-700 pb-1">
+                                    {['이체', '구매', '환전', '주식', '저금', '대출', '부동산', '고지서', '거래 내역'].map(t => (
+                                        <button key={t} onClick={() => setCitizenSubTab(t)} className={`px-3 py-2 text-sm font-bold transition-colors border-b-2 whitespace-nowrap ${citizenSubTab === t ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500'}`}>
+                                            {t}
+                                        </button>
+                                    ))}
+                                </div>
+                                {citizenSubTab === '이체' && <TransferTab />}
+                                {citizenSubTab === '구매' && <PurchaseTab />}
+                                {citizenSubTab === '환전' && <ExchangeTab />}
+                                {citizenSubTab === '주식' && <StockTab />}
+                                {citizenSubTab === '저금' && <SavingsTab />}
+                                {citizenSubTab === '대출' && <LoanTab />}
+                                {citizenSubTab === '부동산' && <RealEstateTab />}
+                                {citizenSubTab === '고지서' && <BillTab />}
+                                {citizenSubTab === '거래 내역' && <TransactionHistoryTab />}
+                            </div>
+                        )}
+
+                        {mainTab === 'mart' && (
+                            <div className="space-y-6">
+                                <Card>
+                                    <h4 className="font-bold mb-4 text-orange-600">마트 기능 테스트</h4>
+                                    <MartProductTab />
+                                    <div className="h-8 border-t my-4"></div>
+                                    <MartSettingsTab />
+                                </Card>
+                            </div>
+                        )}
+
+                        {mainTab === 'gov' && (
+                            <div className="space-y-6">
+                                <div className="flex overflow-x-auto gap-2 mb-4 scrollbar-hide">
+                                    {[
+                                        { id: 'president', label: '대통령 (President)' },
+                                        { id: 'minister', label: '법무부장관 (Minister)' },
+                                        { id: 'prosecutor', label: '검사 (Prosecutor)' },
+                                        { id: 'judge', label: '판사 (Judge)' },
+                                        { id: 'congressman', label: '국회의원 (Congressman)' }
+                                    ].map(r => (
+                                        <button 
+                                            key={r.id} 
+                                            onClick={() => setSelectedGovtRole(r.id as any)}
+                                            className={`px-4 py-2 rounded-xl border font-bold whitespace-nowrap transition-colors ${selectedGovtRole === r.id ? 'bg-black text-white dark:bg-white dark:text-black' : 'bg-transparent text-gray-500'}`}
+                                        >
+                                            {r.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                
+                                {selectedGovtRole === 'president' && <PresidentDashboard />}
+                                {selectedGovtRole === 'minister' && <MinisterDashboard />}
+                                {selectedGovtRole === 'prosecutor' && <ProsecutorDashboard />}
+                                {selectedGovtRole === 'judge' && <JudgeDashboard />}
+                                {selectedGovtRole === 'congressman' && <CongressmanDashboard />}
+                            </div>
+                        )}
+
+                        {mainTab === 'teacher' && <TeacherDashboard />}
+                    </Suspense>
                 </div>
             </div>
 
-            {/* Chat Floating Button & System */}
+            {/* Chat Floating Button */}
             <div className="fixed bottom-6 right-6 z-[60] flex flex-col gap-2 transition-all" style={{ right: isChatOpen && window.innerWidth >= 640 ? '420px' : '1.5rem' }}>
                 {!isChatOpen && (
                     <button onClick={() => setIsChatOpen(true)} className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-xl flex items-center justify-center hover:scale-110 transition-transform">

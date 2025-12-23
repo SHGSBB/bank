@@ -115,7 +115,6 @@ export const Dashboard: React.FC = () => {
     const isGovernment = currentUser?.type === 'government' || !!currentUser?.govtRole;
 
     // Service Maintenance Check
-    // Admin is exempt from maintenance
     const isMaintenance = db.settings.serviceStatus === 'maintenance' && !isBOK && currentUser?.type !== 'admin';
     const serviceStopNotice = db.announcements?.find(a => a.category === 'service_stop')?.content || "현재 서비스 점검 중입니다.";
 
@@ -287,7 +286,7 @@ export const Dashboard: React.FC = () => {
                                             ) : (
                                                 <RichText text={a.content} className={`text-sm leading-relaxed ${a.isImportant ? 'font-bold' : 'text-gray-600 dark:text-gray-300'}`} />
                                             )}
-                                            <p className="text-xs text-gray-400 mt-2">{new Date(a.date).toLocaleDateString()}</p>
+                                            <p className="text-[10px] text-gray-400 mt-2">{new Date(a.date).toLocaleDateString()}</p>
                                         </div>
                                         <div className="flex gap-2">
                                             <button 

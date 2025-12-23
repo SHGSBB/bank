@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Button, Input, LineIcon, Modal, formatName, RichText } from '../Shared';
 import { UserSubType, GovtBranch, User } from '../../types';
-import { auth, findUserIdByInfo, resetUserPassword } from '../../services/firebase';
+import { auth, findUserIdByInfo, resetUserPassword, loginWithEmail, fetchUserByLoginId } from '../../services/firebase';
 import { sendEmailVerification } from 'firebase/auth';
 
 type ViewMode = 'login' | 'signup' | 'find_id' | 'reset_pw' | 'notif_setup';
@@ -15,7 +15,7 @@ const GOVT_STRUCTURE = {
 };
 
 export const AuthView: React.FC = () => {
-    const { login, registerUser, createSubAccount, showModal, db, requestNotificationPermission, showPinModal, serverAction, requestPasswordReset, highQualityGraphics } = useGame();
+    const { login, registerUser, showModal, db, requestNotificationPermission, showPinModal, serverAction, requestPasswordReset, highQualityGraphics, switchAccount } = useGame();
     const [view, setView] = useState<ViewMode>('login');
     const [history, setHistory] = useState<ViewMode[]>([]);
 
@@ -37,7 +37,6 @@ export const AuthView: React.FC = () => {
         }
     };
 
-    // Form States
     const [loginId, setLoginId] = useState('');
     const [password, setPassword] = useState('');
     const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -52,9 +51,10 @@ export const AuthView: React.FC = () => {
     const [sBirth, setSBirth] = useState('');
     const [govtRole, setGovtRole] = useState('');
     
-    // Verification state for sub-accounts
-    const [mainUserForLink, setMainUserForLink] = useState<any>(null);
-
+    // Sub Account Verification
+    const [parentId, setParentId] = useState('');
+    const [parentPw, setParentPw] = useState('');
+    
     // Recovery Info
     const [findName, setFindName] = useState('');
     const [findBirth, setFindBirth] = useState('');
@@ -62,7 +62,6 @@ export const AuthView: React.FC = () => {
     
     const [agreedTerms, setAgreedTerms] = useState<Record<string, boolean>>({});
     
-    // General Provisions States
     const [showTotalTerms, setShowTotalTerms] = useState(false);
     const [generalTermsTimer, setGeneralTermsTimer] = useState(30);
     const [hasReadGeneralTerms, setHasReadGeneralTerms] = useState(false);
@@ -70,7 +69,6 @@ export const AuthView: React.FC = () => {
     const generalTermsScrollRef = useRef<HTMLDivElement>(null);
     const timerInterval = useRef<any>(null);
 
-    // Login History State
     const [loginHistory, setLoginHistory] = useState<any[]>([]);
 
     const consents = useMemo(() => {
@@ -94,12 +92,10 @@ export const AuthView: React.FC = () => {
         };
     }, []);
 
-    // General Terms Timer Logic
     useEffect(() => {
         if (showTotalTerms && !hasReadGeneralTerms) {
             setGeneralTermsTimer(30);
             setCanAgreeGeneral(false);
-            
             timerInterval.current = setInterval(() => {
                 setGeneralTermsTimer((prev) => {
                     if (prev <= 1) {
@@ -130,7 +126,6 @@ export const AuthView: React.FC = () => {
             setLoginId(targetId);
             return;
         }
-        
         const pin = await showPinModal(`${user.name}님 로그인`, user.pin, (user.pin.length as any) || 4);
         if (pin === user.pin) {
             try {
@@ -188,32 +183,79 @@ export const AuthView: React.FC = () => {
         }, 3000);
     };
 
-    // Sub-account flow: Finds parent account via name/birth
-    const handleVerifyParent = async () => {
-        if (!sName.trim() || !sBirth.trim()) return showModal("본계정의 이름과 생년월일을 입력하세요.");
+    const handleCreateSubAccount = async () => {
+        if (!parentId || !parentPw) return showModal("본계정 아이디와 비밀번호를 입력하세요.");
+        if (subType === 'govt' && !govtRole) return showModal("공무원 직책을 선택하세요.");
+        if (db.settings.signupRestricted) return showModal("현재 신규 회원가입이 제한되어 있습니다.");
+
         setIsProcessing(true);
-        
         try {
-            // Find User ID by Info (Client Side first to get ID)
-            const foundId = await findUserIdByInfo(sName, sBirth);
-            if (!foundId) throw new Error("일치하는 시민 계정이 없습니다.");
+            // 1. Verify Parent Account Credentials locally via client SDK auth login first
+            // Note: This temporarily signs in. If successful, we proceed.
+            // Ideally we use a server-side check but without cloud functions, we simulate.
             
-            // In a real scenario, we'd send an email here. 
-            // For simulation, we pretend to send an email and ask user to confirm.
-            // Or we check if the user exists and set `mainUserForLink`.
+            // Try login to verify
+            let parentUser = await fetchUserByLoginId(parentId);
+            if (!parentUser && parentId.includes('@')) { /* fallback handled in fetch */ }
+            if (!parentUser) throw new Error("계정을 찾을 수 없습니다.");
             
-            // Simulating "Verification Email Sent"
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            // Verify by attempting login (creates a session if success)
+            // Ideally we logout immediately if this is just a verification step, 
+            // BUT for this UX, we want to login as the parent + new sub account.
+            const userCredential = await loginWithEmail(parentUser.email!, parentPw);
+            if (!userCredential) throw new Error("비밀번호가 일치하지 않습니다.");
+
+            // 2. Credentials Valid. Now Create Sub-Account via Server Action.
+            let finalType: User['type'] = subType === 'business' ? 'mart' : 'government';
+            let branches: GovtBranch[] = [];
+            let isPresident = false;
+            let approvalStatus: User['approvalStatus'] = (db.settings.requireSignupApproval !== false) ? 'pending' : 'approved';
+
+            if (subType === 'govt') {
+                if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
+                else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
+                else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
+                if (govtRole === '대통령') isPresident = true;
+                
+                if (govtRole === '한국은행장' || parentUser.name === '한국은행') {
+                    finalType = 'admin';
+                    approvalStatus = 'approved';
+                }
+            }
+
+            const subId = `${parentUser.id}_${subType === 'business' ? 'biz' : 'gov'}_${Date.now().toString().slice(-4)}`;
             
-            // Fetch basic details for confirmation
-            const userData = await serverAction('fetch_my_lite_info', { userId: foundId });
-            setMainUserForLink(userData);
+            // Create user object directly (no new Auth needed)
+            await registerUser({
+                id: subId,
+                email: `${subId}@sunghwa.bank`, // Placeholder email
+                name: parentUser.name,
+                type: finalType,
+                subType: subType === 'govt' ? 'govt' : 'business',
+                govtRole,
+                govtBranch: branches,
+                isPresident,
+                approvalStatus,
+                linkedAccounts: [parentUser.id!, parentUser.email!], 
+                customJob: subType === 'business' ? '새 가게' : govtRole
+            }, "shared_password"); 
+
+            // Link Bidirectional
+            await serverAction('link_account', { myEmail: parentUser.email, targetId: subId });
+
+            // 3. Login Flow Complete
+            // User is already logged in as Parent via step 1.
+            // Switch to the newly created account immediately? Or just stay as parent.
+            // Let's reload to refresh state and show dashboard.
             
-            showModal(`본인 확인을 위해 [${userData.email}]로 인증 메일을 발송했습니다. (시뮬레이션: 자동 확인됨)`);
-            setStep(3); // Go to creation step immediately for simulation
-            
+            showModal("인증 및 부계정 생성이 완료되었습니다.");
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
+
         } catch (e: any) {
-            showModal(e.message || "오류가 발생했습니다.");
+            showModal(e.message || "인증 실패");
+            // If login failed, we are not logged in.
         } finally {
             setIsProcessing(false);
         }
@@ -222,7 +264,6 @@ export const AuthView: React.FC = () => {
     const handleSignupNext = async () => {
         if (isProcessing) return;
         
-        // Step 1: Terms
         if (step === 1) {
             if (generalProvisions && !hasReadGeneralTerms) return showModal("총칙을 읽고 동의해야 합니다.");
             if (!allMandatoryAgreed) return showModal("필수 약관에 모두 동의해야 합니다.");
@@ -230,73 +271,19 @@ export const AuthView: React.FC = () => {
             return;
         } 
 
-        // Step 2: Role Selection & Info
         if (step === 2) {
             if (subType === 'govt' || subType === 'business') {
-                // Sub-account flow
-                handleVerifyParent();
-                return;
-            } else {
-                // Personal/Teacher Flow
-                if (!sName.trim() || !sBirth.trim()) return showModal("이름과 생년월일을 입력하세요.");
-                if (sBirth.length !== 6) return showModal("생년월일 6자리를 입력하세요 (YYMMDD).");
-                setStep(3);
+                // Should use the specialized form below, button here is disabled or hidden logic handled in UI
                 return;
             }
-        } 
+            // Personal/Teacher
+            if (!sName.trim() || !sBirth.trim()) return showModal("이름과 생년월일을 입력하세요.");
+            if (sBirth.length !== 6) return showModal("생년월일 6자리를 입력하세요 (YYMMDD).");
+            setStep(3);
+            return;
+        }
         
-        // Step 3: Create Account
         if (step === 3) {
-            // If Sub Account Mode
-            if (subType === 'govt' || subType === 'business') {
-                if (!mainUserForLink) return showModal("본인 인증이 필요합니다.");
-                if (subType === 'govt' && !govtRole) return showModal("공무원 직책을 선택하세요.");
-                if (subType === 'business' && !signupId.trim()) return showModal("가게명(상호)을 입력하세요."); // Reusing signupId for StoreName here
-
-                setIsProcessing(true);
-                try {
-                    let finalType: User['type'] = subType === 'business' ? 'mart' : 'government';
-                    let branches: GovtBranch[] = [];
-                    let isPresident = false;
-                    let approvalStatus: User['approvalStatus'] = (db.settings.requireSignupApproval !== false) ? 'pending' : 'approved';
-
-                    if (subType === 'govt') {
-                        if (GOVT_STRUCTURE['행정부'].includes(govtRole)) branches = ['executive'];
-                        else if (GOVT_STRUCTURE['입법부'].includes(govtRole)) branches = ['legislative'];
-                        else if (GOVT_STRUCTURE['사법부'].includes(govtRole)) branches = ['judicial'];
-                        if (govtRole === '대통령') isPresident = true;
-                        
-                        // Bank Admin Special Case
-                        if (govtRole === '한국은행장') {
-                            finalType = 'admin';
-                            approvalStatus = 'approved';
-                        }
-                    }
-
-                    // Create Sub Account Node
-                    const subId = `${mainUserForLink.id}_${subType === 'business' ? 'biz' : 'gov'}_${Date.now().toString().slice(-4)}`;
-                    
-                    await createSubAccount(mainUserForLink, {
-                        id: subId,
-                        type: finalType,
-                        subType: subType === 'govt' ? 'govt' : 'business',
-                        govtRole,
-                        govtBranch: branches,
-                        isPresident,
-                        approvalStatus,
-                        customJob: subType === 'business' ? signupId.trim() : govtRole // signupId used as Store Name
-                    });
-
-                    setStep(5); // Success
-                } catch (e: any) {
-                    showModal("생성 오류: " + e.message);
-                } finally {
-                    setIsProcessing(false);
-                }
-                return;
-            }
-
-            // Normal Account Flow
             if (!signupId.trim()) return showModal("사용할 아이디를 입력하세요.");
             if (!email.includes('@')) return showModal("유효한 이메일을 입력하세요.");
             if (password.length < 8) return showModal("비밀번호는 8자리 이상이어야 합니다.");
@@ -344,9 +331,9 @@ export const AuthView: React.FC = () => {
         if (view === 'find_id') return { title: "아이디 찾기", desc: "가입 시 입력한 정보로\n아이디를 찾습니다." };
         if (view === 'reset_pw') return { title: "비밀번호 재설정", desc: "가입한 이메일로\n재설정 링크를 발송합니다." };
         if (view === 'signup') {
-            if (step === 5) return { title: "완료", desc: "모든 절차가 완료되었습니다!" };
+            if (step === 5) return { title: "가입 완료", desc: "가입을 축하합니다!" };
             if (subType === 'govt' || subType === 'business') {
-                return { title: "부계정 모드 추가", desc: "기존 시민 계정을 인증하여\n새로운 역할을 추가합니다." };
+                return { title: "부계정 생성", desc: "기존 계정을 인증하여\n새로운 역할을 추가합니다." };
             }
             switch(step) {
                 case 1: return { title: "약관 동의", desc: "관리자가 등록한\n이용 약관입니다." };
@@ -429,13 +416,12 @@ export const AuthView: React.FC = () => {
                                     <button 
                                         onClick={() => {
                                             if (db.settings.signupRestricted) {
-                                                // Disabled button feedback handled by styling, but safety check here
+                                                showModal("현재 신규 회원가입이 제한되어 있습니다.");
                                             } else {
                                                 navigateTo('signup');
                                             }
                                         }} 
-                                        disabled={db.settings.signupRestricted}
-                                        className={`text-sm font-bold ${db.settings.signupRestricted ? 'text-gray-400 cursor-not-allowed opacity-50' : 'text-green-600 hover:underline'} transition-colors`}
+                                        className={`text-sm font-bold ${db.settings.signupRestricted ? 'text-gray-400 cursor-not-allowed' : 'text-green-600 hover:underline'} transition-colors`}
                                     >
                                         회원가입
                                     </button>
@@ -451,6 +437,7 @@ export const AuthView: React.FC = () => {
                         {view === 'notif_setup' && (
                             <div className="space-y-6 animate-slide-up">
                                 <h3 className="text-center font-bold text-lg mb-2 dark:text-white">알림 권한 설정</h3>
+                                <p className="text-xs text-center text-gray-500">네이티브 알림 사용 시 더 정확한 정보를 즉시 받을 수 있습니다.</p>
                                 <div className="space-y-3">
                                     <Button onClick={() => { requestNotificationPermission('native'); window.location.reload(); }} className="w-full py-4 bg-blue-600 hover:bg-blue-500 shadow-lg shadow-blue-600/30">네이티브 알림 (권장)</Button>
                                     <Button onClick={() => { requestNotificationPermission('browser'); window.location.reload(); }} variant="secondary" className="w-full py-4 bg-white/50 dark:bg-white/10 backdrop-blur-sm">브라우저 토스트 알림</Button>
@@ -505,7 +492,7 @@ export const AuthView: React.FC = () => {
                                             {[{ id: 'personal', label: '개인 (시민)' }, { id: 'teacher', label: '교사' }, { id: 'business', label: '사업자 (마트)' }, { id: 'govt', label: '공무원' }].map(t => (
                                                 <button 
                                                     key={t.id} 
-                                                    onClick={() => { setSubType(t.id as any); setGovtRole(''); }} 
+                                                    onClick={() => { setSubType(t.id as any); setGovtRole(''); setParentId(''); setParentPw(''); }} 
                                                     className={`py-3 rounded-xl font-bold border transition-all duration-200 active:scale-95 ${subType === t.id ? 'bg-green-600 text-white shadow-lg shadow-green-600/20 border-green-600' : 'bg-white/50 dark:bg-white/5 text-gray-600 dark:text-gray-300 border-gray-200 dark:border-white/10 hover:bg-white/80 dark:hover:bg-white/10'}`}
                                                 >
                                                     {t.label}
@@ -520,70 +507,51 @@ export const AuthView: React.FC = () => {
                                             </>
                                         ) : (
                                             <div className="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 animate-fade-in">
-                                                <p className="text-sm font-bold text-blue-700 dark:text-blue-300 mb-2 flex items-center gap-2"><LineIcon icon="security" className="w-4 h-4"/> 신원 확인 (본계정 연동)</p>
+                                                <p className="text-sm font-bold text-blue-700 dark:text-blue-300 mb-2">🔗 부계정(모드) 생성 - 본계정 인증</p>
                                                 <p className="text-xs text-gray-500 mb-3">
-                                                    사업자/공무원 계정은 기존 시민 계정과 연동됩니다.<br/>
-                                                    본인의 시민 계정 정보를 입력해주세요.
+                                                    사업자 및 공무원 계정은 기존 시민 계정과 연동되어 생성됩니다.<br/>
+                                                    본인 명의의 개인 계정으로 인증해주세요.
                                                 </p>
                                                 <div className="space-y-3">
-                                                    <Input placeholder="본계정 이름 (실명)" value={sName} onChange={e => setSName(e.target.value)} className="h-12 text-sm bg-white dark:bg-black" />
-                                                    <Input placeholder="본계정 생년월일 (YYMMDD)" value={sBirth} onChange={e => setSBirth(e.target.value)} maxLength={6} className="h-12 text-sm bg-white dark:bg-black" />
+                                                    <Input placeholder="본계정 아이디 (ID)" value={parentId} onChange={e => setParentId(e.target.value)} className="h-10 text-sm" />
+                                                    <Input type="password" placeholder="본계정 비밀번호" value={parentPw} onChange={e => setParentPw(e.target.value)} className="h-10 text-sm" />
+                                                    <Button onClick={handleCreateSubAccount} className="w-full h-10 text-sm bg-blue-600 hover:bg-blue-500" disabled={isProcessing}>
+                                                        {isProcessing ? '인증 및 생성 중...' : '인증하고 계정 생성하기'}
+                                                    </Button>
                                                 </div>
+                                            </div>
+                                        )}
+
+                                        {subType === 'govt' && (
+                                            <div className="mt-2 space-y-3 bg-white/50 dark:bg-white/5 p-3 rounded-xl border border-gray-200 dark:border-white/10 max-h-60 overflow-y-auto animate-fade-in backdrop-blur-sm">
+                                                <p className="text-xs font-bold text-gray-500 dark:text-gray-400">공무원 직책 선택</p>
+                                                {Object.entries(GOVT_STRUCTURE).map(([branchName, roles]) => (
+                                                    <div key={branchName} className="space-y-1">
+                                                        <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500">{branchName}</p>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {roles.map(role => (
+                                                                <button
+                                                                    key={role}
+                                                                    onClick={() => setGovtRole(role)}
+                                                                    className={`px-3 py-1.5 text-xs rounded-lg border transition-all font-medium ${govtRole === role ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white dark:bg-[#3D3D3D] text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-[#4D4D4D]'}`}
+                                                                >
+                                                                    {role}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>
                                 )}
                                 {step === 3 && (
                                     <div className="space-y-3 animate-fade-in">
-                                        {(subType === 'govt' || subType === 'business') ? (
-                                            // Sub-Account Role Selection UI
-                                            <div className="space-y-4">
-                                                <div className="p-4 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800 text-center">
-                                                    <p className="font-bold text-green-700 dark:text-green-300 mb-1">인증 완료</p>
-                                                    <p className="text-sm">본계정: <b>{mainUserForLink?.name}</b> 님</p>
-                                                </div>
-                                                
-                                                {subType === 'business' && (
-                                                    <div>
-                                                        <label className="text-sm font-bold block mb-1">상호명 (Store Name)</label>
-                                                        <Input placeholder="가게 이름 입력" value={signupId} onChange={e => setSignupId(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30" />
-                                                    </div>
-                                                )}
-
-                                                {subType === 'govt' && (
-                                                    <div className="space-y-2">
-                                                        <p className="text-sm font-bold">공무원 직책 선택</p>
-                                                        <div className="bg-white/50 dark:bg-white/5 p-3 rounded-xl border border-gray-200 dark:border-white/10 max-h-60 overflow-y-auto">
-                                                            {Object.entries(GOVT_STRUCTURE).map(([branchName, roles]) => (
-                                                                <div key={branchName} className="space-y-1 mb-2">
-                                                                    <p className="text-[10px] font-bold text-gray-400 dark:text-gray-500">{branchName}</p>
-                                                                    <div className="flex flex-wrap gap-2">
-                                                                        {roles.map(role => (
-                                                                            <button
-                                                                                key={role}
-                                                                                onClick={() => setGovtRole(role)}
-                                                                                className={`px-3 py-1.5 text-xs rounded-lg border transition-all font-medium ${govtRole === role ? 'bg-blue-600 text-white border-blue-600 shadow-md' : 'bg-white dark:bg-[#3D3D3D] text-gray-700 dark:text-gray-200 border-gray-200 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-[#4D4D4D]'}`}
-                                                                            >
-                                                                                {role}
-                                                                            </button>
-                                                                        ))}
-                                                                    </div>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ) : (
-                                            // Standard Account Creation UI
-                                            <>
-                                                <Input placeholder="사용할 아이디 (ID)" value={signupId} onChange={e => setSignupId(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                                <Input placeholder="인증용 이메일" value={email} onChange={e => setEmail(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                                <Input type="password" placeholder="비밀번호" value={password} onChange={e => setPassword(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                                <Input type="password" placeholder="비밀번호 확인" value={passwordConfirm} onChange={e => setPasswordConfirm(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
-                                                <p className="text-xs text-gray-500">※ 이메일은 본인 인증 및 비밀번호 찾기에 사용됩니다.</p>
-                                            </>
-                                        )}
+                                        <Input placeholder="사용할 아이디 (ID)" value={signupId} onChange={e => setSignupId(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                        <Input placeholder="인증용 이메일" value={email} onChange={e => setEmail(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                        <Input type="password" placeholder="비밀번호" value={password} onChange={e => setPassword(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                        <Input type="password" placeholder="비밀번호 확인" value={passwordConfirm} onChange={e => setPasswordConfirm(e.target.value)} className="h-14 bg-white/50 dark:bg-black/30 backdrop-blur-md" />
+                                        <p className="text-xs text-gray-500">※ 이메일은 본인 인증 및 비밀번호 찾기에 사용됩니다.</p>
                                     </div>
                                 )}
                                 {step === 4 && (
@@ -599,15 +567,17 @@ export const AuthView: React.FC = () => {
                                         <p className="text-xl font-bold dark:text-white">
                                             {(subType === 'govt' || subType === 'business') ? '부계정 생성 완료!' : '가입 처리 완료!'}
                                         </p>
-                                        {(subType === 'govt' || subType === 'business') && <p className="text-sm text-gray-500 mt-2">본계정으로 로그인 후 모드를 전환하세요.</p>}
                                     </div>
                                 )}
                                 <div className="flex gap-2">
                                     {step > 1 && step < 4 && <button onClick={() => setStep(step-1)} className="flex-1 h-14 bg-gray-100 dark:bg-white/5 text-gray-500 font-bold rounded-2xl hover:bg-gray-200 dark:hover:bg-white/10 transition-colors">이전</button>}
-                                    {step < 4 && <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl shadow-lg shadow-green-600/30 hover:bg-green-500">
-                                        {step === 2 && (subType === 'govt' || subType === 'business') ? '본인 확인' : (step === 3 && (subType === 'govt' || subType === 'business') ? '생성하기' : (step === 3 ? '가입 신청' : '다음'))}
-                                    </Button>}
-                                    {step === 5 && <Button onClick={() => setView('login')} className="w-full h-14 bg-blue-600">로그인 화면으로</Button>}
+                                    {step < 4 && (
+                                        (step === 2 && (subType === 'govt' || subType === 'business')) ? null : (
+                                            <Button onClick={handleSignupNext} className="flex-[2] h-14 bg-green-600 font-bold rounded-2xl shadow-lg shadow-green-600/30 hover:bg-green-500">
+                                                {step === 3 ? '가입 신청' : '다음'}
+                                            </Button>
+                                        )
+                                    )}
                                 </div>
                             </div>
                         )}

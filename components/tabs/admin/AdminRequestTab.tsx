@@ -14,6 +14,7 @@ export const AdminRequestTab: React.FC = () => {
         refreshData();
     }, []);
 
+    // 한국은행장 직책, 관리자 계정, 또는 이름이 '한국은행'인 경우 접근 가능
     const hasBankAuthority = 
         currentUser?.type === 'admin' || 
         currentUser?.govtRole === '한국은행장' || 

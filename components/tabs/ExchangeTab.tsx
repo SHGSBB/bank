@@ -2,14 +2,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput } from '../Shared';
-import { User } from '../../types';
+import { User, ExchangeLimitOrder } from '../../types';
+import { generateId } from '../../services/firebase';
 
 type Currency = 'KRW' | 'USD';
 
+// ... (StockChart Component - Same as before, keeping it) ...
 const ExchangeChart: React.FC<{ data: { date: string, rate: number }[] }> = ({ data }) => {
-    // ... (Chart UI code remains unchanged for brevity, reusing existing logic)
     const containerRef = useRef<HTMLDivElement>(null);
-    const [hoverInfo, setHoverInfo] = useState<{ x: number, rate: number, date: string, svgX: number, svgY: number } | null>(null);
     const chartData = useMemo(() => data.slice(-50), [data]); 
     if (chartData.length === 0) return <div className="h-full flex items-center justify-center text-gray-400">데이터 없음</div>;
     const width = 1000; const height = 300;
@@ -27,27 +27,24 @@ const ExchangeChart: React.FC<{ data: { date: string, rate: number }[] }> = ({ d
 };
 
 export const ExchangeTab: React.FC = () => {
-    const { currentUser, db, notify, showModal, showPinModal, serverAction } = useGame();
+    const { currentUser, db, notify, showModal, showPinModal, serverAction, saveDb, updateUser } = useGame();
     
+    const [tab, setTab] = useState<'market' | 'limit'>('market');
     const [fromAmount, setFromAmount] = useState<string>('');
+    const [limitRate, setLimitRate] = useState<string>('');
+    
     const [fromCurrency, setFromCurrency] = useState<Currency>('KRW');
     const [toCurrency, setToCurrency] = useState<Currency>('USD');
     const [toAmount, setToAmount] = useState<string>('0');
     const [rateInfo, setRateInfo] = useState('');
 
-    const config = db.settings.exchangeConfig || { 
-        pairs: { KRW_USD: true },
-        rates: { KRW_USD: 1350 },
-        isAutoStopEnabled: false,
-        autoMintLimit: 1000000000
-    };
-
-    const history = db.settings.exchangeRateHistory || [];
+    const currentRate = db.settings.exchangeRate.KRW_USD;
+    const limitOrders = (Object.values(db.settings.exchangeOrders || {}) as ExchangeLimitOrder[]).filter(o => o.userId === currentUser?.id || o.userId === currentUser?.email);
 
     const getRate = (from: Currency, to: Currency) => {
         if (from === to) return 1;
-        if (from === 'KRW' && to === 'USD' && config.pairs.KRW_USD) return 1 / config.rates.KRW_USD;
-        if (from === 'USD' && to === 'KRW' && config.pairs.KRW_USD) return config.rates.KRW_USD;
+        if (from === 'KRW' && to === 'USD') return 1 / currentRate;
+        if (from === 'USD' && to === 'KRW') return currentRate;
         return 0;
     };
 
@@ -59,10 +56,8 @@ export const ExchangeTab: React.FC = () => {
             let displayRate = rate; let displayFrom = fromCurrency; let displayTo = toCurrency;
             if (rate < 1 && rate > 0) { displayRate = 1 / rate; displayFrom = toCurrency; displayTo = fromCurrency; }
             setRateInfo(`환율: 1 ${displayFrom} = ${displayRate.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${displayTo}`);
-        } else {
-            setRateInfo('환전 불가 (설정 제한)');
         }
-    }, [fromAmount, fromCurrency, toCurrency, config]);
+    }, [fromAmount, fromCurrency, toCurrency, currentRate]);
 
     const handleSwap = () => {
         setFromCurrency(toCurrency);
@@ -72,19 +67,6 @@ export const ExchangeTab: React.FC = () => {
     const handleExchange = async () => {
         if (db.settings.isFrozen) return showModal('현재 모든 금융 거래가 중지되었습니다.');
         
-        // Dynamic Bank Lookup
-        const bank = (Object.values(db.users) as User[]).find(u => 
-            u.govtRole === '한국은행장' || 
-            (u.type === 'admin' && u.subType === 'govt') || 
-            u.name === '한국은행'
-        );
-
-        if (config.isAutoStopEnabled && toCurrency === 'USD') {
-            if (!bank || (bank.balanceUSD || 0) < (config.autoStopThresholdUSD || 100)) {
-                return showModal("은행 외화 보유량 부족으로 환전이 일시 중지되었습니다.");
-            }
-        }
-
         const amount = parseFloat(fromAmount);
         if (isNaN(amount) || amount <= 0) return showModal('올바른 금액을 입력하세요.');
         
@@ -94,32 +76,93 @@ export const ExchangeTab: React.FC = () => {
         const pin = await showPinModal('간편번호를 입력하세요.', currentUser!.pin!, (currentUser?.pinLength as 4 | 6) || 4);
         if (pin !== currentUser!.pin) return;
 
-        try {
-            await serverAction('exchange', {
-                userId: currentUser!.name,
-                fromCurrency,
-                toCurrency,
-                amount
-            });
-            notify(currentUser!.name, '환전이 완료되었습니다.');
-            showModal('환전이 완료되었습니다.');
-            setFromAmount('');
-        } catch(e) {
-            showModal('환전 실패: 서버 오류');
+        if (tab === 'market') {
+            try {
+                await serverAction('exchange', {
+                    userId: currentUser!.name,
+                    fromCurrency,
+                    toCurrency,
+                    amount
+                });
+                
+                // Fluctuation Logic (Client simulation updated to DB)
+                const newDb = { ...db };
+                const fluctuation = amount * 0.00001; // Small impact per volume
+                if (fromCurrency === 'KRW') newDb.settings.exchangeRate.KRW_USD += fluctuation; // Buying USD raises rate
+                else newDb.settings.exchangeRate.KRW_USD -= fluctuation; // Selling USD lowers rate
+                
+                await saveDb(newDb);
+                
+                notify(currentUser!.name, '환전이 완료되었습니다.');
+                showModal('환전이 완료되었습니다.');
+                setFromAmount('');
+            } catch(e) {
+                showModal('환전 실패: 서버 오류');
+            }
+        } else {
+            // Limit Order
+            const rate = parseFloat(limitRate);
+            if (isNaN(rate) || rate <= 0) return showModal("목표 환율을 입력하세요.");
+            
+            const order: ExchangeLimitOrder = {
+                id: generateId(),
+                userId: currentUser!.id || currentUser!.email!,
+                type: fromCurrency === 'KRW' ? 'buy_usd' : 'sell_usd',
+                targetRate: rate,
+                amountUSD: fromCurrency === 'KRW' ? amount / rate : amount,
+                amountKRW: fromCurrency === 'KRW' ? amount : amount * rate,
+                status: 'pending',
+                date: new Date().toISOString()
+            };
+            
+            const newDb = { ...db };
+            if (!newDb.settings.exchangeOrders) newDb.settings.exchangeOrders = {};
+            newDb.settings.exchangeOrders[order.id] = order;
+            
+            // Deduct balance immediately (Escrow)
+            const uKey = Object.keys(newDb.users).find(k => (newDb.users[k] as User).id === currentUser!.id || (newDb.users[k] as User).email === currentUser!.email);
+            if (uKey) {
+                (newDb.users[uKey] as User)[fromKey] -= amount;
+                await saveDb(newDb);
+                showModal("지정가 환전 주문이 등록되었습니다.");
+                setFromAmount('');
+                setLimitRate('');
+            }
+        }
+    };
+
+    const handleCancelOrder = async (orderId: string) => {
+        const newDb = { ...db };
+        const order = newDb.settings.exchangeOrders?.[orderId];
+        if (order) {
+            delete newDb.settings.exchangeOrders![orderId];
+            // Refund
+            const uKey = Object.keys(newDb.users).find(k => (newDb.users[k] as User).id === currentUser!.id || (newDb.users[k] as User).email === currentUser!.email);
+            if (uKey) {
+                if (order.type === 'buy_usd') (newDb.users[uKey] as User).balanceKRW += order.amountKRW;
+                else (newDb.users[uKey] as User).balanceUSD += order.amountUSD;
+                await saveDb(newDb);
+                showModal("주문이 취소되었습니다.");
+            }
         }
     };
 
     return (
         <div className="space-y-6">
             <h3 className="text-2xl font-bold">환전</h3>
-            <Card className="mb-6 h-[400px] flex flex-col">
+            <Card className="mb-6 h-[300px] flex flex-col">
                 <h4 className="font-bold mb-4 text-gray-700 dark:text-gray-300">환율 변동 추이 (USD/KRW)</h4>
                 <div className="flex-1 w-full min-h-0 border-b border-l border-gray-300 dark:border-gray-600">
-                    <ExchangeChart data={history} />
+                    <ExchangeChart data={db.settings.exchangeRateHistory || []} />
                 </div>
             </Card>
             
             <Card>
+                <div className="flex gap-4 border-b border-gray-200 dark:border-gray-700 mb-6">
+                    <button onClick={() => setTab('market')} className={`pb-2 px-4 font-bold ${tab === 'market' ? 'border-b-2 border-black dark:border-white' : 'text-gray-400'}`}>시장가</button>
+                    <button onClick={() => setTab('limit')} className={`pb-2 px-4 font-bold ${tab === 'limit' ? 'border-b-2 border-black dark:border-white' : 'text-gray-400'}`}>지정가</button>
+                </div>
+
                 <div className="flex flex-col sm:flex-row gap-4 items-center sm:items-end mb-6">
                     <div className="w-full flex-1">
                         <label className="text-sm font-medium mb-1 block">보낼 금액</label>
@@ -141,9 +184,37 @@ export const ExchangeTab: React.FC = () => {
                         </select>
                     </div>
                 </div>
+
+                {tab === 'limit' && (
+                    <div className="mb-6">
+                        <label className="text-sm font-medium mb-1 block">목표 환율 (1 USD = ? KRW)</label>
+                        <Input type="number" value={limitRate} onChange={e => setLimitRate(e.target.value)} placeholder={currentRate.toString()} className="w-full" />
+                    </div>
+                )}
+
                 <div className="text-center text-sm text-gray-500 mb-6 font-bold">{rateInfo}</div>
-                <Button className="w-full" onClick={handleExchange}>환전하기</Button>
+                <Button className="w-full" onClick={handleExchange}>{tab === 'market' ? '즉시 환전' : '주문 등록'}</Button>
             </Card>
+
+            {limitOrders.length > 0 && (
+                <Card>
+                    <h4 className="font-bold mb-4">내 지정가 주문</h4>
+                    <div className="space-y-2">
+                        {limitOrders.map(o => (
+                            <div key={o.id} className="flex justify-between items-center p-3 bg-gray-50 dark:bg-gray-800 rounded">
+                                <div>
+                                    <span className="font-bold text-sm">{o.type === 'buy_usd' ? 'USD 매수' : 'USD 매도'}</span>
+                                    <span className="text-xs ml-2 text-gray-500">@{o.targetRate}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-sm">{o.type === 'buy_usd' ? `₩${o.amountKRW.toLocaleString()}` : `$${o.amountUSD.toLocaleString()}`}</span>
+                                    <button onClick={() => handleCancelOrder(o.id)} className="text-xs text-red-500 underline">취소</button>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </Card>
+            )}
         </div>
     );
 };

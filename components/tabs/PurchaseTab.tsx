@@ -2,7 +2,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Modal, Input } from '../Shared';
-import { Product, User, CartItem, ProductVariant } from '../../types';
+import { Product, User, CartItem, ProductVariant, Ad } from '../../types';
 import { fetchMartUsers } from '../../services/firebase';
 
 export const PurchaseTab: React.FC = () => {
@@ -21,6 +21,12 @@ export const PurchaseTab: React.FC = () => {
         loadMarts();
     }, []);
     
+    // Ads - Robust handling for Object vs Array
+    const activeAds = useMemo(() => {
+        const adsList = db.ads ? (Array.isArray(db.ads) ? db.ads : Object.values(db.ads)) : [];
+        return adsList.filter(a => a.status === 'active');
+    }, [db.ads]);
+
     // Cart State
     const [cart, setCart] = useState<CartItem[]>(() => {
         const saved = localStorage.getItem(`cart_${currentUser?.name}`);
@@ -212,6 +218,21 @@ export const PurchaseTab: React.FC = () => {
                     {cart.length > 0 && <span className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">{cart.length}</span>}
                 </Button>
             </div>
+            
+            {activeAds.length > 0 && (
+                <div className="flex overflow-x-auto gap-4 mb-6 pb-2 scrollbar-hide">
+                    {activeAds.map(ad => (
+                        <div key={ad.id} className="min-w-[280px] h-40 rounded-xl overflow-hidden relative shadow-lg group">
+                            <img src={ad.imageUrl} className="w-full h-full object-cover" />
+                            <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-2">
+                                <p className="text-white font-bold text-sm">{ad.businessName}</p>
+                                <p className="text-gray-200 text-xs truncate">{ad.content}</p>
+                            </div>
+                            <span className="absolute top-2 right-2 bg-yellow-400 text-black text-[10px] font-bold px-2 py-0.5 rounded">AD</span>
+                        </div>
+                    ))}
+                </div>
+            )}
             
             {cachedMarts.length === 0 ? <p className="text-gray-500 text-center py-10">등록된 상점이 없습니다.</p> : 
             cachedMarts.map(mart => (

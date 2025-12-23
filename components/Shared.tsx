@@ -321,7 +321,7 @@ export const PinModal: React.FC<{ resolver: any; setResolver: any }> = ({ resolv
     };
 
     return (
-        <div className="fixed inset-0 z-[6000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4 touch-none">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 backdrop-blur-xl animate-fade-in p-4 touch-none">
             <div className={`bg-white dark:bg-[#1C1C1E] rounded-[32px] p-8 w-full max-w-[340px] shadow-2xl animate-slide-up border border-white/10 relative ${isError ? 'animate-shake' : ''}`}>
                 <button 
                     onClick={() => { if(!isProcessing) { resolver.resolve(null); setResolver(null); } }} 

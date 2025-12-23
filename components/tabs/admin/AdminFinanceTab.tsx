@@ -9,11 +9,13 @@ import { BondIssuanceTab } from './BondIssuanceTab';
 import { AdminStockTab } from './AdminStockTab';
 import { BudgetDistributionTab } from './BudgetDistributionTab';
 import { AdminRealEstateTab } from './AdminRealEstateTab';
+import { BusinessManagementTab } from './BusinessManagementTab';
 
 export const AdminFinanceTab: React.FC<{ restricted?: boolean }> = ({ restricted }) => {
     const [subTab, setSubTab] = useState('발권');
     
-    const tabs = ['발권', '세금징수', '주급지급', '복지', '지원금 지급', '국채발행', '주식관리', '부동산관리']
+    // Updated tabs list
+    const tabs = ['발권', '세금징수', '주급지급', '복지', '지원금 지급', '국채발행', '사업자관리(광고)', '주식관리', '부동산관리', '예산지급']
         .filter(t => !restricted || (t !== '발권' && t !== '예산지급'));
 
     return (
@@ -36,6 +38,7 @@ export const AdminFinanceTab: React.FC<{ restricted?: boolean }> = ({ restricted
                 {subTab === '복지' && <WelfareTab />}
                 {subTab === '지원금 지급' && <SupportFundTab />}
                 {subTab === '국채발행' && <BondIssuanceTab />}
+                {subTab === '사업자관리(광고)' && <BusinessManagementTab />}
                 {subTab === '주식관리' && <AdminStockTab />}
                 {subTab === '예산지급' && <BudgetDistributionTab />}
                 {subTab === '부동산관리' && <AdminRealEstateTab />}

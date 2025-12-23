@@ -13,7 +13,7 @@ export const MartSettingsTab: React.FC = () => {
     const [description, setDescription] = useState(currentUser?.statusMessage || '');
 
     const salesData = useMemo(() => {
-        const incomeTx = (currentUser?.transactions || []).filter(t => t.type === 'income' && t.description.includes('판매'));
+        const incomeTx = (currentUser?.transactions || []).filter(t => t.type === 'income' && (t.description || '').includes('판매'));
         return incomeTx.slice(0, 20).reverse();
     }, [currentUser]);
 
