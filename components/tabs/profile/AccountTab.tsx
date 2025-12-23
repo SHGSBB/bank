@@ -10,7 +10,6 @@ export const AccountTab: React.FC = () => {
     const [isInternalLoading, setIsInternalLoading] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     
-    // Status ref to prevent infinite loops but allow re-fetching
     const fetchStatusRef = useRef<'idle' | 'loading' | 'success' | 'error'>('idle');
 
     const isBOK = currentUser?.name === '한국은행' || currentUser?.govtRole === '한국은행장' || currentUser?.customJob === '한국은행장';
@@ -20,7 +19,6 @@ export const AccountTab: React.FC = () => {
 
         const linkedEmails = currentUser.linkedAccounts || [];
         
-        // If no linked accounts, clear cache and return
         if (linkedEmails.length === 0) {
             setCachedLinkedUsers([]);
             fetchStatusRef.current = 'success';
@@ -48,14 +46,10 @@ export const AccountTab: React.FC = () => {
         }
     };
 
-    // Watch for changes in the linkedAccounts list specifically.
-    // If the user links a new account, the length changes, triggering a refetch.
     useEffect(() => {
-        // Reset status to idle if the list of linked accounts has changed compared to our cache
-        // This handles the case where refreshData updates currentUser, but we haven't fetched details yet.
-        const linkedEmails = currentUser?.linkedAccounts || [];
+        if (!currentUser) return; // Guard clause
         
-        // Simple length check is usually enough, but deep check ensures correctness
+        const linkedEmails = currentUser.linkedAccounts || [];
         const cachedIds = cachedLinkedUsers.map(u => u.email).concat(cachedLinkedUsers.map(u => u.id));
         const allCached = linkedEmails.every(email => cachedIds.includes(email));
         
@@ -73,7 +67,6 @@ export const AccountTab: React.FC = () => {
         const success = await switchAccount(targetEmail);
         if (success) {
             showModal("계정이 전환되었습니다.");
-            // Force refresh when switching
             fetchStatusRef.current = 'idle';
             await refreshData();
         }
@@ -94,9 +87,7 @@ export const AccountTab: React.FC = () => {
             setIsLinkModalOpen(false);
             setLinkId('');
             
-            // Critical: Force refresh of user data to get updated 'linkedAccounts' array
             await refreshData(); 
-            // Then reset status to force 'loadLinked' to run via useEffect
             fetchStatusRef.current = 'idle';
         } catch (e: any) {
             showModal("연동 실패: " + (e.message || "사용자를 찾을 수 없거나 이미 연동되었습니다."));
@@ -136,7 +127,7 @@ export const AccountTab: React.FC = () => {
 
             <div>
                 <div className="flex justify-between items-center mb-3 px-1">
-                    <h4 className="font-bold text-sm text-gray-400 uppercase tracking-wider">연동된 계정</h4>
+                    <h4 className="font-bold text-sm text-gray-400 uppercase tracking-wider">부계정 (모드)</h4>
                     {isInternalLoading && <div className="animate-spin h-4 w-4 border-2 border-green-500 border-t-transparent rounded-full"></div>}
                 </div>
                 
@@ -147,7 +138,7 @@ export const AccountTab: React.FC = () => {
                         </div>
                     )}
                     {cachedLinkedUsers.length === 0 && !isInternalLoading && !loadError && (
-                        <p className="text-center text-gray-400 py-6 text-sm bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">연동된 계정이 없습니다.</p>
+                        <p className="text-center text-gray-400 py-6 text-sm bg-white dark:bg-gray-900 rounded-2xl border border-dashed border-gray-200 dark:border-gray-800">연동된 부계정이 없습니다.</p>
                     )}
                     {cachedLinkedUsers.map((acc: any) => (
                         <div key={acc.email || acc.id} className="flex items-center justify-between p-4 bg-white dark:bg-[#1E1E1E] border border-gray-100 dark:border-gray-800 rounded-2xl shadow-sm">
@@ -157,17 +148,17 @@ export const AccountTab: React.FC = () => {
                                 </div>
                                 <div>
                                     <p className="font-bold text-sm">{formatName(acc.name, acc)}</p>
-                                    <p className="text-[10px] text-gray-400">@{acc.id}</p>
+                                    <p className="text-[10px] text-gray-400">{acc.type === 'mart' ? '사업자' : (acc.type === 'government' ? '공무원' : acc.type)}</p>
                                 </div>
                             </div>
                             <div className="flex gap-2">
                                 <Button onClick={() => handleSwitch(acc.email)} variant="secondary" className="text-[10px] py-1 px-3 rounded-lg">전환</Button>
-                                <button onClick={() => handleUnlink(acc.name)} className="text-[10px] text-red-500 font-bold px-2">해제</button>
+                                <button onClick={() => handleUnlink(acc.name)} className="text-[10px] text-red-500 font-bold px-2">삭제</button>
                             </div>
                         </div>
                     ))}
                     <button onClick={() => setIsLinkModalOpen(true)} className="w-full py-4 border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-2xl text-gray-400 hover:text-green-500 hover:border-green-500 transition-all flex items-center justify-center gap-2 font-bold text-sm">
-                        <LineIcon icon="plus_dashed" className="w-5 h-5" /> 새 계정 연동하기
+                        <LineIcon icon="plus_dashed" className="w-5 h-5" /> 새 부계정 연결 (기존)
                     </button>
                 </div>
             </div>

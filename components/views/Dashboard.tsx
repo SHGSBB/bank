@@ -114,6 +114,11 @@ export const Dashboard: React.FC = () => {
     // If user has a govtRole, treat as Government even if type is 'citizen' (Automatic switch)
     const isGovernment = currentUser?.type === 'government' || !!currentUser?.govtRole;
 
+    // Service Maintenance Check
+    // Admin is exempt from maintenance
+    const isMaintenance = db.settings.serviceStatus === 'maintenance' && !isBOK && currentUser?.type !== 'admin';
+    const serviceStopNotice = db.announcements?.find(a => a.category === 'service_stop')?.content || "현재 서비스 점검 중입니다.";
+
     const myTaxes = useMemo(() => currentUser?.pendingTaxes || [], [currentUser?.pendingTaxes]);
     const now = new Date();
     
@@ -212,8 +217,19 @@ export const Dashboard: React.FC = () => {
 
     return (
         <div className="flex h-screen overflow-hidden relative bg-[#E9E9EB] dark:bg-[#121212]">
+            {isMaintenance && (
+                <div className="fixed inset-0 z-[9999] bg-yellow-500/90 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center text-white">
+                    <div className="text-6xl mb-4">⚠️</div>
+                    <h2 className="text-3xl font-black mb-4">서비스 점검 중</h2>
+                    <div className="bg-white/20 p-6 rounded-2xl max-w-lg mb-8">
+                        <RichText text={serviceStopNotice} className="text-lg font-medium" />
+                    </div>
+                    <Button onClick={logout} className="bg-white text-yellow-600 font-bold hover:bg-white/90">로그아웃</Button>
+                </div>
+            )}
+
             <div 
-                className="flex-1 overflow-y-auto transition-all duration-300 ease-in-out relative z-0"
+                className={`flex-1 overflow-y-auto transition-all duration-300 ease-in-out relative z-0 ${isMaintenance ? 'blur-sm pointer-events-none' : ''}`}
                 style={{ 
                     marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' 
                 }}
@@ -271,7 +287,7 @@ export const Dashboard: React.FC = () => {
                                             ) : (
                                                 <RichText text={a.content} className={`text-sm leading-relaxed ${a.isImportant ? 'font-bold' : 'text-gray-600 dark:text-gray-300'}`} />
                                             )}
-                                            <p className="text-[10px] text-gray-400 mt-2">{new Date(a.date).toLocaleDateString()}</p>
+                                            <p className="text-xs text-gray-400 mt-2">{new Date(a.date).toLocaleDateString()}</p>
                                         </div>
                                         <div className="flex gap-2">
                                             <button 
@@ -362,7 +378,7 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* Mobile Bottom Nav */}
-            <div className="fixed bottom-0 left-0 right-0 h-20 bg-white/80 dark:bg-[#121212]/80 backdrop-blur-lg border-t border-gray-200 dark:border-gray-800 flex justify-around items-center px-2 pb-4 z-[50] sm:hidden">
+            <div className={`fixed bottom-0 left-0 right-0 h-20 bg-white/80 dark:bg-[#121212]/80 backdrop-blur-lg border-t border-gray-200 dark:border-gray-800 flex justify-around items-center px-2 pb-4 z-[50] sm:hidden ${isMaintenance ? 'hidden' : ''}`}>
                 {[
                     { id: '이체', icon: 'finance', label: '홈' },
                     { id: '거래 내역', icon: 'menu', label: '내역' },

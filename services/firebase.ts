@@ -14,7 +14,8 @@ import {
     set, 
     remove,
     startAt,
-    endAt 
+    endAt,
+    off
 } from "firebase/database";
 import { 
     getAuth, 
@@ -51,19 +52,15 @@ export const toSafeId = (id: string) =>
     .replace(/[@.+]/g, '_')
     .replace(/[#$\[\]]/g, '_');
 
-export const registerWithAutoRetry = async (email: string, pass: string, retryCount = 0): Promise<FirebaseUser> => {
-    let tryEmail = email;
-    if (retryCount > 0) {
-        const [local, domain] = email.split('@');
-        tryEmail = `${local}+${retryCount}@${domain}`;
-    }
+// [Changed] Remove auto-retry. Fail if email exists.
+export const registerWithAutoRetry = async (email: string, pass: string): Promise<FirebaseUser> => {
     try {
-        const userCredential = await createUserWithEmailAndPassword(auth, tryEmail, pass);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
         await sendEmailVerification(userCredential.user);
         return userCredential.user;
     } catch (error: any) {
-        if (error.code === 'auth/email-already-in-use' && retryCount < 20) {
-            return registerWithAutoRetry(email, pass, retryCount + 1);
+        if (error.code === 'auth/email-already-in-use') {
+            throw new Error("이미 가입된 이메일입니다.");
         }
         throw error;
     }
@@ -167,35 +164,25 @@ export const fetchAllUsers = async (): Promise<Record<string, User>> => {
 };
 
 export const searchUsersByName = async (name: string): Promise<User[]> => {
-    // Basic fallback search if index missing, usually safe for small prefixes
-    // If index missing error persists, we might need to fetch all and filter, but that's heavy.
-    // Assuming 'name' index exists. If not, this might fail.
     try {
         const q = query(ref(database, 'users'), orderByChild('name'), startAt(name), endAt(name + "\uf8ff"), limitToLast(10));
         const snapshot = await get(q);
         if (snapshot.exists()) return Object.values(snapshot.val());
         return [];
     } catch (e) {
-        // Fallback: This is heavy but works without index
         console.warn("Search index missing, falling back to heavy search");
         return [];
     }
 };
 
 export const fetchMartUsers = async (): Promise<User[]> => {
-    // Avoid orderByChild('type') if index is missing. Fetch all and filter client-side (lighter than full download if users < 1000, but still heavy)
-    // Better: Rely on 'users' path directly if possible.
     try {
-        // Attempt query first
         const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
         if (snapshot.exists()) {
             return Object.values(snapshot.val()) as User[];
         }
         return [];
     } catch (e) {
-        // Fallback: fetch all and filter (Use with caution)
-        // Since this is a critical store feature, we might need this fallback or fix rules.
-        // For now, return empty to prevent crash, or server action is preferred.
         console.warn("Index on 'type' missing. Marts cannot be loaded efficiently via client.");
         return [];
     }
@@ -239,7 +226,6 @@ export const saveDb = async (data: DB) => {
 export const generateId = (): string => rtdbPush(ref(database, 'temp_ids')).key || `id_${Date.now()}`;
 
 export const chatService = {
-    // 🛡️ Data Leak Protection: Limit to last 30 items
     subscribeToChatList: (callback: (chats: Record<string, Chat>) => void) => 
         onValue(query(ref(database, 'chatRooms'), limitToLast(30)), (s) => callback(s.val() || {})),
 
@@ -266,7 +252,6 @@ export const chatService = {
 
 export const assetService = {
     fetchHistory: async (userId: string): Promise<AssetHistoryPoint[]> => {
-        // Load only last 30 points
         const snapshot = await get(query(ref(database, `asset_histories/${toSafeId(userId)}`), limitToLast(30)));
         return snapshot.exists() ? Object.values(snapshot.val()) : [];
     }

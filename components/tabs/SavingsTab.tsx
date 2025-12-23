@@ -2,7 +2,9 @@
 import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput } from '../Shared';
-import { TermDeposit } from '../../types';
+import { TermDeposit, Application } from '../../types';
+import { update, ref } from 'firebase/database';
+import { database } from '../../services/firebase';
 
 export const SavingsTab: React.FC = () => {
     const { currentUser, db, showModal, createChat, sendMessage } = useGame();
@@ -12,10 +14,8 @@ export const SavingsTab: React.FC = () => {
 
     const interestSettings = db.settings.savingsInterest;
     
-    // Safety check for old DB structure
     const getRateInfo = (type: 'regular' | 'term' | 'installment') => {
         if (!interestSettings) return { rate: 0, periodWeeks: 0 };
-        // Handle migration case where interestSettings might be the old format
         // @ts-ignore
         if (typeof interestSettings.rate === 'number') {
              // @ts-ignore
@@ -25,7 +25,7 @@ export const SavingsTab: React.FC = () => {
     };
 
     const currentRate = getRateInfo(activeType);
-    const maxWeeks = currentRate.periodWeeks || 52; // Default max 52 weeks if not set
+    const maxWeeks = currentRate.periodWeeks || 52; 
 
     const savingsTypes = {
         regular: { label: '보통예금', desc: '자유롭게 입출금이 가능한 기본 통장입니다.' },
@@ -52,10 +52,24 @@ export const SavingsTab: React.FC = () => {
         
         if (currentUser!.balanceKRW < valAmount && activeType !== 'installment') return showModal('잔액이 부족합니다.');
 
+        const appId = `sav_req_${Date.now()}`;
         const chatId = await createChat(['한국은행'], 'private');
-        
         const durationText = activeType === 'regular' ? '기간 없음' : `${valDuration}주`;
 
+        // 1. Create Application
+        const app: Application = {
+            id: appId,
+            type: 'savings',
+            applicantName: currentUser!.name,
+            amount: valAmount,
+            requestedDate: new Date().toISOString(),
+            status: 'pending',
+            savingsType: activeType,
+            durationWeeks: valDuration
+        };
+        await update(ref(database, `pendingApplications/${appId}`), app);
+
+        // 2. Send Message
         await sendMessage(chatId, `[${savingsTypes[activeType].label}] 신청\n금액: ₩${valAmount.toLocaleString()}\n기간: ${durationText}`, {
             type: 'application',
             value: `${savingsTypes[activeType].label} 신청`,
@@ -64,7 +78,7 @@ export const SavingsTab: React.FC = () => {
                 savingsType: activeType,
                 amount: valAmount,
                 durationWeeks: valDuration,
-                id: `sav_req_${Date.now()}` 
+                id: appId 
             }
         });
 

@@ -2,7 +2,6 @@
 import React, { useState, Suspense, lazy, useEffect } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Spinner, LineIcon } from '../Shared';
-import { AuthView } from '../views/Auth';
 
 // Admin Specific Tabs
 const TeacherDashboard = lazy(() => import('../tabs/teacher/TeacherDashboard').then(module => ({ default: module.TeacherDashboard })));
@@ -150,13 +149,11 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
         );
     };
 
+    // Fixed Height Container with Overflow Auto for Scrolling
     return (
-        <div className="h-full w-full relative min-h-screen overflow-y-auto pb-24 scrollbar-hide">
-            <div 
-                className="transition-all duration-300 ease-in-out p-4"
-                style={{ marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' }}
-            >
-                <div className="bg-[#1C1C1E] text-white p-6 rounded-[28px] mb-6 shadow-2xl border border-white/5 flex justify-between items-center relative overflow-hidden">
+        <div className="h-screen w-full flex flex-col overflow-hidden bg-[#E9E9EB] dark:bg-[#121212]">
+            <div className="flex-1 overflow-y-auto pb-24 scrollbar-hide p-4" style={{ marginRight: isChatOpen && window.innerWidth >= 640 ? '400px' : '0' }}>
+                <div className="bg-[#1C1C1E] text-white p-6 rounded-[28px] mb-6 shadow-2xl border border-white/5 flex justify-between items-center relative overflow-hidden shrink-0">
                     <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-600 via-green-500 to-blue-600"></div>
                     <div className="relative z-10">
                         <h2 className="text-2xl font-black tracking-tighter flex items-center gap-2">
@@ -185,7 +182,7 @@ export const AdminModeDashboard: React.FC<{ isDesignMode: boolean }> = ({ isDesi
                     </div>
                 </div>
 
-                <div className="flex overflow-x-auto gap-2 mb-8 scrollbar-hide">
+                <div className="flex overflow-x-auto gap-2 mb-8 scrollbar-hide shrink-0">
                     {[
                         { id: 'bank', label: '중앙은행 (Bank)', icon: 'finance' },
                         { id: 'system', label: '시스템 (System)', icon: 'security' },

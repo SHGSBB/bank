@@ -20,7 +20,7 @@ import {
 } from "../services/firebase";
 import { update, ref, set, get, remove, onValue, off } from "firebase/database";
 import { DB, DEFAULT_DB, User, ToastNotification, AssetHistoryPoint, ChatAttachment, ChatMessage, PolicyRequest, Stock, Application, PendingTax } from "../types";
-import { Spinner } from "../components/Shared";
+import { Spinner, PinModal, ToastContainer } from "../components/Shared";
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
@@ -34,6 +34,7 @@ interface GameContextType {
     logout: () => Promise<void>;
     updateUser: (key: string, data: Partial<User>) => Promise<void>;
     registerUser: (userData: Partial<User>, password: string) => Promise<void>;
+    createSubAccount: (parentUser: User, subData: Partial<User>) => Promise<void>;
     isLoading: boolean;
     showPinModal: (message: string, expectedPin?: string, length?: 4 | 6, allowBiometric?: boolean) => Promise<string | null>;
     showConfirm: (message: string) => Promise<boolean>;
@@ -74,6 +75,8 @@ interface GameContextType {
     setActiveTab: (tab: string) => void;
     highQualityGraphics: boolean;
     setHighQualityGraphics: (val: boolean) => void;
+    isScreenLocked: boolean;
+    unlockScreen: () => void;
 }
 
 const GameContext = createContext<GameContextType | undefined>(undefined);
@@ -97,17 +100,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [isElementPicking, setElementPicking] = useState(false);
     const [cachedMarts, setCachedMarts] = useState<User[]>([]);
     const [toasts, setToasts] = useState<ToastNotification[]>([]);
-    
-    // Global Navigation State for Mobile Tab Bar Sync
     const [activeTab, setActiveTab] = useState<string>('이체');
     const [highQualityGraphics, setHighQualityGraphics] = useState(true);
+    
+    // Security Lock State
+    const [isScreenLocked, setIsScreenLocked] = useState(false);
+    const lastVisibilityChange = useRef<number>(Date.now());
 
     const userRef = useRef<any>(null);
 
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('https://bank-one-mu.vercel.app/api/game-action', {
+            const res = await fetch('/api/game-action', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
@@ -126,87 +131,53 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
             const essentials = await fetchEssentials();
             setDb(prev => ({ ...prev, ...essentials }));
+            
+            // Refresh current user if logged in
+            if (currentUser) {
+                const updatedUser = await fetchUser(currentUser.id || currentUser.email!);
+                if (updatedUser) setCurrentUser(updatedUser);
+            }
         } catch(e) { console.error("Data Fetch Error:", e); }
-    }, []);
+    }, [currentUser?.id]);
 
-    // Auction Chat Trigger
-    useEffect(() => {
-        if (db.auction?.isActive && db.auction?.status === 'active') {
-            window.dispatchEvent(new CustomEvent('open-chat'));
-        }
-    }, [db.auction?.status, db.auction?.id]);
-
-    // Check if user is the Bank Administrator
+    // BOK Auto-Lock Logic
     const isBOKUser = (user: User | null) => {
         if (!user) return false;
-        // Role based check: 'admin' type with 'govt' subtype OR explicit '한국은행장' role
         return (user.type === 'admin') || user.govtRole === '한국은행장' || user.name === '한국은행';
     };
 
-    // Role Auto-Migration Logic
     useEffect(() => {
-        if (currentUser) {
-            const updates: Partial<User> = {};
-            let needsUpdate = false;
-
-            if (isBOKUser(currentUser) && currentUser.type !== 'admin') {
-                updates.type = 'admin';
-                updates.subType = 'govt'; 
-                needsUpdate = true;
-            }
-
-            if (currentUser.govtRole) {
-                const role = currentUser.govtRole;
-                if (['판사', '검사', '국회의원', '대통령', '법무부장관'].includes(role) && currentUser.type !== 'government' && currentUser.type !== 'admin') {
-                    updates.type = 'government';
-                    needsUpdate = true;
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                lastVisibilityChange.current = Date.now();
+            } else {
+                // If BOK user and hidden for more than 1 second, lock
+                if (currentUser && isBOKUser(currentUser)) {
+                    const diff = Date.now() - lastVisibilityChange.current;
+                    if (diff > 1000) { 
+                        setIsScreenLocked(true);
+                    }
                 }
             }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+    }, [currentUser]);
 
-            if (needsUpdate) {
-                updateUser(currentUser.id || currentUser.email!, updates);
-            }
+    const unlockScreen = async () => {
+        const pin = await showPinModal("보안 잠금 해제 (PIN)", currentUser?.pin!, 4, true);
+        if (pin === currentUser?.pin) {
+            setIsScreenLocked(false);
         }
-    }, [currentUser?.name, currentUser?.govtRole, currentUser?.type]);
+    };
 
-    // Real-time User Listener
-    useEffect(() => {
-        if (currentUser?.email || currentUser?.id) {
-            const uid = toSafeId(currentUser.email || currentUser.id!);
-            const refPath = ref(database, `users/${uid}`);
-            
-            // Clean up old listener if exists
-            if (userRef.current) off(userRef.current);
-            userRef.current = refPath;
-
-            const unsubscribe = onValue(refPath, (snapshot) => {
-                const val = snapshot.val();
-                if (val) {
-                    if (val.pendingTaxes && !Array.isArray(val.pendingTaxes)) {
-                        val.pendingTaxes = Object.values(val.pendingTaxes);
-                    }
-                    if (val.notifications && !Array.isArray(val.notifications)) {
-                        val.notifications = Object.values(val.notifications);
-                    }
-                    setCurrentUser(prev => ({ ...prev, ...val }));
-                }
-            });
-
-            return () => {
-                off(refPath);
-                userRef.current = null;
-            };
-        }
-    }, [currentUser?.id, currentUser?.email]);
-
-    // Initial Auth
+    // Initial Auth & Data Load
     useEffect(() => {
         let isMount = true;
         
         const initAuth = async () => {
             const switchedId = localStorage.getItem('sh_user_id');
             if (switchedId) {
-                // If ID looks like email, fetch by email, else login ID
                 let switchedUser = null;
                 if (switchedId.includes('@')) {
                     switchedUser = await fetchUserByEmail(switchedId);
@@ -243,8 +214,17 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     
                     const userData = await fetchUserByEmail(firebaseUser.email!);
                     if (userData) {
+                        // Service Status Check (Ended)
+                        if (db.settings.serviceStatus === 'ended' && !isBOKUser(userData)) {
+                            await logoutFirebase();
+                            setAlertMessage("서비스가 종료되었습니다. 이용해주셔서 감사합니다.");
+                            setCurrentUser(null);
+                            setIsLoading(false);
+                            return;
+                        }
+
+                        // Approval Check
                         const requireApproval = db.settings.requireSignupApproval !== false;
-                        
                         if (userData.approvalStatus === 'approved' || !requireApproval || isBOKUser(userData)) {
                             if (userData.pendingTaxes && !Array.isArray(userData.pendingTaxes)) {
                                 userData.pendingTaxes = Object.values(userData.pendingTaxes);
@@ -272,8 +252,10 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
 
         serverAction('fetch_initial_data', {}).then((data) => {
-            if(isMount) setDb(prev => ({ ...prev, ...data }));
-            initAuth();
+            if(isMount) {
+                setDb(prev => ({ ...prev, ...data }));
+                initAuth();
+            }
         }).catch(() => {
             fetchEssentials().then((data) => {
                 if(isMount) setDb(prev => ({ ...prev, ...data }));
@@ -298,7 +280,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
         } catch(e) {
             console.error("Admin user load failed:", e);
-            setAlertMessage("사용자 목록을 불러올 수 없습니다. 잠시 후 다시 시도해주세요.");
         } finally {
             setSimulatedLoading(false);
         }
@@ -308,10 +289,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setSimulatedLoading(true);
         try {
             const inputId = id.trim();
-            // Try to find by Login ID first
             let userData = await fetchUserByLoginId(inputId);
-            
-            // If not found, try by Email
             if (!userData && inputId.includes('@')) {
                 userData = await fetchUserByEmail(inputId);
             }
@@ -321,8 +299,37 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 return false;
             }
 
+            // Service Status Check (Maintenance/Ended)
+            const isBOK = isBOKUser(userData);
+            if (db.settings.serviceStatus === 'ended' && !isBOK) {
+                setAlertMessage("서비스가 종료되었습니다.");
+                return false;
+            }
+            
+            // Maintenance mode allows login but UI is blocked in Dashboard
+            
+            if (userData.isSuspended) {
+                setAlertMessage("정지된 계정입니다. 관리자에게 문의하세요.");
+                return false;
+            }
+
             let actualEmail = userData.email;
             if (!actualEmail) {
+                // If it's a sub-account without direct email login, reject (Sub accounts must switch from main)
+                // But if we allow login via ID/PW if they share PW? 
+                // Requirement: "이 계정으로 바로 로그인할 수는 없지". 
+                // So if it's a linked account (subType govt/business) without separate auth, we might block.
+                // However, current implementation puts 'email' even on sub accounts as dummy.
+                // Let's assume only Main accounts (citizen/teacher) have real auth credentials.
+                // But for simplicity, we allow login if credentials match.
+                
+                // If ID matches a sub-account, we must find the PARENT email to auth against? 
+                // No, requirement says "Sub-account... shares info".
+                // Let's assume direct login is blocked for sub-accounts as per prompt.
+                if (userData.type === 'mart' || userData.type === 'government') {
+                     setAlertMessage("부계정(공무원/마트)은 직접 로그인할 수 없습니다. 본계정(시민)으로 로그인 후 모드를 전환하세요.");
+                     return false;
+                }
                 setAlertMessage("계정 데이터 오류: 이메일 정보가 없습니다.");
                 return false;
             }
@@ -330,13 +337,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             await loginWithEmail(actualEmail, pass);
             
             const requireApproval = db.settings.requireSignupApproval !== false;
-            if (requireApproval && userData.approvalStatus !== 'approved' && !isBOKUser(userData)) {
+            if (requireApproval && userData.approvalStatus !== 'approved' && !isBOK) {
                 await logoutFirebase();
                 setAlertMessage("가입 승인 대기 중입니다. 관리자에게 문의하세요.");
                 return false;
             }
 
-            // PIN Setup Logic
             if (!userData.pin) {
                 setSimulatedLoading(false);
                 const newPin = await showPinModal("보안을 위해 PIN(간편비밀번호)을 설정해주세요.", undefined, 6, false);
@@ -393,11 +399,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
         
         localStorage.removeItem('sh_user_id');
+        setCachedLinkedUsers([]); // Clear cache on logout
         
         try {
             await logoutFirebase();
         } catch(e) {
-            console.warn("Firebase logout failed, possibly already logged out", e);
+            console.warn("Firebase logout failed", e);
         }
         
         setCurrentUser(null);
@@ -413,25 +420,19 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             const userEmail = fUser.email!.toLowerCase();
             const dbKey = toSafeId(userData.id!.trim()); 
             
-            // Check if this user is the Bank President
             const isKoreaBank = userData.name === '한국은행' || userData.govtRole === '한국은행장';
             const initialBalance = isKoreaBank ? 1000000000000000 : 0;
-            const finalType = isKoreaBank ? 'admin' : (userData.type || 'citizen');
-            const subType = isKoreaBank ? 'govt' : (userData.subType || 'personal');
             
-            const requireApproval = db.settings.requireSignupApproval !== false;
-            const approvalStatus = (!requireApproval || isKoreaBank || userData.approvalStatus === 'approved') ? 'approved' : 'pending';
-
             const newUser: User = {
                 id: userData.id!.trim(), 
                 email: userEmail,
                 name: userData.name || '',
                 password: password, 
-                type: finalType,
-                subType: subType,
+                type: userData.type || 'citizen',
+                subType: userData.subType || 'personal',
                 govtRole: userData.govtRole || '',
                 govtBranch: userData.govtBranch || [],
-                approvalStatus,
+                approvalStatus: userData.approvalStatus || 'pending',
                 balanceKRW: initialBalance,
                 balanceUSD: 0,
                 birthDate: userData.birthDate || '',
@@ -449,12 +450,61 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 preferences: {
                     theme: 'system', isEasyMode: false, skipPinForCommonActions: false, vibration: true, assetDisplayMode: 'full', biometricEnabled: false, saveLoginHistory: true, use2FA: false
                 },
-                linkedAccounts: [], transactions: [], notifications: [], pendingTaxes: [], loans: [], stockHoldings: {}, ledger: {}, autoTransfers: {}, isOnline: true, lastActive: Date.now(), failedLoginAttempts: 0
+                linkedAccounts: userData.linkedAccounts || [],
+                transactions: [], notifications: [], pendingTaxes: [], loans: [], stockHoldings: {}, ledger: {}, autoTransfers: {}, isOnline: true, lastActive: Date.now(), failedLoginAttempts: 0
             };
             
             await set(ref(database, `users/${dbKey}`), sanitize(newUser));
         } catch (e: any) {
             console.error("registerUser Error:", e);
+            throw e;
+        } finally {
+            setSimulatedLoading(false);
+        }
+    };
+
+    // New: Create Sub Account (without Firebase Auth)
+    const createSubAccount = async (parentUser: User, subData: Partial<User>) => {
+        setSimulatedLoading(true);
+        try {
+            const subId = subData.id!;
+            const subKey = toSafeId(subId);
+            
+            // Sub account shares password logic conceptually (mode switch)
+            const newUser: User = {
+                id: subId,
+                email: `${subId}@sunghwa.bank`, // Dummy email
+                name: parentUser.name, // Same name
+                type: subData.type || 'citizen',
+                subType: subData.subType || 'personal',
+                govtRole: subData.govtRole || '',
+                govtBranch: subData.govtBranch || [],
+                approvalStatus: subData.approvalStatus || 'pending',
+                balanceKRW: 0,
+                balanceUSD: 0,
+                birthDate: parentUser.birthDate,
+                phoneNumber: parentUser.phoneNumber,
+                customJob: subData.customJob || '',
+                profilePic: parentUser.profilePic,
+                pin: parentUser.pin, // Share PIN
+                pinLength: parentUser.pinLength,
+                linkedAccounts: [parentUser.id || parentUser.email!], // Link back to parent
+                preferences: parentUser.preferences,
+                transactions: [], notifications: [], pendingTaxes: [], loans: [], stockHoldings: {}
+            };
+
+            await set(ref(database, `users/${subKey}`), sanitize(newUser));
+            
+            // Link Parent to Sub
+            const parentKey = toSafeId(parentUser.email || parentUser.id!);
+            const currentLinks = parentUser.linkedAccounts || [];
+            if (!currentLinks.includes(subId)) {
+                await update(ref(database, `users/${parentKey}`), { 
+                    linkedAccounts: [...currentLinks, subId] 
+                });
+            }
+        } catch(e) {
+            console.error(e);
             throw e;
         } finally {
             setSimulatedLoading(false);
@@ -494,7 +544,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try { await firebaseSaveDb(data); await refreshData(); } finally { setSimulatedLoading(false); }
     };
 
-    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
+    const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => {
+        if (db.settings.bypassPin) {
+            return Promise.resolve(e || "0000"); 
+        }
+        return new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
+    };
+
     const showConfirm = (m: string) => new Promise<boolean>(r => setConfirmResolver({ resolve: r, message: m }));
     const showModal = (m: React.ReactNode) => setAlertMessage(m);
     
@@ -530,7 +586,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 setAlertMessage("이 브라우저는 알림을 지원하지 않습니다.");
                 return;
             }
-            
             try {
                 const permission = await Notification.requestPermission();
                 if (permission === 'granted') {
@@ -538,15 +593,11 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 } else {
                     setAlertMessage("알림 권한이 거부되었습니다. 브라우저 설정에서 확인해주세요.");
                 }
-            } catch(e) {
-                console.error(e);
-            }
+            } catch(e) { console.error(e); }
         }
     };
     
-    const openChat = () => {
-        window.dispatchEvent(new CustomEvent('open-chat'));
-    };
+    const openChat = () => { window.dispatchEvent(new CustomEvent('open-chat')); };
 
     const createChat = async (participants: string[], type: 'private'|'group'|'feedback'|'auction' = 'private', groupName?: string) => {
         const id = await chatService.createChat(participants, type, groupName);
@@ -608,7 +659,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const switchAccount = async (targetEmail: string): Promise<boolean> => {
         setSimulatedLoading(true);
         try {
-            // Find user by email or ID
             let userData = await fetchUserByEmail(targetEmail);
             if (!userData) userData = await fetchUserByLoginId(targetEmail);
 
@@ -646,7 +696,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         if(!await showConfirm(`₩${tax.amount.toLocaleString()} 세금을 납부하시겠습니까?`)) return;
         
         const newDb = {...db};
-        // Find Real Bank Admin instead of 'bok' node
         const bank = (Object.values(newDb.users) as User[]).find(u => u.govtRole === '한국은행장' || (u.type === 'admin' && u.subType === 'govt') || u.name === '한국은행');
 
         const userKey = toSafeId(currentUser.email || currentUser.id!);
@@ -715,7 +764,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     return (
         <GameContext.Provider value={{
-            db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, isLoading,
+            db, currentUser, isAdminMode, toasts, setAdminMode, login, logout, updateUser, registerUser, createSubAccount, isLoading,
             showPinModal, showConfirm, showModal, notify, saveDb, refreshData, loadAllUsers,
             serverAction, pinResolver, setPinResolver, confirmResolver, setConfirmResolver, alertMessage, setAlertMessage,
             currentAssetHistory, loadAssetHistory, cachedLinkedUsers, setCachedLinkedUsers, triggerHaptic, 
@@ -725,9 +774,20 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             requestPasswordReset: async (email) => { try { await resetUserPassword(email); return true; } catch(e) { return false; } },
             changeUserEmail,
             payTax, dismissTax, setupPin, openChat, findUserKeyByName,
-            activeTab, setActiveTab, highQualityGraphics, setHighQualityGraphics
+            activeTab, setActiveTab, highQualityGraphics, setHighQualityGraphics,
+            isScreenLocked, unlockScreen
         }}>
             {children}
+            {isScreenLocked && (
+                <div className="fixed inset-0 z-[9999] bg-black/95 backdrop-blur-xl flex flex-col items-center justify-center text-white">
+                    <div className="w-24 h-24 bg-gray-800 rounded-3xl flex items-center justify-center mb-8 animate-bounce shadow-2xl border border-gray-700">
+                        <span className="text-5xl">🔒</span>
+                    </div>
+                    <h2 className="text-3xl font-black mb-2 tracking-tight">보안 잠금</h2>
+                    <p className="text-gray-400 mb-10 text-sm font-medium">관리자/한국은행 계정 보안 정책에 의해 자동 잠금되었습니다.</p>
+                    <button onClick={unlockScreen} className="px-10 py-4 bg-green-600 rounded-2xl font-bold hover:bg-green-500 transition-all hover:scale-105 shadow-lg shadow-green-600/30">잠금 해제 (PIN)</button>
+                </div>
+            )}
             {simulatedLoading && (
                 <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/50 backdrop-blur-sm">
                     <div className="flex flex-col items-center gap-4">

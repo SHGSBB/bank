@@ -9,7 +9,6 @@ import { database, toSafeId } from '../../../services/firebase';
 export const UserManagementTab: React.FC = () => {
     const { db, saveDb, showModal, showConfirm, notify, updateUser, loadAllUsers, createChat, sendMessage } = useGame();
     
-    // Force load users on mount
     useEffect(() => { 
         loadAllUsers();
     }, []);
@@ -75,49 +74,6 @@ export const UserManagementTab: React.FC = () => {
         setSelectedUser(null);
     };
 
-    const updateDeposit = (idx: number, field: keyof TermDeposit, val: any) => {
-        const newArr = [...editDeposits];
-        newArr[idx] = { ...newArr[idx], [field]: val };
-        setEditDeposits(newArr);
-    };
-
-    const updateLoan = (idx: number, field: keyof Loan | 'rate' | 'period', val: any) => {
-        const newArr = [...editLoans];
-        if (field === 'rate' || field === 'period') {
-            newArr[idx].interestRate = {
-                ...newArr[idx].interestRate,
-                [field === 'rate' ? 'rate' : 'periodWeeks']: parseFloat(val)
-            };
-        } else {
-            newArr[idx] = { ...newArr[idx], [field]: val };
-        }
-        setEditLoans(newArr);
-    };
-
-    const addDeposit = () => {
-        setEditDeposits([...editDeposits, {
-            id: `admin_dep_${Date.now()}`,
-            owner: selectedUser!.name,
-            amount: 0,
-            startDate: new Date().toISOString(),
-            endDate: new Date().toISOString(),
-            interestRate: 0,
-            status: 'active',
-            type: 'term'
-        }]);
-    };
-
-    const addLoan = () => {
-        setEditLoans([...editLoans, {
-            id: `admin_loan_${Date.now()}`,
-            amount: 0,
-            interestRate: { rate: 5, periodWeeks: 4 },
-            applyDate: new Date().toISOString(),
-            repaymentDate: new Date().toISOString(),
-            status: 'approved'
-        }]);
-    };
-
     const handleApproval = async (user: User, approve: boolean) => {
         if (!approve && !(await showConfirm(`${user.name} 님의 가입을 거절하시겠습니까?`))) return;
         
@@ -125,26 +81,27 @@ export const UserManagementTab: React.FC = () => {
             await updateUser(user.id || user.email!, { approvalStatus: 'approved' });
             notify(user.name, '회원가입이 승인되었습니다.', true);
         } else {
-            const safeKey = user.email ? toSafeId(user.email) : user.name;
+            const safeKey = toSafeId(user.email || user.id!);
             await remove(ref(database, `users/${safeKey}`));
         }
         showModal('처리되었습니다.');
         await loadAllUsers();
     };
 
-    const handleChatWithUser = async (user: User) => {
-        try {
-            const chatId = await createChat([user.name], 'private');
-            // Open the chat system via global event or state if possible
-            // Currently, ChatSystem is opened via state in Dashboard. 
-            // We can dispatch event to open chat.
-            window.dispatchEvent(new CustomEvent('open-chat'));
-            
-            // Optionally send a greeting
-            // await sendMessage(chatId, "관리자가 대화를 시작했습니다.");
-        } catch (e) {
-            showModal("채팅방 생성 실패");
-        }
+    const handleDeleteUser = async (user: User) => {
+        if (!await showConfirm(`정말 ${user.name} (${user.id}) 님을 영구 삭제하시겠습니까?`)) return;
+        const safeKey = toSafeId(user.email || user.id!);
+        await remove(ref(database, `users/${safeKey}`));
+        showModal("사용자가 삭제되었습니다.");
+        loadAllUsers();
+    };
+
+    const handleSuspendUser = async (user: User) => {
+        const isSuspended = user.isSuspended;
+        if (!await showConfirm(`${user.name} 님을 ${isSuspended ? '정지 해제' : '계정 정지'} 하시겠습니까?`)) return;
+        await updateUser(user.id || user.email!, { isSuspended: !isSuspended });
+        showModal(isSuspended ? "정지가 해제되었습니다." : "계정이 정지되었습니다.");
+        loadAllUsers();
     };
 
     return (
@@ -178,9 +135,12 @@ export const UserManagementTab: React.FC = () => {
                         <div>
                             <div className="flex justify-between items-start">
                                 <p className="font-bold text-lg">{formatName(u.name)}</p>
-                                <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded">
-                                    {u.type}
-                                </span>
+                                <div>
+                                    <span className="text-xs bg-gray-200 dark:bg-gray-700 px-2 py-1 rounded mr-1">
+                                        {u.type}
+                                    </span>
+                                    {u.isSuspended && <span className="text-xs bg-red-600 text-white px-2 py-1 rounded">정지됨</span>}
+                                </div>
                             </div>
                             <p className="text-xs text-gray-500 mt-1">{u.email}</p>
                             <p className="text-[10px] text-gray-400 mt-2">ID: {u.id}</p>
@@ -192,9 +152,15 @@ export const UserManagementTab: React.FC = () => {
                                     <Button variant="danger" onClick={() => handleApproval(u, false)} className="flex-1 text-xs py-2">거절</Button>
                                 </div>
                             ) : (
-                                <div className="flex gap-2">
-                                    <Button variant="secondary" className="flex-1 text-xs py-2" onClick={() => openEditModal(u)}>관리</Button>
-                                    <Button className="flex-1 text-xs py-2 bg-blue-600 hover:bg-blue-500" onClick={() => handleChatWithUser(u)}>채팅</Button>
+                                <div className="space-y-2">
+                                    <div className="flex gap-2">
+                                        <Button variant="secondary" className="flex-1 text-xs py-2" onClick={() => openEditModal(u)}>관리</Button>
+                                        <Button className="flex-1 text-xs py-2 bg-blue-600 hover:bg-blue-500" onClick={() => { createChat([u.name], 'private'); window.dispatchEvent(new CustomEvent('open-chat')); }}>채팅</Button>
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <Button variant="danger" className="flex-1 text-xs py-1 opacity-80" onClick={() => handleSuspendUser(u)}>{u.isSuspended ? '정지 해제' : '정지'}</Button>
+                                        <Button variant="danger" className="flex-1 text-xs py-1" onClick={() => handleDeleteUser(u)}>삭제</Button>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -210,33 +176,8 @@ export const UserManagementTab: React.FC = () => {
                             <div><label className="text-xs font-bold block mb-1">원화 잔고 (KRW)</label><MoneyInput value={editBalanceKRW} onChange={e => setEditBalanceKRW(e.target.value)} /></div>
                             <div><label className="text-xs font-bold block mb-1">달러 잔고 (USD)</label><Input type="number" value={editBalanceUSD} onChange={e => setEditBalanceUSD(e.target.value)} /></div>
                         </div>
-                        <div className="border rounded-xl p-4">
-                            <div className="flex justify-between items-center mb-2"><h4 className="font-bold text-sm">예금 관리</h4><Button onClick={addDeposit} className="text-xs py-1 px-2">+ 추가</Button></div>
-                            {editDeposits.map((d, i) => (
-                                <div key={i} className="flex flex-wrap gap-2 mb-2 bg-gray-100 dark:bg-gray-700 p-2 rounded items-center text-xs">
-                                    <select value={d.type} onChange={e => updateDeposit(i, 'type', e.target.value)} className="p-1 rounded"><option value="regular">보통</option><option value="term">정기</option></select>
-                                    <input type="number" value={d.amount} onChange={e => updateDeposit(i, 'amount', parseInt(e.target.value))} className="w-20 p-1 rounded" placeholder="금액" />
-                                    <input type="number" value={d.interestRate} onChange={e => updateDeposit(i, 'interestRate', parseFloat(e.target.value))} className="w-12 p-1 rounded" placeholder="%" />
-                                    <input type="date" value={new Date(d.endDate).toISOString().split('T')[0]} onChange={e => updateDeposit(i, 'endDate', new Date(e.target.value).toISOString())} className="p-1 rounded" />
-                                    <button onClick={() => setEditDeposits(editDeposits.filter((_, idx) => idx !== i))} className="text-red-500 font-bold px-2">X</button>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="border rounded-xl p-4">
-                            <div className="flex justify-between items-center mb-2"><h4 className="font-bold text-sm">대출 관리</h4><Button onClick={addLoan} className="text-xs py-1 px-2">+ 추가</Button></div>
-                            {editLoans.map((l, i) => (
-                                <div key={i} className="flex flex-wrap gap-2 mb-2 bg-red-50 dark:bg-red-900/20 p-2 rounded items-center text-xs">
-                                    <input type="number" value={l.amount} onChange={e => updateLoan(i, 'amount', parseInt(e.target.value))} className="w-20 p-1 rounded" placeholder="금액" />
-                                    <input type="number" value={l.interestRate.rate} onChange={e => updateLoan(i, 'rate', parseFloat(e.target.value))} className="w-12 p-1 rounded" placeholder="이율" />
-                                    <span className="text-[10px]">만기:</span>
-                                    <input type="date" value={new Date(l.repaymentDate).toISOString().split('T')[0]} onChange={e => updateLoan(i, 'repaymentDate', new Date(e.target.value).toISOString())} className="p-1 rounded" />
-                                    <button onClick={() => setEditLoans(editLoans.filter((_, idx) => idx !== i))} className="text-red-500 font-bold px-2">X</button>
-                                </div>
-                            ))}
-                        </div>
                         <div className="flex gap-2">
                             <Button onClick={handleSaveUser} className="flex-1">저장하기</Button>
-                            <Button onClick={() => { handleChatWithUser(selectedUser); setSelectedUser(null); }} className="flex-1 bg-blue-600 hover:bg-blue-500">채팅하기</Button>
                         </div>
                     </div>
                 )}

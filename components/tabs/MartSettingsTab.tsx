@@ -4,6 +4,8 @@ import { useGame } from '../../context/GameContext';
 import { Card, Button, Input } from '../Shared';
 import { generateId } from '../../services/firebase';
 import { Application } from '../../types';
+import { ref, update } from 'firebase/database';
+import { database } from '../../services/firebase';
 
 export const MartSettingsTab: React.FC = () => {
     const { currentUser, db, updateUser, saveDb, showModal, notify } = useGame();
@@ -32,7 +34,6 @@ export const MartSettingsTab: React.FC = () => {
         if (db.stocks?.[currentUser!.id!]) return showModal("이미 상장된 기업입니다.");
 
         const appId = generateId();
-        const newDb = { ...db };
         const app: Application = {
             id: appId,
             type: 'ipo',
@@ -41,8 +42,9 @@ export const MartSettingsTab: React.FC = () => {
             requestedDate: new Date().toISOString(),
             status: 'pending'
         };
-        newDb.pendingApplications = { ...(newDb.pendingApplications || {}), [appId]: app };
-        await saveDb(newDb);
+        
+        // Directly update DB node for immediate visibility
+        await update(ref(database, `pendingApplications/${appId}`), app);
 
         notify('한국은행', `${currentUser!.name} (${storeName}) 님이 기업 상장 심사를 요청했습니다.`, true);
         showModal("한국은행에 상장 심사 요청서를 제출했습니다.");

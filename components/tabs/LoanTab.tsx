@@ -3,6 +3,8 @@ import React, { useState, useMemo } from 'react';
 import { useGame } from '../../context/GameContext';
 import { Card, Button, Input, MoneyInput, Modal } from '../Shared';
 import { Loan, RealEstateCell, Application } from '../../types';
+import { update, ref } from 'firebase/database';
+import { database } from '../../services/firebase';
 
 export const LoanTab: React.FC = () => {
     const { currentUser, db, showModal, createChat, sendMessage } = useGame();
@@ -22,9 +24,24 @@ export const LoanTab: React.FC = () => {
         const valAmount = parseInt(amount);
         if (isNaN(valAmount) || valAmount <= 0) return showModal('금액을 입력하세요.');
 
+        const appId = `loan_req_${Date.now()}`;
         const chatId = await createChat(['한국은행'], 'private');
         const collateralText = selectedProperty ? `집 #${selectedProperty.id} (₩${selectedProperty.price.toLocaleString()})` : "신용 대출 (담보 없음)";
 
+        // 1. Create Application in DB
+        const app: Application = {
+            id: appId,
+            type: 'loan',
+            applicantName: currentUser!.name,
+            amount: valAmount,
+            requestedDate: new Date().toISOString(),
+            status: 'pending',
+            collateral: selectedProperty ? `prop_${selectedProperty.id}` : null,
+            loanId: `loan_${Date.now()}`
+        };
+        await update(ref(database, `pendingApplications/${appId}`), app);
+
+        // 2. Send Chat Message
         await sendMessage(chatId, `[대출 신청]\n신청자: ${currentUser?.name}\n금액: ₩${valAmount.toLocaleString()}\n담보: ${collateralText}`, {
             type: 'application',
             value: '대출 신청',
@@ -32,7 +49,7 @@ export const LoanTab: React.FC = () => {
                 appType: 'loan',
                 amount: valAmount,
                 collateral: selectedProperty ? `prop_${selectedProperty.id}` : null,
-                id: `loan_req_${Date.now()}`,
+                id: appId,
                 isThreadRoot: true 
             }
         });
