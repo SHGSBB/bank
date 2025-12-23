@@ -47,12 +47,12 @@ export const auth = getAuth(app);
 
 const sanitize = (obj: any) => JSON.parse(JSON.stringify(obj, (k, v) => v === undefined ? null : v));
 
+// [Fix] Consistently lowercase and safe-ify keys
 export const toSafeId = (id: string) => 
     (id || '').trim().toLowerCase()
     .replace(/[@.+]/g, '_')
     .replace(/[#$\[\]]/g, '_');
 
-// [Changed] Remove auto-retry. Fail if email exists.
 export const registerWithAutoRetry = async (email: string, pass: string): Promise<FirebaseUser> => {
     try {
         const userCredential = await createUserWithEmailAndPassword(auth, email, pass);
@@ -88,12 +88,11 @@ export const logoutFirebase = async () => signOut(auth);
 
 export const subscribeAuth = (callback: (user: FirebaseUser | null) => void) => onAuthStateChanged(auth, callback);
 
-// Client-side essentials fetch - ONLY used as fallback if server action fails
 export const fetchEssentials = async (): Promise<Partial<DB>> => {
     try {
         const [settingsSnap, realEstateSnap, announceSnap, auctionSnap, stocksSnap, pendingAppsSnap] = await Promise.all([
             get(ref(database, 'settings')),
-            get(ref(database, 'realEstate/grid')), // Fetch grid only
+            get(ref(database, 'realEstate/grid')),
             get(query(ref(database, 'announcements'), limitToLast(20))),
             get(ref(database, 'auction')),
             get(ref(database, 'stocks')),
@@ -117,21 +116,31 @@ const normalizeUser = (user: User): User => {
     if (!user) return user;
     if (user.pendingTaxes && !Array.isArray(user.pendingTaxes)) user.pendingTaxes = Object.values(user.pendingTaxes);
     if (user.loans && !Array.isArray(user.loans)) user.loans = Object.values(user.loans);
-    // Ensure we don't accidentally load huge data if client SDK is used
     if (user.transactions && user.transactions.length > 50) user.transactions = user.transactions.slice(-50);
     return user;
 };
 
 export const fetchUser = async (userKey: string): Promise<User | null> => {
+    // Try Direct Key First (Email format)
     const safeKey = toSafeId(userKey);
     const snapshot = await get(ref(database, `users/${safeKey}`));
-    return snapshot.exists() ? normalizeUser(snapshot.val()) : null;
+    if (snapshot.exists()) return normalizeUser(snapshot.val());
+    
+    // If not found, try searching by ID field (Legacy support)
+    return fetchUserByLoginId(userKey);
 };
 
 export const fetchUserByEmail = async (email: string): Promise<User | null> => {
     const safeKey = toSafeId(email);
     const snap = await get(ref(database, `users/${safeKey}`));
     if (snap.exists()) return normalizeUser(snap.val());
+    
+    // Fallback search if direct key fails
+    const q = query(ref(database, 'users'), orderByChild('email'), equalTo(email));
+    const qSnap = await get(q);
+    if (qSnap.exists()) {
+        return normalizeUser(Object.values(qSnap.val())[0] as User);
+    }
     return null;
 };
 
@@ -146,20 +155,9 @@ export const findUserIdByInfo = async (name: string, birth: string): Promise<str
     return null;
 };
 
-export const findUserEmailForRecovery = async (id: string, name: string, birth: string): Promise<string | null> => {
-    const safeKey = toSafeId(id);
-    const userRef = ref(database, `users/${safeKey}`);
-    const snap = await get(userRef);
-    if (snap.exists()) {
-        const u = snap.val();
-        if (u.name === name && u.birthDate === birth) return u.email;
-    }
-    return null;
-};
-
-// 🔴 [CRITICAL] Block full user fetch to prevent 200MB download
 export const fetchAllUsers = async (): Promise<Record<string, User>> => {
-    console.warn("Client-side fetchAllUsers blocked for performance. Use serverAction.");
+    // Block heavy fetch, use server action where possible
+    console.warn("Use serverAction('fetch_all_users_light') instead.");
     return {}; 
 };
 
@@ -170,7 +168,6 @@ export const searchUsersByName = async (name: string): Promise<User[]> => {
         if (snapshot.exists()) return Object.values(snapshot.val());
         return [];
     } catch (e) {
-        console.warn("Search index missing, falling back to heavy search");
         return [];
     }
 };
@@ -178,21 +175,34 @@ export const searchUsersByName = async (name: string): Promise<User[]> => {
 export const fetchMartUsers = async (): Promise<User[]> => {
     try {
         const snapshot = await get(query(ref(database, 'users'), orderByChild('type'), equalTo('mart')));
-        if (snapshot.exists()) {
-            return Object.values(snapshot.val()) as User[];
-        }
+        if (snapshot.exists()) return Object.values(snapshot.val()) as User[];
         return [];
-    } catch (e) {
-        console.warn("Index on 'type' missing. Marts cannot be loaded efficiently via client.");
-        return [];
-    }
+    } catch (e) { return []; }
 };
 
 export const fetchUserByLoginId = async (id: string): Promise<User | null> => {
     const input = id.trim();
     const safeKey = toSafeId(input);
+    
+    // 1. Direct check
     const directSnap = await get(ref(database, `users/${safeKey}`));
     if (directSnap.exists()) return normalizeUser(directSnap.val());
+    
+    // 2. Search by 'id' field
+    const q = query(ref(database, 'users'), orderByChild('id'), equalTo(input));
+    const querySnap = await get(q);
+    if (querySnap.exists()) {
+        const users = Object.values(querySnap.val()) as User[];
+        return users.length > 0 ? normalizeUser(users[0]) : null;
+    }
+    
+    // 3. Search by 'email' field (in case user entered email as ID)
+    const qEmail = query(ref(database, 'users'), orderByChild('email'), equalTo(input));
+    const qEmailSnap = await get(qEmail);
+    if (qEmailSnap.exists()) {
+        return normalizeUser(Object.values(qEmailSnap.val())[0] as User);
+    }
+    
     return null;
 };
 
@@ -240,7 +250,7 @@ export const chatService = {
         await update(ref(database, `chatRooms/${chatId}`), sanitize(data));
     },
     updateChatPreferences: async (userId: string, chatId: string, prefs: any) => {
-        const safeKey = toSafeId(userId);
+        const safeKey = toSafeId(userId); // Use safe key
         await update(ref(database, `users/${safeKey}/chatPreferences/${chatId}`), sanitize(prefs));
     },
     createChat: async (participants: string[], type: 'private'|'group'|'feedback'|'auction' = 'private', groupName?: string) => {

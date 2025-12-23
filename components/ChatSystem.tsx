@@ -59,6 +59,15 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         if (db.users) setUserCache(db.users);
     }, [db.users]);
 
+    // Auto-Join Auction Chat when active
+    useEffect(() => {
+        if (isOpen && db.auction?.isActive && !selectedChatId) {
+            // Find auction chat
+            const auctionChat = (Object.values(chats) as Chat[]).find(c => c.type === 'auction');
+            if (auctionChat) setSelectedChatId(auctionChat.id);
+        }
+    }, [isOpen, db.auction?.isActive, chats]);
+
     useEffect(() => {
         if (selectedChatId) {
             setView('chat');
@@ -91,7 +100,11 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
     const sortedChats = useMemo(() => {
         return (Object.values(chats) as Chat[])
-            .filter(c => (c.participants || []).includes(currentUser!.name) || (c.participants || []).includes('ALL'))
+            .filter(c => {
+                // Hide auction chat if no auction is active
+                if (c.type === 'auction' && !db.auction?.isActive) return false;
+                return (c.participants || []).includes(currentUser!.name) || (c.participants || []).includes('ALL');
+            })
             .sort((a, b) => {
                 // Pin auction rooms always to top
                 if (a.type === 'auction') return -1;
@@ -102,7 +115,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                 if (pinA !== pinB) return pinB - pinA;
                 return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
             });
-    }, [chats, currentUser?.chatPreferences]);
+    }, [chats, currentUser?.chatPreferences, db.auction?.isActive]);
 
     const getBubbleClass = (msg: ChatMessage, isMine: boolean) => {
         if (isAuction) {
@@ -136,7 +149,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
             if (price <= currentAuction.currentPrice) return showModal("현재가보다 높은 가격을 입력하세요.");
 
             // Update Auction State directly (Latency optimization)
-            // Ideally server does this, but for simulation we do it here
             const newDb = { ...db };
             if (newDb.auction) {
                 newDb.auction.currentPrice = price;
@@ -145,7 +157,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                     amount: price,
                     timestamp: Date.now()
                 });
-                // Extension Rule: Add 30s if under threshold, but here logic is simpler
+                // Extension Rule: Add 30s if under threshold
                 if (newDb.auction.endTime) newDb.auction.endTime = Math.max(newDb.auction.endTime, Date.now() + 30000); 
                 await saveDb(newDb);
             }
@@ -174,6 +186,8 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
         setShowAttachMenu(false);
     };
 
+    // ... (Other handlers preserved) ...
+    // Note: Re-adding the missing handlers from previous file to ensure compilation
     const handleAdminNakchal = async (msg: ChatMessage) => {
         if (!isAuction) return;
         const isAdmin = currentUser?.type === 'admin' || currentUser?.subType === 'teacher' || currentUser?.type === 'root';
@@ -181,10 +195,8 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
 
         if (!await showConfirm(`${msg.sender}님의 입찰(₩${parseInt(msg.text).toLocaleString()})을 낙찰 처리하시겠습니까?`)) return;
 
-        // 1. Mark message as winning
         await update(ref(database, `chatMessages/${selectedChatId}/${msg.id}`), { isWinningBid: true });
 
-        // 2. Update Auction State
         const newDb = { ...db };
         if (newDb.auction) {
             newDb.auction.isActive = false;
@@ -192,9 +204,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
             newDb.auction.winner = msg.sender;
             newDb.auction.winningBid = parseInt(msg.text);
             
-            // Deduct
-            const user = newDb.users[toSafeId(msg.sender)]; // Need safe ID lookup generally
-            // Fallback lookup if key mismatch
             const targetUserKey = Object.keys(newDb.users).find(k => (newDb.users[k] as User).name === msg.sender);
             
             if (targetUserKey && newDb.users[targetUserKey]) {
@@ -223,7 +232,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     };
 
     const handleUnsend = async (msg: ChatMessage) => {
-        if (isAuction) return showModal("경매 입찰은 취소할 수 없습니다."); // Auction Restriction
+        if (isAuction) return showModal("경매 입찰은 취소할 수 없습니다."); 
         if (Date.now() - msg.timestamp > 24 * 60 * 60 * 1000) return showModal("24시간이 지난 메시지는 회수할 수 없습니다.");
         if (msg.sender !== currentUser?.name) return;
         
@@ -236,7 +245,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
     };
 
     const handleMsgLongPress = (e: React.TouchEvent | React.MouseEvent, msg: ChatMessage) => {
-        // In Auction, simple click by Admin triggers Nakchal logic, no context menu for bids usually needed unless deleting spam
         if (isAuction && (currentUser?.type === 'admin' || currentUser?.subType === 'teacher')) {
              if (msg.type === 'auction_bid') {
                  handleAdminNakchal(msg);
@@ -328,7 +336,6 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                             const prefs = currentUser?.chatPreferences?.[chat.id];
                             const lastMsg = chat.lastMessage || "";
                             
-                            // Auction Styling in List
                             const isAuc = chat.type === 'auction';
                             const bgClass = isAuc ? 'bg-red-50 dark:bg-red-900/10 border-l-4 border-red-500' : (prefs?.isPinned ? 'bg-gray-50 dark:bg-white/5' : '');
 
@@ -538,13 +545,13 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                                 if (selectedUsersForChat.includes(u.name)) setSelectedUsersForChat(prev => prev.filter(p => p !== u.name));
                                 else setSelectedUsersForChat(prev => [...prev, u.name]);
                             }} className={`flex items-center justify-between p-3 rounded-xl cursor-pointer transition-colors ${selectedUsersForChat.includes(u.name) ? 'bg-yellow-100 dark:bg-yellow-900/30' : 'hover:bg-gray-50 dark:hover:bg-white/5'}`}>
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-[14px] bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                <div className="flex items-center gap-3 flex-1 min-w-0">
+                                    <div className="w-10 h-10 rounded-[14px] bg-gray-200 dark:bg-gray-700 overflow-hidden flex-shrink-0">
                                         {u.profilePic ? <img src={u.profilePic} className="w-full h-full object-cover"/> : <span className="flex items-center justify-center h-full font-bold text-gray-500">{u.name[0]}</span>}
                                     </div>
-                                    <div>
-                                        <span className="font-bold text-sm block text-black dark:text-white">{formatName(u.name)}</span>
-                                        <span className="text-xs text-gray-400">{u.customJob || '시민'}</span>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="font-bold text-sm truncate text-black dark:text-white">{formatName(u.name)}</div>
+                                        <div className="text-xs text-gray-400 truncate">{u.customJob || '시민'}</div>
                                     </div>
                                 </div>
                                 <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${selectedUsersForChat.includes(u.name) ? 'bg-yellow-400 border-yellow-400' : 'border-gray-300'}`}>

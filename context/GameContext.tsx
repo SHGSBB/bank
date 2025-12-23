@@ -117,8 +117,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 body: JSON.stringify({ action, payload })
             });
             const result = await res.json();
+            if (result.error) throw new Error(result.error);
             return result;
-        } catch (e) {
+        } catch (e: any) {
             console.error(`Server Action Error (${action}):`, e);
             throw e;
         } finally { 
@@ -130,8 +131,13 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         try {
             const essentials = await fetchEssentials();
             setDb(prev => ({ ...prev, ...essentials }));
+            if (currentUser) {
+                // Refresh current user data specifically
+                const updatedUser = await fetchUser(currentUser.email || currentUser.id!);
+                if (updatedUser) setCurrentUser(updatedUser);
+            }
         } catch(e) { console.error("Data Fetch Error:", e); }
-    }, []);
+    }, [currentUser]);
 
     // BOK Auto-Lock Logic
     const isBOKUser = (user: User | null) => {
@@ -168,34 +174,45 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         let isMount = true;
         
         const initAuth = async () => {
+            // Check for switched account in local storage
             const switchedId = localStorage.getItem('sh_user_id');
             if (switchedId) {
-                let switchedUser = null;
-                if (switchedId.includes('@')) {
-                    switchedUser = await fetchUserByEmail(switchedId);
-                } else {
-                    switchedUser = await fetchUserByLoginId(switchedId);
-                }
-
-                if (switchedUser && isMount) {
-                    if (switchedUser.pendingTaxes && !Array.isArray(switchedUser.pendingTaxes)) {
-                        switchedUser.pendingTaxes = Object.values(switchedUser.pendingTaxes);
+                try {
+                    let switchedUser = await fetchUserByLoginId(switchedId);
+                    if (!switchedUser && switchedId.includes('@')) {
+                        switchedUser = await fetchUserByEmail(switchedId);
                     }
-                    setCurrentUser(switchedUser);
-                    if (isBOKUser(switchedUser)) setAdminMode(false);
-                    
-                    const userKey = toSafeId(switchedUser.email || switchedUser.id!);
-                    await update(ref(database, `users/${userKey}`), { isOnline: true, lastActive: Date.now() });
-                    setIsLoading(false);
-                    return; 
-                } else if (!switchedUser && isMount) {
+
+                    if (switchedUser && isMount) {
+                        // Ensure lists are arrays
+                        if (switchedUser.pendingTaxes && !Array.isArray(switchedUser.pendingTaxes)) {
+                            switchedUser.pendingTaxes = Object.values(switchedUser.pendingTaxes);
+                        }
+                        if (switchedUser.transactions && !Array.isArray(switchedUser.transactions)) {
+                            switchedUser.transactions = Object.values(switchedUser.transactions);
+                        }
+
+                        setCurrentUser(switchedUser);
+                        if (isBOKUser(switchedUser)) setAdminMode(false);
+                        
+                        const userKey = toSafeId(switchedUser.email || switchedUser.id!);
+                        await update(ref(database, `users/${userKey}`), { isOnline: true, lastActive: Date.now() });
+                        setIsLoading(false);
+                        return; // Found user, stop loading
+                    } else if (!switchedUser && isMount) {
+                        // Invalid ID in storage
+                        localStorage.removeItem('sh_user_id');
+                    }
+                } catch (e) {
+                    console.error("Auth init error:", e);
                     localStorage.removeItem('sh_user_id');
                 }
             }
 
             const unsubscribe = subscribeAuth(async (firebaseUser) => {
                 if (!isMount) return;
-                if (localStorage.getItem('sh_user_id')) return;
+                // If we found a switched user already, ignore firebase auth state for now
+                if (localStorage.getItem('sh_user_id') && currentUser) return;
 
                 if (firebaseUser) {
                     if (!firebaseUser.emailVerified) {
@@ -206,7 +223,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     
                     const userData = await fetchUserByEmail(firebaseUser.email!);
                     if (userData) {
-                        // Service Status Check (Ended)
                         if (db.settings.serviceStatus === 'ended' && !isBOKUser(userData)) {
                             await logoutFirebase();
                             setAlertMessage("서비스가 종료되었습니다. 이용해주셔서 감사합니다.");
@@ -221,6 +237,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                             if (userData.pendingTaxes && !Array.isArray(userData.pendingTaxes)) {
                                 userData.pendingTaxes = Object.values(userData.pendingTaxes);
                             }
+                            if (userData.transactions && !Array.isArray(userData.transactions)) {
+                                userData.transactions = Object.values(userData.transactions);
+                            }
                             setCurrentUser(userData);
                             localStorage.setItem('sh_user_id', userData.id || userData.email!);
                             
@@ -230,9 +249,12 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                         } else {
                             await logoutFirebase();
                             setAlertMessage("가입 승인 대기 중입니다.");
+                            setCurrentUser(null); // Ensure null to prevent white screen
                         }
                     } else {
+                        // No DB record for this auth user
                         await logoutFirebase();
+                        setCurrentUser(null);
                     }
                 } else {
                     setCurrentUser(null);
@@ -246,7 +268,6 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         serverAction('fetch_initial_data', {}).then((data) => {
             if(isMount) {
                 setDb(prev => ({ ...prev, ...data }));
-                // Trigger auth init only after basic settings are loaded (to check service status)
                 initAuth();
             }
         }).catch(() => {
@@ -257,7 +278,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         });
 
         return () => { isMount = false; };
-    }, []); // Empty dependency to run once
+    }, []); 
 
     const findUserKeyByName = (name: string): string | undefined => {
         const entry = Object.entries(db.users).find(([k, u]) => (u as User).name === name);
@@ -281,17 +302,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const login = async (id: string, pass: string, remember = false) => {
         setSimulatedLoading(true);
         try {
-            // Service Status Check (Ended)
-            if (db.settings.serviceStatus === 'ended') {
-                // We need to check if user is admin BEFORE logging in fully, 
-                // but we can't know without fetching. 
-                // So we allow fetch, then check.
-            }
-
-            const inputId = id.trim();
-            let userData = await fetchUserByLoginId(inputId);
-            if (!userData && inputId.includes('@')) {
-                userData = await fetchUserByEmail(inputId);
+            let userData = await fetchUserByLoginId(id);
+            if (!userData && id.includes('@')) {
+                userData = await fetchUserByEmail(id);
             }
             
             if (!userData) {
@@ -333,7 +346,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     setAlertMessage("PIN 설정을 취소하여 로그인이 중단되었습니다.");
                     return false;
                 }
-                const userKey = toSafeId(userData.email || userData.id!);
+                const userKey = toSafeId(userData.email!);
                 await update(ref(database, `users/${userKey}`), { pin: newPin, pinLength: newPin.length });
                 userData.pin = newPin;
                 userData.pinLength = newPin.length;
@@ -380,6 +393,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             } catch(e) {}
         }
         
+        // Critical: Clear local storage BEFORE updating state to prevent re-login race
         localStorage.removeItem('sh_user_id');
         
         try {
@@ -388,29 +402,26 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
             console.warn("Firebase logout failed", e);
         }
         
+        // Ensure state is cleared immediately
         setCurrentUser(null);
         setAdminMode(false);
         setSimulatedLoading(false);
+        
+        // Optional: reload to clear any memory leaks or cached states
         window.location.reload();
     };
 
     const registerUser = async (userData: Partial<User>, password: string) => {
         setSimulatedLoading(true);
         try {
-            // For Sub Accounts (Govt/Business linked to Citizen), we don't create Firebase Auth
-            // We just create a DB entry.
-            // But 'registerUser' here is mostly for the *Main* account or if we stick to the old flow.
-            // If the user already has a Firebase Auth (because they linked), we just create the node.
+            let fUser;
+            // Only create auth if it's a fresh user (not a linked sub-account without email auth)
+            if (!userData.linkedAccounts) {
+                 fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
+            }
             
-            // However, the standard flow in Auth.tsx creates Firebase User first.
-            // If the user is creating a *Sub Account* via the new flow, we might skip Firebase Auth creation
-            // if we reuse the parent's auth? No, the requirement says "Sub accounts have separate ID/PW but share parent info".
-            // Actually, "Sub accounts... linked... switch mode".
-            // Let's stick to: Create standard account, but link it.
-            
-            const fUser = await registerWithAutoRetry(userData.email!.trim().toLowerCase(), password);
-            const userEmail = fUser.email!.toLowerCase();
-            const dbKey = toSafeId(userData.id!.trim()); 
+            const userEmail = userData.email!.trim().toLowerCase();
+            const dbKey = toSafeId(userEmail); // Single Truth: Email Key
             
             const isKoreaBank = userData.name === '한국은행' || userData.govtRole === '한국은행장';
             const initialBalance = isKoreaBank ? 1000000000000000 : 0;
@@ -461,11 +472,9 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const updateUser = async (key: string, data: Partial<User>) => {
-        const targetKey = key || currentUser?.id || currentUser?.email;
-        if (!targetKey) return;
-        const safeKey = toSafeId(targetKey);
+        const safeKey = toSafeId(key);
         
-        if (currentUser && (targetKey === currentUser.id || targetKey === currentUser.email)) {
+        if (currentUser && (toSafeId(currentUser.email!) === safeKey || currentUser.id === key)) {
             setCurrentUser(prev => {
                 if (!prev) return null;
                 if (data.preferences) {
@@ -484,7 +493,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const setupPin = async (pin: string) => {
         if (!currentUser) return;
-        await updateUser(currentUser.id || currentUser.email!, { pin, pinLength: pin.length as any });
+        await updateUser(currentUser.email!, { pin, pinLength: pin.length as any });
         setAlertMessage("PIN이 등록되었습니다. 이제 이 번호로 인증할 수 있습니다.");
     };
 
@@ -494,9 +503,8 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     const showPinModal = (m: string, e?: string, l: 4|6=4, allowBiometric: boolean = true) => {
-        // PIN Bypass Check
         if (db.settings.bypassPin) {
-            return Promise.resolve(e || "0000"); // Return expected PIN directly
+            return Promise.resolve(e || "0000"); 
         }
         return new Promise<string|null>(r => setPinResolver({ resolve: r, message: m, expectedPin: e, pinLength: l, allowBiometric }));
     };
@@ -505,25 +513,34 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const showModal = (m: React.ReactNode) => setAlertMessage(m);
     
     const notify = async (targetUser: string, message: string, isPersistent = false, action: string | null = null, actionData: any = null) => {
-        const notifId = `n_${Date.now()}`;
-        const newNotif = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info' as const, timestamp: Date.now(), action: action || null, actionData: actionData || null };
-        setToasts(prev => [...prev, newNotif]);
-        setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
-        const sanitizedNotif = sanitize(newNotif);
+        // Optimistic UI update for current user
+        if (targetUser === currentUser?.name || targetUser === currentUser?.id) {
+             const notifId = `n_${Date.now()}`;
+             const newNotif = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info' as const, timestamp: Date.now(), action: action || null, actionData: actionData || null };
+             setToasts(prev => [...prev, newNotif]);
+             setTimeout(() => setToasts(prev => prev.filter(t => t.id !== notifId)), 4000);
+        }
+        
+        // Push to DB for persistent storage
         if (targetUser === 'ALL') {
             const usersSnap = await get(ref(database, 'users'));
             const users = usersSnap.val() || {};
             const updates: any = {};
-            Object.keys(users).forEach(ukey => { updates[`users/${ukey}/notifications/${notifId}`] = sanitizedNotif; });
+            const notifId = `n_${Date.now()}`;
+            const nObj = { id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info', timestamp: Date.now(), action: action || null, actionData: actionData || null };
+            Object.keys(users).forEach(ukey => { updates[`users/${ukey}/notifications/${notifId}`] = nObj; });
             await update(ref(database), updates);
         } else {
             let finalKey = toSafeId(targetUser);
-            const check = await get(ref(database, `users/${finalKey}`));
-            if (!check.exists()) {
-                 const all = await fetchUserByLoginId(targetUser);
-                 if (all) finalKey = toSafeId(all.email || all.id!);
+            // If target isn't email format, try to find the email key from name/id
+            if (!targetUser.includes('@')) {
+                 const found = (Object.values(db.users) as User[]).find(u => u.name === targetUser || u.id === targetUser);
+                 if (found && found.email) finalKey = toSafeId(found.email);
             }
-            await update(ref(database, `users/${finalKey}/notifications/${notifId}`), sanitizedNotif);
+            const notifId = `n_${Date.now()}`;
+            await update(ref(database, `users/${finalKey}/notifications/${notifId}`), {
+                id: notifId, message, read: false, date: new Date().toISOString(), isPersistent, type: 'info', timestamp: Date.now(), action: action || null, actionData: actionData || null
+            });
         }
     };
 
@@ -541,7 +558,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 if (permission === 'granted') {
                     setAlertMessage("알림 권한이 허용되었습니다.");
                 } else {
-                    setAlertMessage("알림 권한이 거부되었습니다. 브라우저 설정에서 확인해주세요.");
+                    setAlertMessage("알림 권한이 거부되었습니다.");
                 }
             } catch(e) { console.error(e); }
         }
@@ -599,7 +616,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const pin = await showPinModal("PIN 입력", currentUser.pin!);
         if (pin !== currentUser.pin) return;
         const newDb = { ...db };
-        const userKey = toSafeId(currentUser.email || currentUser.id!);
+        const userKey = toSafeId(currentUser.email!);
         const user = newDb.users[userKey];
         user.balanceKRW = 0; user.balanceUSD = 0; user.stockHoldings = {};
         await saveDb(newDb);
@@ -649,7 +666,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const newDb = {...db};
         const bank = (Object.values(newDb.users) as User[]).find(u => u.govtRole === '한국은행장' || (u.type === 'admin' && u.subType === 'govt') || u.name === '한국은행');
 
-        const userKey = toSafeId(currentUser.email || currentUser.id!);
+        const userKey = toSafeId(currentUser.email!);
         const me = newDb.users[userKey];
         
         if (bank) bank.balanceKRW += tax.amount;
@@ -673,7 +690,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     const dismissTax = async (taxId: string) => {
         if(!currentUser) return;
-        const userKey = toSafeId(currentUser.email || currentUser.id!);
+        const userKey = toSafeId(currentUser.email!);
         
         let currentTaxes = currentUser.pendingTaxes || [];
         if (!Array.isArray(currentTaxes)) currentTaxes = Object.values(currentTaxes);

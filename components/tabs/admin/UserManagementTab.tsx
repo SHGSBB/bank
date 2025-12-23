@@ -7,7 +7,7 @@ import { ref, remove } from 'firebase/database';
 import { database, toSafeId } from '../../../services/firebase';
 
 export const UserManagementTab: React.FC = () => {
-    const { db, saveDb, showModal, showConfirm, notify, updateUser, loadAllUsers, createChat, sendMessage } = useGame();
+    const { db, saveDb, showModal, showConfirm, notify, serverAction, loadAllUsers, createChat, sendMessage } = useGame();
     
     useEffect(() => { 
         loadAllUsers();
@@ -77,15 +77,16 @@ export const UserManagementTab: React.FC = () => {
     const handleApproval = async (user: User, approve: boolean) => {
         if (!approve && !(await showConfirm(`${user.name} 님의 가입을 거절하시겠습니까?`))) return;
         
-        if (approve) {
-            await updateUser(user.id || user.email!, { approvalStatus: 'approved' });
-            notify(user.name, '회원가입이 승인되었습니다.', true);
-        } else {
-            const safeKey = user.email ? toSafeId(user.email) : user.name;
-            await remove(ref(database, `users/${safeKey}`));
+        try {
+            await serverAction('approve_user', {
+                userId: user.email || user.id, // Prefer email
+                approve
+            });
+            showModal('처리되었습니다.');
+            await loadAllUsers(); // Refresh list immediately
+        } catch (e: any) {
+            showModal("처리 실패: " + e.message);
         }
-        showModal('처리되었습니다.');
-        await loadAllUsers();
     };
 
     const handleDeleteUser = async (user: User) => {
@@ -99,7 +100,19 @@ export const UserManagementTab: React.FC = () => {
     const handleSuspendUser = async (user: User) => {
         const isSuspended = user.isSuspended;
         if (!await showConfirm(`${user.name} 님을 ${isSuspended ? '정지 해제' : '계정 정지'} 하시겠습니까?`)) return;
-        await updateUser(user.id || user.email!, { isSuspended: !isSuspended });
+        
+        // Use direct update here as it's simple property change
+        const safeKey = toSafeId(user.email || user.id!);
+        const updates = { isSuspended: !isSuspended };
+        await db.users[safeKey] ? Object.assign(db.users[safeKey], updates) : null; // Optimistic
+        
+        // In real app, use update() directly
+        // await updateUser(user.id || user.email!, { isSuspended: !isSuspended }); 
+        // We use saveDb for full sync or specific update
+        const newDb = { ...db };
+        if(newDb.users[safeKey]) newDb.users[safeKey].isSuspended = !isSuspended;
+        await saveDb(newDb);
+
         showModal("처리되었습니다.");
         loadAllUsers();
     };

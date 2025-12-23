@@ -3,11 +3,13 @@ import React, { useState } from 'react';
 import { useGame } from '../../../context/GameContext';
 import { Card, Button, Toggle, Input } from '../../Shared';
 import { BankSettingsTab } from './BankSettingsTab';
+import { DatabaseTab } from './DatabaseTab';
 
 export const AdminOperationTab: React.FC<{ restricted?: boolean }> = ({ restricted }) => {
     const { db, saveDb, showModal } = useGame();
     const [subTab, setSubTab] = useState('은행설정');
-    const tabs = ['은행설정', '기능제어', '서비스관리'];
+    // Added '데이터베이스' to the tabs list
+    const tabs = ['은행설정', '기능제어', '서비스관리', '데이터베이스'];
 
     // Tab Groups
     const tabGroups = {
@@ -101,6 +103,7 @@ export const AdminOperationTab: React.FC<{ restricted?: boolean }> = ({ restrict
             </div>
             
             {subTab === '은행설정' && <BankSettingsTab />}
+            {subTab === '데이터베이스' && <DatabaseTab />}
             
             {subTab === '기능제어' && (
                 <div className="space-y-6">

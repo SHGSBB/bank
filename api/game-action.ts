@@ -8,77 +8,42 @@ const setCors = (res: VercelResponse) => {
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 };
 
+// Safe ID Generator
 const toSafeId = (id: string) => 
     (id || '').trim().toLowerCase()
     .replace(/[@.+]/g, '_')
     .replace(/[#$\[\]]/g, '_');
 
-const sanitizeUpdates = (updates: any) => {
-    const clean: any = {};
-    Object.keys(updates).forEach(key => {
-        const val = updates[key];
-        if (val === undefined) return;
-        if (typeof val === 'number' && isNaN(val)) return;
-        clean[key] = val;
-    });
-    return clean;
-};
-
-// [Core] 한국은행(System Admin) 계정 찾기 - 하드코딩 제거
-const findBankKey = async (): Promise<string | null> => {
-    // 1. '한국은행장' 직책 우선 검색
-    const roleSnap = await db.ref('users').orderByChild('govtRole').equalTo('한국은행장').limitToFirst(1).once('value');
-    if (roleSnap.exists()) {
-        return Object.keys(roleSnap.val())[0];
-    }
-
-    // 2. Type이 Admin이고 SubType이 Govt인 계정 검색
-    const usersSnap = await db.ref('users').orderByChild('type').equalTo('admin').once('value');
-    if (usersSnap.exists()) {
-        const users = usersSnap.val();
-        // bok 문자열을 가진 레거시 키보다 실제 유저 키를 우선
-        const adminKey = Object.keys(users).find(k => users[k].subType === 'govt');
-        if (adminKey) return adminKey;
-        // 없으면 아무 admin이나 반환
-        return Object.keys(users)[0];
-    }
-
-    // 3. Fallback: 이름이 '한국은행'인 유저
-    const nameSnap = await db.ref('users').orderByChild('name').equalTo('한국은행').limitToFirst(1).once('value');
-    if (nameSnap.exists()) return Object.keys(nameSnap.val())[0];
-
-    return null; 
-};
-
-// 사용자 찾기 (BOK 로직 포함)
-const findUserKey = async (identifier: string): Promise<string | null> => {
+// [CRITICAL] Helper to find the SINGLE source of truth key for a user
+const findRealUserKey = async (identifier: string, allUsersCache?: any): Promise<string | null> => {
     if (!identifier) return null;
-    const lowerId = identifier.trim().toLowerCase();
-
-    // 시스템 계정 리다이렉트
-    if (['bok', 'bok_official', '한국은행', '한국은행장', 'admin', 'system'].includes(identifier)) {
-        return await findBankKey();
+    const safeInput = toSafeId(identifier);
+    
+    let users = allUsersCache;
+    if (!users) {
+        const snap = await db.ref('users').once('value');
+        users = snap.val() || {};
     }
 
-    const safeKey = toSafeId(identifier);
+    // 1. Direct Hit on Key (Prioritize Email-based safe key)
+    if (users[safeInput]) return safeInput;
 
-    // 1. Key 직접 조회
-    const directSnap = await db.ref(`users/${safeKey}`).once('value');
-    if (directSnap.exists()) return safeKey;
+    // 2. Search by ID, Email, or Name
+    const foundKey = Object.keys(users).find(key => {
+        const u = users[key];
+        if (!u) return false;
+        
+        // Match Email (Highest priority)
+        if (u.email && (u.email === identifier || toSafeId(u.email) === safeInput)) return true;
+        // Match ID
+        if (u.id && (u.id === identifier || toSafeId(u.id) === safeInput)) return true;
+        // Match Name (Fallback)
+        if (u.name === identifier) return true;
+        
+        return false;
+    });
 
-    // 2. Email 조회
-    const emailQuery = await db.ref('users').orderByChild('email').equalTo(lowerId).limitToFirst(1).once('value');
-    if (emailQuery.exists()) return Object.keys(emailQuery.val())[0];
-
-    // 3. ID 조회
-    const idQuery = await db.ref('users').orderByChild('id').equalTo(identifier).limitToFirst(1).once('value');
-    if (idQuery.exists()) return Object.keys(idQuery.val())[0];
-
-    // 4. 이름 조회
-    const nameQuery = await db.ref('users').orderByChild('name').equalTo(identifier).limitToFirst(1).once('value');
-    if (nameQuery.exists()) return Object.keys(nameQuery.val())[0];
-
-    return null;
+    return foundKey || null;
 };
 
 export default async (req: VercelRequest, res: VercelResponse) => {
@@ -92,151 +57,249 @@ export default async (req: VercelRequest, res: VercelResponse) => {
 
     try {
         const now = new Date().toISOString();
-        const txIdBase = Date.now();
+        
+        // ---------------------------------------------------------
+        // [1] DB REPAIR (Fix Structure)
+        // ---------------------------------------------------------
+        if (action === 'fix_database_structure') {
+            const snapshot = await db.ref('users').once('value');
+            const users = snapshot.val() || {};
+            const updates: any = {};
+            let fixedCount = 0;
 
-        // --- Fetch Linked Accounts (NEW) ---
-        if (action === 'fetch_linked_accounts') {
-            const { linkedIds } = payload; // Array of emails/ids
-            if (!Array.isArray(linkedIds) || linkedIds.length === 0) {
-                return res.status(200).json({ accounts: [] });
-            }
+            const grouped: Record<string, string[]> = {}; 
 
-            const accounts: any[] = [];
-            for (const id of linkedIds) {
-                const key = await findUserKey(id);
-                if (key) {
-                    const snap = await db.ref(`users/${key}`).once('value');
-                    const u = snap.val();
-                    if (u) {
-                        accounts.push({
-                            id: u.id,
-                            email: u.email,
-                            name: u.name,
-                            type: u.type,
-                            profilePic: u.profilePic
-                        });
+            Object.keys(users).forEach(key => {
+                const u = users[key];
+                // Determine the "True Email"
+                const email = u.email || (key.includes('_') && key.includes('@') ? key.replace(/_/g, '.') : null); 
+                
+                if (email && email.includes('@')) {
+                    const safeKey = toSafeId(email);
+                    if (!grouped[safeKey]) grouped[safeKey] = [];
+                    grouped[safeKey].push(key);
+                }
+            });
+
+            for (const [targetKey, keys] of Object.entries(grouped)) {
+                let mergedUser: any = { 
+                    balanceKRW: 0, 
+                    balanceUSD: 0, 
+                    transactions: [],
+                    notifications: [],
+                    products: {}
+                };
+
+                // Prioritize keys that exactly match targetKey
+                keys.sort((a, b) => (a === targetKey ? 1 : -1));
+
+                for (const k of keys) {
+                    const u = users[k];
+                    if (u.email) mergedUser.email = u.email;
+                    if (u.id) mergedUser.id = u.id;
+                    if (u.name) mergedUser.name = u.name;
+                    if (u.password) mergedUser.password = u.password;
+                    if (u.pin) { mergedUser.pin = u.pin; mergedUser.pinLength = u.pinLength; }
+                    if (u.type) mergedUser.type = u.type;
+                    if (u.subType) mergedUser.subType = u.subType;
+                    if (u.govtRole) mergedUser.govtRole = u.govtRole;
+                    if (u.approvalStatus && u.approvalStatus !== 'pending') mergedUser.approvalStatus = u.approvalStatus;
+
+                    mergedUser.balanceKRW = Math.max(mergedUser.balanceKRW, u.balanceKRW || 0);
+                    mergedUser.balanceUSD = Math.max(mergedUser.balanceUSD, u.balanceUSD || 0);
+                    
+                    if (u.transactions) mergedUser.transactions = [...mergedUser.transactions, ...(Array.isArray(u.transactions) ? u.transactions : Object.values(u.transactions))];
+                    if (u.notifications) mergedUser.notifications = { ...mergedUser.notifications, ...u.notifications };
+                    if (u.products) mergedUser.products = { ...mergedUser.products, ...u.products };
+                    
+                    if (k !== targetKey) {
+                        updates[`users/${k}`] = null;
+                        fixedCount++;
                     }
                 }
+                updates[`users/${targetKey}`] = mergedUser;
             }
-            return res.status(200).json({ accounts });
+
+            if (Object.keys(updates).length > 0) await db.ref().update(updates);
+            return res.status(200).json({ success: true, message: `DB 복구 완료: ${fixedCount}개 노드 통합됨` });
         }
 
-        // --- Account Linking ---
-        if (action === 'link_account') {
-            const { myEmail, targetId } = payload;
-            const myKey = await findUserKey(myEmail);
-            const targetKey = await findUserKey(targetId);
-
-            if (!myKey || !targetKey) return res.status(404).json({ error: "User not found" });
-            if (myKey === targetKey) return res.status(400).json({ error: "Cannot link self" });
-
-            const [mySnap, targetSnap] = await Promise.all([
-                db.ref(`users/${myKey}`).once('value'),
-                db.ref(`users/${targetKey}`).once('value')
-            ]);
-            const me = mySnap.val();
-            const target = targetSnap.val();
-
-            // Link logic: Main (Citizen) holds the list
-            let mainUserKey = myKey;
-            let subUserKey = targetKey;
-            let mainUser = me;
-            let subUser = target;
-
-            // If I am citizen linking a sub, or sub linking a citizen?
-            // Assuming bidirectional or Main holds list. Let's make it bidirectional for safety or just update Main.
-            // Simplified: Add target's Email/ID to My List
-            const currentLinks = me.linkedAccounts || [];
-            const targetIdentifier = target.email || target.id;
+        // ---------------------------------------------------------
+        // [2] ADMIN: Approve User (Fix "Stuck in Pending")
+        // ---------------------------------------------------------
+        if (action === 'approve_user') {
+            const { userId, approve } = payload;
+            const targetKey = await findRealUserKey(userId);
             
-            if (currentLinks.includes(targetIdentifier)) return res.status(400).json({ error: "Already linked" });
-            
-            const updates: any = {};
-            updates[`users/${myKey}/linkedAccounts`] = [...currentLinks, targetIdentifier];
-            
-            // Also update target to point back? Optional, but good for "Switch back"
-            const targetLinks = target.linkedAccounts || [];
-            if (!targetLinks.includes(me.email || me.id)) {
-                updates[`users/${targetKey}/linkedAccounts`] = [...targetLinks, (me.email || me.id)];
+            if (!targetKey) return res.status(404).json({ error: "USER_NOT_FOUND" });
+
+            if (approve) {
+                await db.ref(`users/${targetKey}`).update({ approvalStatus: 'approved' });
+                // Notification
+                const notifId = `n_${Date.now()}`;
+                await db.ref(`users/${targetKey}/notifications/${notifId}`).set({
+                    id: notifId,
+                    message: "회원가입이 승인되었습니다. 서비스를 이용해보세요!",
+                    read: false,
+                    date: now,
+                    type: 'success',
+                    timestamp: Date.now()
+                });
+            } else {
+                await db.ref(`users/${targetKey}`).remove();
             }
-
-            await db.ref().update(sanitizeUpdates(updates));
             return res.status(200).json({ success: true });
         }
 
-        if (action === 'unlink_account') {
-            const { myEmail, targetName } = payload;
-            const myKey = await findUserKey(myEmail);
-            if (!myKey) return res.status(404).json({ error: "User not found" });
+        // ---------------------------------------------------------
+        // [3] FINANCE: Minting (Fix "Not working")
+        // ---------------------------------------------------------
+        if (action === 'mint_currency') {
+            const amount = Number(payload.amount || 0);
+            const currency = payload.currency || 'KRW';
+            const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
             
-            const snap = await db.ref(`users/${myKey}`).once('value');
-            const user = snap.val();
+            // Try to find the admin user requesting this, OR default to '한국은행' role
+            const allUsersSnap = await db.ref('users').once('value');
+            const users = allUsersSnap.val() || {};
             
-            // Need to find ID by name for removal if only name provided, ideally pass ID
-            // Assuming targetName is actually ID or we filter by name
-            // Better: Filter by verifying existence
+            // 1. Try finding by payload userId (e.g., admin's email)
+            let targetKey = await findRealUserKey(payload.userId, users);
             
-            const linked = user.linkedAccounts || [];
-            // Remove logic needs refinement in frontend to pass ID, but here we try:
-            const newLinked = [];
-            for (const linkId of linked) {
-                const k = await findUserKey(linkId);
-                const s = await db.ref(`users/${k}`).once('value');
-                if (s.exists() && s.val().name === targetName) continue; // Remove match
-                if (linkId === targetName) continue; // Remove exact ID match
-                newLinked.push(linkId);
+            // 2. If not found, fallback to finding the "BOK Governor"
+            if (!targetKey) {
+                targetKey = Object.keys(users).find(k => 
+                    users[k].govtRole === '한국은행장' || 
+                    users[k].name === '한국은행' ||
+                    users[k].type === 'root'
+                ) || null;
             }
+
+            if (!targetKey) return res.status(404).json({ error: "Admin/Bank account not found." });
+
+            // Atomic update
+            await db.ref(`users/${targetKey}/${field}`).transaction((curr) => (curr || 0) + amount);
             
-            await db.ref(`users/${myKey}/linkedAccounts`).set(newLinked);
-            return res.status(200).json({ success: true });
-        }
-
-        // --- Standard Data Fetching ---
-        if (action === 'fetch_initial_data') {
-            const [settings, grid, announce, ads, stocks, auction, countries, pendingApps, bonds] = await Promise.all([
-                db.ref('settings').once('value'),
-                db.ref('realEstate/grid').once('value'),
-                db.ref('announcements').limitToLast(20).once('value'),
-                db.ref('ads').once('value'),
-                db.ref('stocks').once('value'),
-                db.ref('auction').once('value'),
-                db.ref('countries').once('value'),
-                db.ref('pendingApplications').once('value'),
-                db.ref('bonds').once('value')
-            ]);
-
-            const annVal = announce.val();
-            return res.status(200).json({
-                settings: settings.val() || {},
-                realEstate: { grid: grid.val() || [] },
-                announcements: annVal ? (Array.isArray(annVal) ? annVal : Object.values(annVal)) : [],
-                ads: ads.val() || {},
-                stocks: stocks.val() || {},
-                auction: auction.val() || {},
-                countries: countries.val() || {},
-                pendingApplications: pendingApps.val() || {},
-                bonds: bonds.val() || {} 
+            // Transaction Record
+            const txRef = db.ref(`users/${targetKey}/transactions`);
+            const snap = await txRef.limitToLast(1).once('value'); // Check if empty
+            const txs = snap.val(); 
+            // If array structure is messy, we just push a new one or set keyed object
+            // Using indexed keys is safer: tx_TIMESTAMP
+            const txId = `tx_${Date.now()}`;
+            await db.ref(`users/${targetKey}/transactions/${txId}`).set({ 
+                id: Date.now(), type: 'income', amount: amount, currency, description: '화폐 발권 (Minting)', date: now 
             });
+
+            return res.status(200).json({ success: true });
         }
 
-        if (action === 'fetch_my_lite_info') {
-            const { userId } = payload;
-            const userKey = await findUserKey(userId);
-            if (!userKey) return res.status(404).json({});
-            const u = (await db.ref(`users/${userKey}`).once('value')).val();
-            if (!u) return res.status(404).json({});
-            delete u.transactions;
-            delete u.notifications; 
-            return res.status(200).json(u);
+        // ---------------------------------------------------------
+        // [4] Transfer (Fix "Separation")
+        // ---------------------------------------------------------
+        if (action === 'transfer') {
+            const { senderId, receiverId, amount, senderMemo, receiverMemo, currency = 'KRW' } = payload;
+            const numAmount = Number(amount);
+            
+            const allUsersSnap = await db.ref('users').once('value');
+            const allUsers = allUsersSnap.val();
+
+            const sKey = await findRealUserKey(senderId, allUsers);
+            const rKey = await findRealUserKey(receiverId, allUsers);
+            
+            if (!sKey || !rKey) return res.status(404).json({ error: "사용자를 찾을 수 없습니다." });
+            if (sKey === rKey) return res.status(400).json({ error: "자신에게 이체할 수 없습니다." });
+            
+            const sVal = allUsers[sKey];
+            const rVal = allUsers[rKey];
+            const balField = currency === 'USD' ? 'balanceUSD' : 'balanceKRW';
+
+            if ((Number(sVal[balField]) || 0) < numAmount) return res.status(400).json({ error: "잔액 부족" });
+
+            const updates: any = {};
+            updates[`users/${sKey}/${balField}`] = Number(sVal[balField] || 0) - numAmount;
+            updates[`users/${rKey}/${balField}`] = Number(rVal[balField] || 0) + numAmount;
+            
+            const txId = Date.now();
+            
+            // Instead of overwriting array, use object keys for transactions to prevent index conflicts
+            updates[`users/${sKey}/transactions/tx_${txId}_s`] = { 
+                id: txId, type: 'transfer', amount: -numAmount, currency, description: senderMemo || `이체 (${rVal.name})`, date: now 
+            };
+            updates[`users/${rKey}/transactions/tx_${txId}_r`] = { 
+                id: txId+1, type: 'transfer', amount: numAmount, currency, description: receiverMemo || `입금 (${sVal.name})`, date: now 
+            };
+            
+            updates[`users/${rKey}/notifications/n_${txId}`] = {
+                id: `n_${txId}`,
+                message: `${sVal.name}님으로부터 ₩${numAmount.toLocaleString()} 입금되었습니다.`,
+                read: false, date: now, type: 'success', timestamp: Date.now()
+            };
+
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
         }
 
+        // ---------------------------------------------------------
+        // [5] Purchase (Fix missing purchase logic)
+        // ---------------------------------------------------------
+        if (action === 'purchase') {
+            const { buyerId, items } = payload;
+            const allUsersSnap = await db.ref('users').once('value');
+            const allUsers = allUsersSnap.val();
+
+            const buyerKey = await findRealUserKey(buyerId, allUsers);
+            if (!buyerKey) return res.status(404).json({ error: "Buyer not found" });
+
+            let totalCost = 0;
+            const updates: any = {};
+            const txIdBase = Date.now();
+
+            for (const [idx, item] of items.entries()) {
+                const cost = item.price * item.quantity;
+                totalCost += cost;
+                
+                // Find Seller
+                const sellerKey = await findRealUserKey(item.sellerName, allUsers);
+                if (sellerKey) {
+                    const sellerBal = allUsers[sellerKey].balanceKRW || 0;
+                    updates[`users/${sellerKey}/balanceKRW`] = sellerBal + cost;
+                    updates[`users/${sellerKey}/transactions/tx_${txIdBase}_${idx}_s`] = {
+                        id: txIdBase + idx,
+                        type: 'income',
+                        amount: cost,
+                        currency: 'KRW',
+                        description: `판매: ${item.name} (${item.quantity}개)`,
+                        date: now
+                    };
+                }
+            }
+
+            const buyerBal = allUsers[buyerKey].balanceKRW || 0;
+            if (buyerBal < totalCost) return res.status(400).json({ error: "Insufficient funds" });
+
+            updates[`users/${buyerKey}/balanceKRW`] = buyerBal - totalCost;
+            updates[`users/${buyerKey}/transactions/tx_${txIdBase}_b`] = {
+                id: txIdBase,
+                type: 'expense',
+                amount: -totalCost,
+                currency: 'KRW',
+                description: `구매: ${items.length}건 (총 ₩${totalCost.toLocaleString()})`,
+                date: now
+            };
+
+            await db.ref().update(updates);
+            return res.status(200).json({ success: true });
+        }
+
+        // Fetch Logic (Lightweight)
         if (action === 'fetch_all_users_light') {
             const snapshot = await db.ref('users').once('value');
             const users = snapshot.val() || {};
             const lightweightUsers: Record<string, any> = {};
             Object.keys(users).forEach(key => {
-                if (key === 'bok') return; // Hide legacy bok
                 const u = users[key];
+                if (!u.email && !u.id && !u.name) return; // Skip ghosts
                 lightweightUsers[key] = {
                     name: u.name,
                     id: u.id,
@@ -249,162 +312,16 @@ export default async (req: VercelRequest, res: VercelResponse) => {
                     approvalStatus: u.approvalStatus,
                     govtRole: u.govtRole,
                     customJob: u.customJob,
-                    products: u.products
+                    products: u.products,
+                    isSuspended: u.isSuspended,
+                    linkedAccounts: u.linkedAccounts
                 };
             });
             return res.status(200).json({ users: lightweightUsers });
         }
 
-        if (action === 'fetch_my_transactions') {
-            const { userId, limit = 100 } = payload;
-            const userKey = await findUserKey(userId);
-            if (!userKey) return res.status(404).json({ error: "User not found" });
-            const snap = await db.ref(`users/${userKey}/transactions`).limitToLast(limit).once('value');
-            const txs = snap.val() || [];
-            return res.status(200).json({ transactions: Array.isArray(txs) ? txs : Object.values(txs) });
-        }
-
-        if (action === 'fetch_wealth_stats') {
-            const snap = await db.ref('users').once('value');
-            const users = Object.values(snap.val() || {});
-            const validUsers = users.filter((u: any) => u.type === 'citizen' && u.name !== '한국은행');
-            
-            const assets = validUsers.map((u: any) => (Number(u.balanceKRW) || 0) + ((Number(u.balanceUSD) || 0) * 1350));
-            assets.sort((a,b) => a - b);
-            const buckets = [0, 0, 0, 0, 0];
-            const maxVal = Math.max(...assets) || 1;
-            assets.forEach(val => {
-                const idx = Math.min(4, Math.floor((val / (maxVal * 1.01)) * 5));
-                buckets[idx]++;
-            });
-            return res.status(200).json({ buckets, totalCount: validUsers.length });
-        }
-
-        // --- Tax Collection (Updated for Minister) ---
-        if (action === 'collect_tax') {
-            const { taxSessionId, taxes, dueDate } = payload;
-            // taxes: [{ userId, amount, breakdown, type }]
-            
-            // Find Bank to receive (Not strictly receiving yet, just issuing bills)
-            // But we might need to check if issuer has authority. 
-            // Assuming frontend handled auth.
-            
-            const updates: any = {};
-            
-            // Save session info? Optional.
-            
-            for (const tax of taxes) {
-                const userKey = await findUserKey(tax.userId);
-                if (userKey) {
-                    const snap = await db.ref(`users/${userKey}/pendingTaxes`).once('value');
-                    const currentTaxes = snap.val() || [];
-                    const taxList = Array.isArray(currentTaxes) ? currentTaxes : Object.values(currentTaxes);
-                    
-                    const newTax = {
-                        id: `tax_${Date.now()}_${Math.random().toString(36).substr(2,5)}`,
-                        sessionId: taxSessionId,
-                        amount: tax.amount,
-                        type: tax.type,
-                        dueDate: dueDate,
-                        status: 'pending',
-                        breakdown: tax.breakdown
-                    };
-                    
-                    updates[`users/${userKey}/pendingTaxes`] = [...taxList, newTax];
-                    
-                    // Add Notification
-                    const notifId = `n_tax_${Date.now()}_${Math.random()}`;
-                    updates[`users/${userKey}/notifications/${notifId}`] = {
-                        id: notifId,
-                        message: `[${tax.type === 'fine' ? '과태료' : '세금'}] ₩${tax.amount.toLocaleString()}이 부과되었습니다.`,
-                        read: false,
-                        date: now,
-                        type: 'tax',
-                        action: 'view_tax',
-                        timestamp: Date.now()
-                    };
-                }
-            }
-            
-            if (Object.keys(updates).length > 0) {
-                await db.ref().update(sanitizeUpdates(updates));
-            }
-            return res.status(200).json({ success: true, count: taxes.length });
-        }
-
-        // --- Standard Transactions ---
-        if (action === 'transfer') {
-            const { senderId, receiverId, amount, senderMemo, receiverMemo, currency = 'KRW' } = payload;
-            const numAmount = Number(amount);
-            
-            const sKey = await findUserKey(senderId);
-            const rKey = await findUserKey(receiverId);
-            
-            if (!sKey || !rKey) return res.status(404).json({ error: "USER_NOT_FOUND" });
-            if (sKey === rKey) return res.status(400).json({ error: "SELF_TRANSFER" });
-            
-            const [sSnap, rSnap] = await Promise.all([
-                db.ref(`users/${sKey}`).once('value'),
-                db.ref(`users/${rKey}`).once('value')
-            ]);
-            const sVal = sSnap.val();
-            const rVal = rSnap.val();
-
-            const balField = currency === 'USD' ? 'balanceUSD' : 'balanceKRW';
-            const sBal = Number(sVal[balField]) || 0;
-            const rBal = Number(rVal[balField]) || 0;
-
-            if (sBal < numAmount) return res.status(400).json({ error: "INSUFFICIENT_FUNDS" });
-
-            const updates: any = {};
-            updates[`users/${sKey}/${balField}`] = sBal - numAmount;
-            updates[`users/${rKey}/${balField}`] = rBal + numAmount;
-            
-            const sTx = [...(sVal.transactions || []), { id: txIdBase, type: 'transfer', amount: -numAmount, currency, description: senderMemo || `이체 (${rVal.name})`, date: now }];
-            const rTx = [...(rVal.transactions || []), { id: txIdBase+1, type: 'transfer', amount: numAmount, currency, description: receiverMemo || `입금 (${sVal.name})`, date: now }];
-            
-            updates[`users/${sKey}/transactions`] = sTx;
-            updates[`users/${rKey}/transactions`] = rTx;
-            
-            await db.ref().update(sanitizeUpdates(updates));
-            return res.status(200).json({ success: true });
-        }
-
-        if (action === 'mint_currency') {
-            const amount = Number(payload.amount || 0);
-            const currency = payload.currency || 'KRW';
-            
-            const bankKey = await findBankKey();
-            if (!bankKey) return res.status(500).json({ error: "Bank Admin Not Found" });
-
-            const userSnap = await db.ref(`users/${bankKey}`).once('value');
-            const user = userSnap.val();
-            
-            const field = currency === 'KRW' ? 'balanceKRW' : 'balanceUSD';
-            const current = Number(user[field]) || 0;
-            
-            const updates: any = {};
-            updates[`users/${bankKey}/${field}`] = current + amount;
-            
-            const bankTxs = user.transactions || [];
-            bankTxs.push({
-                id: txIdBase,
-                type: 'income',
-                amount: amount,
-                currency: currency,
-                description: '화폐 발권 (Minting)',
-                date: now
-            });
-            updates[`users/${bankKey}/transactions`] = bankTxs;
-
-            await db.ref().update(sanitizeUpdates(updates));
-            return res.status(200).json({ success: true });
-        }
-
-        // --- Other logic preserved (exchange, purchase, etc.) but updated to use findUserKey/findBankKey ---
-        // ... (Omitting repeated logic for brevity, but Purchase/Exchange/WeeklyPay all use findBankKey now) ...
-        
         return res.status(200).json({ success: true });
+
     } catch (e: any) {
         console.error("API Error:", e);
         return res.status(500).json({ error: e.message });

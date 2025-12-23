@@ -190,22 +190,13 @@ export const AuthView: React.FC = () => {
 
         setIsProcessing(true);
         try {
-            // 1. Verify Parent Account Credentials locally via client SDK auth login first
-            // Note: This temporarily signs in. If successful, we proceed.
-            // Ideally we use a server-side check but without cloud functions, we simulate.
-            
-            // Try login to verify
             let parentUser = await fetchUserByLoginId(parentId);
             if (!parentUser && parentId.includes('@')) { /* fallback handled in fetch */ }
             if (!parentUser) throw new Error("계정을 찾을 수 없습니다.");
             
-            // Verify by attempting login (creates a session if success)
-            // Ideally we logout immediately if this is just a verification step, 
-            // BUT for this UX, we want to login as the parent + new sub account.
             const userCredential = await loginWithEmail(parentUser.email!, parentPw);
             if (!userCredential) throw new Error("비밀번호가 일치하지 않습니다.");
 
-            // 2. Credentials Valid. Now Create Sub-Account via Server Action.
             let finalType: User['type'] = subType === 'business' ? 'mart' : 'government';
             let branches: GovtBranch[] = [];
             let isPresident = false;
@@ -225,10 +216,9 @@ export const AuthView: React.FC = () => {
 
             const subId = `${parentUser.id}_${subType === 'business' ? 'biz' : 'gov'}_${Date.now().toString().slice(-4)}`;
             
-            // Create user object directly (no new Auth needed)
             await registerUser({
                 id: subId,
-                email: `${subId}@sunghwa.bank`, // Placeholder email
+                email: `${subId}@sunghwa.bank`,
                 name: parentUser.name,
                 type: finalType,
                 subType: subType === 'govt' ? 'govt' : 'business',
@@ -240,13 +230,7 @@ export const AuthView: React.FC = () => {
                 customJob: subType === 'business' ? '새 가게' : govtRole
             }, "shared_password"); 
 
-            // Link Bidirectional
             await serverAction('link_account', { myEmail: parentUser.email, targetId: subId });
-
-            // 3. Login Flow Complete
-            // User is already logged in as Parent via step 1.
-            // Switch to the newly created account immediately? Or just stay as parent.
-            // Let's reload to refresh state and show dashboard.
             
             showModal("인증 및 부계정 생성이 완료되었습니다.");
             setTimeout(() => {
@@ -255,7 +239,6 @@ export const AuthView: React.FC = () => {
 
         } catch (e: any) {
             showModal(e.message || "인증 실패");
-            // If login failed, we are not logged in.
         } finally {
             setIsProcessing(false);
         }
@@ -273,10 +256,8 @@ export const AuthView: React.FC = () => {
 
         if (step === 2) {
             if (subType === 'govt' || subType === 'business') {
-                // Should use the specialized form below, button here is disabled or hidden logic handled in UI
                 return;
             }
-            // Personal/Teacher
             if (!sName.trim() || !sBirth.trim()) return showModal("이름과 생년월일을 입력하세요.");
             if (sBirth.length !== 6) return showModal("생년월일 6자리를 입력하세요 (YYMMDD).");
             setStep(3);
@@ -349,7 +330,11 @@ export const AuthView: React.FC = () => {
     const info = getInfo();
 
     return (
-        <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F2F2F7] dark:bg-[#050505]">
+        <div className="fixed inset-0 flex items-center justify-center overflow-hidden font-sans bg-[#F2F2F7] dark:bg-[#18181b]">
+            {/* Background Blobs */}
+            <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-green-500/20 rounded-full blur-[100px] pointer-events-none animate-blob z-0"></div>
+            <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-blue-600/20 rounded-full blur-[100px] pointer-events-none animate-blob animation-delay-2000 z-0"></div>
+
             <div className={`w-full max-w-5xl h-full sm:h-[85vh] flex flex-col sm:flex-row overflow-hidden relative z-10 transition-all duration-500 sm:rounded-[40px] shadow-2xl ${highQualityGraphics ? 'bg-white/10 dark:bg-black/40 backdrop-blur-3xl border border-white/20 shadow-[0_0_40px_rgba(0,0,0,0.1)]' : 'bg-white dark:bg-[#1C1C1E] border border-gray-200 dark:border-gray-800'}`}>
                 
                 {/* Mobile Header */}
