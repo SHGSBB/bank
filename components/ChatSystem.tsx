@@ -381,7 +381,7 @@ export const ChatSystem: React.FC<{ isOpen: boolean; onClose: () => void; onAtta
                             <div className="flex-1 min-w-0">
                                 <p className="font-bold text-lg truncate">{db.auction.item.name}</p>
                                 <div className="flex justify-between items-end">
-                                    <span className="text-xs opacity-80">시작: ₩{db.auction.startingPrice.toLocaleString()}</p>
+                                    <span className="text-xs opacity-80">시작: ₩{db.auction.startingPrice.toLocaleString()}</span>
                                     <span className="text-xl font-black">₩{db.auction.currentPrice.toLocaleString()}</span>
                                 </div>
                             </div>
