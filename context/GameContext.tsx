@@ -111,7 +111,7 @@ export const GameProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const serverAction = async (action: string, payload: any) => {
         setSimulatedLoading(true);
         try {
-            const res = await fetch('https://bank-one-mu.vercel.app', {
+            const res = await fetch('https://bank-one-mu.vercel.app/api', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, payload })
