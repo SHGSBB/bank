@@ -3,9 +3,12 @@ import { VercelRequest, VercelResponse } from '@vercel/node';
 import { db } from './db.js';
 
 const setCors = (res: VercelResponse) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    // '*' 대신 실제 배포된 프론트엔드 주소를 넣어줘
+    res.setHeader('Access-Control-Allow-Origin', 'https://sunghwa-cffff.web.app'); 
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    // 아래 줄을 추가하면 훨씬 안정적이야
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
 };
 
 // Safe ID Generator
